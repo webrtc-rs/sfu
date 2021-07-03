@@ -1,0 +1,13 @@
+[package]
+name = "sfu"
+version = "0.0.0"
+edition = "2018"
+description = "A pure Rust implementation of WebRTC SFU"
+license = "MIT"
+documentation = "https://docs.rs/sfu"
+homepage = "https://webrtc.rs"
+repository = "https://github.com/ngr-tc/sfu"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
