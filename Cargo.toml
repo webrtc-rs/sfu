@@ -6,7 +6,7 @@ description = "A pure Rust implementation of WebRTC SFU"
 license = "MIT"
 documentation = "https://docs.rs/sfu"
 homepage = "https://webrtc.rs"
-repository = "https://github.com/ngr-tc/sfu"
+repository = "https://github.com/webrtc-rs/sfu"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
