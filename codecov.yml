@@ -1,7 +1,7 @@
 codecov:
   require_ci_to_pass: yes
   max_report_age: off
-  token: 29ae73e1-d93d-4363-9144-c8e534b86aa6
+  token: f6e8a901-d256-409a-a207-16faca0f0870
 
 coverage:
   precision: 2
