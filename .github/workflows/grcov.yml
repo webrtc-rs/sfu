@@ -19,7 +19,8 @@ jobs:
           - ubuntu-latest
         toolchain:
           - nightly
-        cargo_flags: ['--features runtime-tokio --no-default-features', '--features runtime-async-std --no-default-features']
+        cargo_flags:
+          - "--all-features"
     steps:
       - name: Checkout source code
         uses: actions/checkout@v2
