@@ -1,5 +1,5 @@
 <h1 align="center">
- <a href="https://sfu.rs"><img src="https://raw.githubusercontent.com/ngr-tc/sfu/master/docs/sfu.rs.png" alt="SFU"></a>
+ <a href="https://sfu.rs"><img src="https://raw.githubusercontent.com/ngr-tc/sfu/master/docs/sfu-rs.jpg" alt="SFU"></a>
  <br>
 </h1>
 <p align="center">
