@@ -14,7 +14,7 @@ categories = [ "network-programming", "asynchronous" ]
 [dependencies]
 bytes = "1.3.0"
 log = "0.4.17"
-retty = "0.4.1"
+retty = { version = "0.4.1", features = ["runtime-tokio"] }
 
 [dev-dependencies]
 clap = { version = "4.1.1", features = ["derive"] }
