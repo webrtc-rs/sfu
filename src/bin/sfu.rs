@@ -1,7 +1,8 @@
 use clap::Parser;
+use log::info;
 use sfu::signal;
 use std::io::Write;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Parser)]
 #[command(name = "SFU Server")]
@@ -39,19 +40,21 @@ async fn main() -> anyhow::Result<()> {
             .init();
     }
 
-    println!(
+    info!(
         "listening {}@{}(signal)/{}(media)...",
         cli.host, cli.signal_port, cli.media_port
     );
 
-    let (sdp_chan_tx, _sdp_chan_rx) = mpsc::channel::<String>(1);
-    signal::http_sdp_server(cli.signal_port, sdp_chan_tx).await;
+    let (sdp_tx, _sdp_rx) = mpsc::channel::<String>(1);
+    let (signal_cancel_tx, signal_cancel_rx) = oneshot::channel::<()>();
+    let signal_done_rx = signal::http_sdp_server(cli.signal_port, sdp_tx, signal_cancel_rx).await;
 
-    println!("Press ctrl-c to stop");
+    info!("Press ctrl-c to stop");
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-
+            let _ = signal_cancel_tx.send(());
+            signal_done_rx.await.ok();
         }
     };
 
