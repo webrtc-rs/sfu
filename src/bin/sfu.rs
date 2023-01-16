@@ -1,6 +1,7 @@
 use clap::Parser;
 use sfu::signal;
 use std::io::Write;
+use tokio::sync::mpsc;
 
 #[derive(Parser)]
 #[command(name = "SFU Server")]
@@ -43,7 +44,8 @@ async fn main() -> anyhow::Result<()> {
         cli.host, cli.signal_port, cli.media_port
     );
 
-    let mut _sdp_chan_rx = signal::http_sdp_server(cli.signal_port).await;
+    let (sdp_chan_tx, _sdp_chan_rx) = mpsc::channel::<String>(1);
+    signal::http_sdp_server(cli.signal_port, sdp_chan_tx).await;
 
     println!("Press ctrl-c to stop");
 
