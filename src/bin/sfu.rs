@@ -3,7 +3,7 @@ use log::info;
 use std::io::Write;
 use tokio::sync::{broadcast, mpsc};
 
-use sfu::{rtc::server::udp_rtc_server, signal};
+use sfu::{rtc::server::udp_echo_server::udp_echo_server, signal};
 
 #[derive(Parser)]
 #[command(name = "SFU Server")]
@@ -51,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
     let rtc_cancel_rx = cancel_tx.subscribe();
     let mut signal_done_rx =
         signal::http_sdp_server(cli.host.clone(), cli.signal_port, sdp_tx, signal_cancel_rx).await;
-    let mut rtc_done_rx = udp_rtc_server(cli.host, cli.media_port, sdp_rx, rtc_cancel_rx).await;
+    let mut rtc_done_rx = udp_echo_server(cli.host, cli.media_port, sdp_rx, rtc_cancel_rx).await;
 
     info!("Press ctrl-c to stop");
 
