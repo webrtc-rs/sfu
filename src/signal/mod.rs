@@ -4,7 +4,7 @@ use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::{debug, error, info};
 use std::net::SocketAddr;
 use std::str::FromStr;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
 
 // HTTP Listener to get sdp
 async fn remote_handler(
@@ -38,13 +38,14 @@ async fn remote_handler(
 
 /// http_sdp_server starts a HTTP Server that consumes SDPs
 pub async fn http_sdp_server(
+    host: String,
     port: u16,
     sdp_tx: mpsc::Sender<String>,
-    cancel_rx: oneshot::Receiver<()>,
-) -> oneshot::Receiver<()> {
-    let (done_tx, done_rx) = oneshot::channel::<()>();
+    mut cancel_rx: broadcast::Receiver<()>,
+) -> broadcast::Receiver<()> {
+    let (done_tx, done_rx) = broadcast::channel(1);
     tokio::spawn(async move {
-        let addr = SocketAddr::from_str(&format!("0.0.0.0:{}", port)).unwrap();
+        let addr = SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap();
         let service = make_service_fn(move |_| {
             let tx = sdp_tx.clone();
             async move {
@@ -59,14 +60,14 @@ pub async fn http_sdp_server(
         });
         let server = Server::bind(&addr).serve(service);
         let graceful = server.with_graceful_shutdown(async {
-            cancel_rx.await.ok();
+            let _ = cancel_rx.recv().await;
             info!("http_sdp_server receives cancel signal");
             let _ = done_tx.send(());
         });
 
         // Run this server for forever until ctrl+c!
-        if let Err(e) = graceful.await {
-            error!("server error: {}", e);
+        if let Err(err) = graceful.await {
+            error!("http_sdp_server error: {}", err);
         }
     });
 

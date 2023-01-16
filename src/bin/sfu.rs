@@ -1,8 +1,9 @@
 use clap::Parser;
 use log::info;
-use sfu::signal;
 use std::io::Write;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
+
+use sfu::{rtc, signal};
 
 #[derive(Parser)]
 #[command(name = "SFU Server")]
@@ -45,16 +46,21 @@ async fn main() -> anyhow::Result<()> {
         cli.host, cli.signal_port, cli.media_port
     );
 
-    let (sdp_tx, _sdp_rx) = mpsc::channel::<String>(1);
-    let (signal_cancel_tx, signal_cancel_rx) = oneshot::channel::<()>();
-    let signal_done_rx = signal::http_sdp_server(cli.signal_port, sdp_tx, signal_cancel_rx).await;
+    let (sdp_tx, sdp_rx) = mpsc::channel::<String>(1);
+    let (cancel_tx, signal_cancel_rx) = broadcast::channel(1);
+    let rtc_cancel_rx = cancel_tx.subscribe();
+    let mut signal_done_rx =
+        signal::http_sdp_server(cli.host.clone(), cli.signal_port, sdp_tx, signal_cancel_rx).await;
+    let mut rtc_done_rx =
+        rtc::udp_rtc_server(cli.host, cli.media_port, sdp_rx, rtc_cancel_rx).await;
 
     info!("Press ctrl-c to stop");
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-            let _ = signal_cancel_tx.send(());
-            signal_done_rx.await.ok();
+            let _ = cancel_tx.send(());
+            let _ = rtc_done_rx.recv().await;
+            let _ = signal_done_rx.recv().await;
         }
     };
 

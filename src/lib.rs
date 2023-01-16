@@ -1,7 +1,5 @@
 #![warn(rust_2018_idioms)]
 #![allow(dead_code)]
 
-pub mod data;
-pub mod media;
-pub mod session;
+pub mod rtc;
 pub mod signal;
