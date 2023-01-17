@@ -1,6 +1,7 @@
 use clap::Parser;
 use log::info;
 use std::io::Write;
+use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
 
 use sfu::{rtc::server::udp_echo_server::udp_echo_server, signal};
@@ -19,6 +20,8 @@ struct Cli {
     signal_port: u16,
     #[arg(short, long, default_value_t = 3478)]
     media_port: u16,
+    #[arg(short, long, default_value_t = format!("INFO"))]
+    log_level: String,
 }
 
 #[tokio::main]
@@ -37,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
                     record.args()
                 )
             })
-            .filter(None, log::LevelFilter::Trace)
+            .filter(None, log::LevelFilter::from_str(&cli.log_level)?)
             .init();
     }
 
