@@ -1,7 +1,7 @@
 use retty::bootstrap::bootstrap_udp_server::BootstrapUdpServer;
 use retty::channel::handler::{
-    Handler, InboundHandler, InboundHandlerContext, InboundHandlerGeneric, OutboundHandler,
-    OutboundHandlerGeneric,
+    Handler, InboundHandler, InboundHandlerContext, InboundHandlerInternal, OutboundHandler,
+    OutboundHandlerInternal,
 };
 use retty::channel::pipeline::Pipeline;
 use retty::codec::byte_to_message_decoder::line_based_frame_decoder::{
@@ -44,8 +44,8 @@ impl TaggedEchoHandler {
 }
 
 #[async_trait]
-impl InboundHandlerGeneric<TaggedString> for TaggedEchoDecoder {
-    async fn read_generic(&mut self, ctx: &mut InboundHandlerContext, msg: &mut TaggedString) {
+impl InboundHandler<TaggedString> for TaggedEchoDecoder {
+    async fn read(&mut self, ctx: &mut InboundHandlerContext, msg: &mut TaggedString) {
         println!(
             "handling {} from {:?}",
             msg.message, msg.transport.peer_addr
@@ -62,7 +62,7 @@ impl InboundHandlerGeneric<TaggedString> for TaggedEchoDecoder {
         }
     }
 
-    async fn read_timeout_generic(&mut self, ctx: &mut InboundHandlerContext, timeout: Instant) {
+    async fn read_timeout(&mut self, ctx: &mut InboundHandlerContext, timeout: Instant) {
         if self.last_transport.is_some() && self.timeout <= timeout {
             println!("TaggedEchoHandler timeout at: {:?}", self.timeout);
             self.timeout = Instant::now() + self.interval;
@@ -76,18 +76,14 @@ impl InboundHandlerGeneric<TaggedString> for TaggedEchoDecoder {
         }
     }
 
-    async fn poll_timeout_generic(
-        &mut self,
-        _ctx: &mut InboundHandlerContext,
-        timeout: &mut Instant,
-    ) {
+    async fn poll_timeout(&mut self, _ctx: &mut InboundHandlerContext, timeout: &mut Instant) {
         if self.last_transport.is_some() && self.timeout < *timeout {
             *timeout = self.timeout
         }
     }
 }
 
-impl OutboundHandlerGeneric<TaggedString> for TaggedEchoEncoder {}
+impl OutboundHandler<TaggedString> for TaggedEchoEncoder {}
 
 impl Handler for TaggedEchoHandler {
     fn id(&self) -> String {
@@ -97,11 +93,11 @@ impl Handler for TaggedEchoHandler {
     fn split(
         self,
     ) -> (
-        Arc<Mutex<dyn InboundHandler>>,
-        Arc<Mutex<dyn OutboundHandler>>,
+        Arc<Mutex<dyn InboundHandlerInternal>>,
+        Arc<Mutex<dyn OutboundHandlerInternal>>,
     ) {
-        let decoder: Box<dyn InboundHandlerGeneric<TaggedString>> = Box::new(self.decoder);
-        let encoder: Box<dyn OutboundHandlerGeneric<TaggedString>> = Box::new(self.encoder);
+        let decoder: Box<dyn InboundHandler<TaggedString>> = Box::new(self.decoder);
+        let encoder: Box<dyn OutboundHandler<TaggedString>> = Box::new(self.encoder);
         (Arc::new(Mutex::new(decoder)), Arc::new(Mutex::new(encoder)))
     }
 }

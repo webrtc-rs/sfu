@@ -4,8 +4,8 @@ use std::sync::Arc;
 use crate::rtc::server::server_states::ServerStates;
 
 use retty::channel::handler::{
-    Handler, InboundHandler, InboundHandlerContext, InboundHandlerGeneric, OutboundHandler,
-    OutboundHandlerGeneric,
+    Handler, InboundHandler, InboundHandlerContext, InboundHandlerInternal, OutboundHandler,
+    OutboundHandlerInternal,
 };
 use retty::runtime::sync::Mutex;
 use retty::transport::async_transport_udp::TaggedBytesMut;
@@ -94,8 +94,8 @@ impl UDPDemuxer {
 }
 
 #[async_trait]
-impl InboundHandlerGeneric<TaggedBytesMut> for UDPDemuxerDecoder {
-    async fn read_generic(&mut self, ctx: &mut InboundHandlerContext, msg: &mut TaggedBytesMut) {
+impl InboundHandler<TaggedBytesMut> for UDPDemuxerDecoder {
+    async fn read(&mut self, ctx: &mut InboundHandlerContext, msg: &mut TaggedBytesMut) {
         if match_srtp_or_srtcp(&msg.message) {
             //TODO: dispatch the packet to Media Pipeline
         } else {
@@ -105,7 +105,7 @@ impl InboundHandlerGeneric<TaggedBytesMut> for UDPDemuxerDecoder {
 }
 
 #[async_trait]
-impl OutboundHandlerGeneric<TaggedBytesMut> for UDPDemuxerEncoder {}
+impl OutboundHandler<TaggedBytesMut> for UDPDemuxerEncoder {}
 
 impl Handler for UDPDemuxer {
     fn id(&self) -> String {
@@ -115,11 +115,11 @@ impl Handler for UDPDemuxer {
     fn split(
         self,
     ) -> (
-        Arc<Mutex<dyn InboundHandler>>,
-        Arc<Mutex<dyn OutboundHandler>>,
+        Arc<Mutex<dyn InboundHandlerInternal>>,
+        Arc<Mutex<dyn OutboundHandlerInternal>>,
     ) {
-        let decoder: Box<dyn InboundHandlerGeneric<TaggedBytesMut>> = Box::new(self.decoder);
-        let encoder: Box<dyn OutboundHandlerGeneric<TaggedBytesMut>> = Box::new(self.encoder);
+        let decoder: Box<dyn InboundHandler<TaggedBytesMut>> = Box::new(self.decoder);
+        let encoder: Box<dyn OutboundHandler<TaggedBytesMut>> = Box::new(self.encoder);
         (Arc::new(Mutex::new(decoder)), Arc::new(Mutex::new(encoder)))
     }
 }
