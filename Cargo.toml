@@ -12,8 +12,8 @@ keywords = ["networking", "protocols"]
 categories = [ "network-programming", "asynchronous" ]
 
 [dependencies]
-retty = { version = "0.4.4", features = ["runtime-tokio"] }
-tokio = { version = "1.24.1", features = ["full"] }
+retty = { version = "0.4.5", features = ["runtime-tokio"] }
+tokio = { version = "1.24.1", features = ["rt-multi-thread", "macros", "signal"] }
 hyper = { version = "0.14.16", features = ["full"] }
 clap = { version = "4.1.1", features = ["derive"] }
 async-trait = "0.1.61"
@@ -22,9 +22,6 @@ log = "0.4.17"
 chrono = "0.4.23"
 env_logger = "0.10.0"
 anyhow = "1.0.68"
-
-[dev-dependencies]
-
 
 [[bin]]
 name = "sfu"

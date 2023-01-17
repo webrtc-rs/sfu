@@ -78,16 +78,12 @@ impl InboundHandlerGeneric<TaggedString> for TaggedEchoDecoder {
 
     async fn poll_timeout_generic(
         &mut self,
-        ctx: &mut InboundHandlerContext,
+        _ctx: &mut InboundHandlerContext,
         timeout: &mut Instant,
     ) {
-        *timeout = if self.last_transport.is_some() && self.timeout <= *timeout {
-            self.timeout
-        } else {
-            *timeout
-        };
-
-        ctx.fire_poll_timeout(timeout).await;
+        if self.last_transport.is_some() && self.timeout < *timeout {
+            *timeout = self.timeout
+        }
     }
 }
 
