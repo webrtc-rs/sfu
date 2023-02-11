@@ -76,14 +76,14 @@ struct UDPDemuxerDecoder {
 }
 struct UDPDemuxerEncoder;
 
-pub struct UDPDemuxer {
+pub struct UDPDemuxerHandler {
     decoder: UDPDemuxerDecoder,
     encoder: UDPDemuxerEncoder,
 }
 
-impl UDPDemuxer {
+impl UDPDemuxerHandler {
     pub fn new(server_states: Arc<Mutex<ServerStates>>) -> Self {
-        UDPDemuxer {
+        UDPDemuxerHandler {
             decoder: UDPDemuxerDecoder { server_states },
             encoder: UDPDemuxerEncoder {},
         }
@@ -114,14 +114,14 @@ impl OutboundHandler for UDPDemuxerEncoder {
     }
 }
 
-impl Handler for UDPDemuxer {
+impl Handler for UDPDemuxerHandler {
     type Rin = TaggedBytesMut;
     type Rout = Self::Rin;
     type Win = TaggedBytesMut;
     type Wout = Self::Win;
 
     fn name(&self) -> &str {
-        "UDPDemuxer Handler"
+        "UDPDemuxerHandler"
     }
 
     fn split(
