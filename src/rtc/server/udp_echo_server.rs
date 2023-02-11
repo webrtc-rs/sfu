@@ -1,23 +1,19 @@
-use retty::bootstrap::bootstrap_udp_server::BootstrapUdpServer;
-use retty::channel::handler::{
-    Handler, InboundHandler, InboundHandlerContext, InboundHandlerInternal, OutboundHandler,
-    OutboundHandlerInternal,
+use retty::bootstrap::BootstrapUdpServer;
+use retty::channel::{
+    Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler, Pipeline,
 };
-use retty::channel::pipeline::Pipeline;
-use retty::codec::byte_to_message_decoder::line_based_frame_decoder::{
-    LineBasedFrameDecoder, TerminatorType,
+use retty::codec::{
+    byte_to_message_decoder::{LineBasedFrameDecoder, TaggedByteToMessageCodec, TerminatorType},
+    string_codec::{TaggedString, TaggedStringCodec},
 };
-use retty::codec::byte_to_message_decoder::tagged::TaggedByteToMessageCodec;
-use retty::codec::string_codec::tagged::{TaggedString, TaggedStringCodec};
 use retty::runtime::default_runtime;
-use retty::transport::async_transport_udp::AsyncTransportUdp;
-use retty::transport::{AsyncTransportWrite, TransportContext};
+use retty::transport::{AsyncTransportUdp, AsyncTransportWrite, TaggedBytesMut, TransportContext};
 
 use async_trait::async_trait;
 use log::{error, info};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc};
 
 struct TaggedEchoDecoder {
     interval: Duration,
@@ -44,8 +40,11 @@ impl TaggedEchoHandler {
 }
 
 #[async_trait]
-impl InboundHandler<TaggedString> for TaggedEchoDecoder {
-    async fn read(&mut self, ctx: &mut InboundHandlerContext, msg: &mut TaggedString) {
+impl InboundHandler for TaggedEchoDecoder {
+    type Rin = TaggedString;
+    type Rout = Self::Rin;
+
+    async fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
         println!(
             "handling {} from {:?}",
             msg.message, msg.transport.peer_addr
@@ -54,7 +53,7 @@ impl InboundHandler<TaggedString> for TaggedEchoDecoder {
             self.last_transport.take();
         } else {
             self.last_transport = Some(msg.transport);
-            ctx.fire_write(&mut TaggedString {
+            ctx.fire_write(TaggedString {
                 transport: msg.transport,
                 message: format!("{}\r\n", msg.message),
             })
@@ -62,43 +61,61 @@ impl InboundHandler<TaggedString> for TaggedEchoDecoder {
         }
     }
 
-    async fn read_timeout(&mut self, ctx: &mut InboundHandlerContext, timeout: Instant) {
-        if self.last_transport.is_some() && self.timeout <= timeout {
+    async fn read_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, now: Instant) {
+        if self.last_transport.is_some() && self.timeout <= now {
             println!("TaggedEchoHandler timeout at: {:?}", self.timeout);
-            self.timeout = Instant::now() + self.interval;
+            self.timeout = now + self.interval;
             if let Some(transport) = &self.last_transport {
-                ctx.fire_write(&mut TaggedString {
+                ctx.fire_write(TaggedString {
                     transport: *transport,
                     message: format!("Keep-alive message: next one at {:?}\r\n", self.timeout),
                 })
                 .await;
             }
         }
-    }
 
-    async fn poll_timeout(&mut self, _ctx: &mut InboundHandlerContext, timeout: &mut Instant) {
-        if self.last_transport.is_some() && self.timeout < *timeout {
-            *timeout = self.timeout
+        //last handler, no need to fire_read_timeout
+    }
+    async fn poll_timeout(
+        &mut self,
+        _ctx: &InboundContext<Self::Rin, Self::Rout>,
+        eto: &mut Instant,
+    ) {
+        if self.last_transport.is_some() && self.timeout < *eto {
+            *eto = self.timeout;
         }
+
+        //last handler, no need to fire_poll_timeout
     }
 }
 
-impl OutboundHandler<TaggedString> for TaggedEchoEncoder {}
+#[async_trait]
+impl OutboundHandler for TaggedEchoEncoder {
+    type Win = TaggedString;
+    type Wout = Self::Win;
+
+    async fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
+        ctx.fire_write(msg).await;
+    }
+}
 
 impl Handler for TaggedEchoHandler {
-    fn id(&self) -> String {
-        "TaggedEcho Handler".to_string()
+    type Rin = TaggedString;
+    type Rout = Self::Rin;
+    type Win = TaggedString;
+    type Wout = Self::Win;
+
+    fn name(&self) -> &str {
+        "TaggedEchoHandler"
     }
 
     fn split(
         self,
     ) -> (
-        Arc<Mutex<dyn InboundHandlerInternal>>,
-        Arc<Mutex<dyn OutboundHandlerInternal>>,
+        Box<dyn InboundHandler<Rin = Self::Rin, Rout = Self::Rout>>,
+        Box<dyn OutboundHandler<Win = Self::Win, Wout = Self::Wout>>,
     ) {
-        let decoder: Box<dyn InboundHandler<TaggedString>> = Box::new(self.decoder);
-        let encoder: Box<dyn OutboundHandler<TaggedString>> = Box::new(self.encoder);
-        (Arc::new(Mutex::new(decoder)), Arc::new(Mutex::new(encoder)))
+        (Box::new(self.decoder), Box::new(self.encoder))
     }
 }
 
@@ -115,24 +132,24 @@ pub async fn udp_echo_server(
         if let Err(err) = bootstrap
             .pipeline(Box::new(
                 move |sock: Box<dyn AsyncTransportWrite + Send + Sync>| {
-                    let mut pipeline = Pipeline::new(TransportContext {
-                        local_addr: sock.local_addr().unwrap(),
-                        peer_addr: sock.peer_addr().ok(),
-                    });
+                    Box::pin(async move {
+                        let pipeline: Pipeline<TaggedBytesMut, TaggedString> = Pipeline::new();
 
-                    let async_transport_handler = AsyncTransportUdp::new(sock);
-                    let line_based_frame_decoder_handler = TaggedByteToMessageCodec::new(Box::new(
-                        LineBasedFrameDecoder::new(8192, true, TerminatorType::BOTH),
-                    ));
-                    let string_codec_handler = TaggedStringCodec::new();
-                    let echo_handler = TaggedEchoHandler::new(Duration::from_secs(5));
+                        let async_transport_handler = AsyncTransportUdp::new(sock);
+                        let line_based_frame_decoder_handler = TaggedByteToMessageCodec::new(
+                            Box::new(LineBasedFrameDecoder::new(8192, true, TerminatorType::BOTH)),
+                        );
+                        let string_codec_handler = TaggedStringCodec::new();
+                        let echo_handler = TaggedEchoHandler::new(Duration::from_secs(5));
 
-                    pipeline.add_back(async_transport_handler);
-                    pipeline.add_back(line_based_frame_decoder_handler);
-                    pipeline.add_back(string_codec_handler);
-                    pipeline.add_back(echo_handler);
+                        pipeline.add_back(async_transport_handler).await;
+                        pipeline.add_back(line_based_frame_decoder_handler).await;
+                        pipeline.add_back(string_codec_handler).await;
+                        pipeline.add_back(echo_handler).await;
+                        pipeline.finalize().await;
 
-                    Box::pin(async move { pipeline.finalize().await })
+                        Arc::new(pipeline)
+                    })
                 },
             ))
             .bind(format!("{}:{}", host, port))

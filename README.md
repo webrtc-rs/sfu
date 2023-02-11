@@ -23,5 +23,5 @@
  </a>
 </p>
 <p align="center">
- A pure Rust implementation of WebRTC SFU
+ A pure Rust implementation of SFU
 </p>

@@ -3,12 +3,9 @@ use std::sync::Arc;
 
 use crate::rtc::server::server_states::ServerStates;
 
-use retty::channel::handler::{
-    Handler, InboundHandler, InboundHandlerContext, InboundHandlerInternal, OutboundHandler,
-    OutboundHandlerInternal,
-};
+use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::runtime::sync::Mutex;
-use retty::transport::async_transport_udp::TaggedBytesMut;
+use retty::transport::TaggedBytesMut;
 
 /// MatchFunc allows custom logic for mapping packets to an Endpoint
 type MatchFunc = Box<dyn (Fn(&[u8]) -> bool) + Send + Sync>;
@@ -94,8 +91,11 @@ impl UDPDemuxer {
 }
 
 #[async_trait]
-impl InboundHandler<TaggedBytesMut> for UDPDemuxerDecoder {
-    async fn read(&mut self, ctx: &mut InboundHandlerContext, msg: &mut TaggedBytesMut) {
+impl InboundHandler for UDPDemuxerDecoder {
+    type Rin = TaggedBytesMut;
+    type Rout = Self::Rin;
+
+    async fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
         if match_srtp_or_srtcp(&msg.message) {
             //TODO: dispatch the packet to Media Pipeline
         } else {
@@ -105,21 +105,31 @@ impl InboundHandler<TaggedBytesMut> for UDPDemuxerDecoder {
 }
 
 #[async_trait]
-impl OutboundHandler<TaggedBytesMut> for UDPDemuxerEncoder {}
+impl OutboundHandler for UDPDemuxerEncoder {
+    type Win = TaggedBytesMut;
+    type Wout = Self::Win;
+
+    async fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
+        ctx.fire_write(msg).await;
+    }
+}
 
 impl Handler for UDPDemuxer {
-    fn id(&self) -> String {
-        "UDPDemuxer Handler".to_string()
+    type Rin = TaggedBytesMut;
+    type Rout = Self::Rin;
+    type Win = TaggedBytesMut;
+    type Wout = Self::Win;
+
+    fn name(&self) -> &str {
+        "UDPDemuxer Handler"
     }
 
     fn split(
         self,
     ) -> (
-        Arc<Mutex<dyn InboundHandlerInternal>>,
-        Arc<Mutex<dyn OutboundHandlerInternal>>,
+        Box<dyn InboundHandler<Rin = Self::Rin, Rout = Self::Rout>>,
+        Box<dyn OutboundHandler<Win = Self::Win, Wout = Self::Wout>>,
     ) {
-        let decoder: Box<dyn InboundHandler<TaggedBytesMut>> = Box::new(self.decoder);
-        let encoder: Box<dyn OutboundHandler<TaggedBytesMut>> = Box::new(self.encoder);
-        (Arc::new(Mutex::new(decoder)), Arc::new(Mutex::new(encoder)))
+        (Box::new(self.decoder), Box::new(self.encoder))
     }
 }

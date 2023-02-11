@@ -1,14 +1,13 @@
-use retty::bootstrap::bootstrap_udp_server::BootstrapUdpServer;
-use retty::channel::pipeline::Pipeline;
+use retty::bootstrap::BootstrapUdpServer;
+use retty::channel::Pipeline;
 use retty::runtime::default_runtime;
-use retty::transport::async_transport_udp::AsyncTransportUdp;
-use retty::transport::{AsyncTransportWrite, TransportContext};
-use std::sync::Arc;
+use retty::transport::{AsyncTransportUdp, AsyncTransportWrite, TaggedBytesMut};
 
 use crate::rtc::server::server_states::ServerStates;
 use crate::rtc::server::udp_demuxer::UDPDemuxer;
 
 use log::{error, info};
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 /// udp_rtc_server starts a RTC Server on top of UDP
@@ -26,18 +25,18 @@ pub async fn udp_rtc_server(
         if let Err(err) = bootstrap
             .pipeline(Box::new(
                 move |sock: Box<dyn AsyncTransportWrite + Send + Sync>| {
-                    let mut pipeline = Pipeline::new(TransportContext {
-                        local_addr: sock.local_addr().unwrap(),
-                        peer_addr: sock.peer_addr().ok(),
-                    });
+                    let server_states = server_states.clone();
+                    Box::pin(async move {
+                        let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
-                    let async_transport_handler = AsyncTransportUdp::new(sock);
-                    let udp_demuxer_handler = UDPDemuxer::new(server_states.clone());
+                        let async_transport_handler = AsyncTransportUdp::new(sock);
+                        let udp_demuxer_handler = UDPDemuxer::new(server_states);
 
-                    pipeline.add_back(async_transport_handler);
-                    pipeline.add_back(udp_demuxer_handler);
-
-                    Box::pin(async move { pipeline.finalize().await })
+                        pipeline.add_back(async_transport_handler).await;
+                        pipeline.add_back(udp_demuxer_handler).await;
+                        pipeline.finalize().await;
+                        Arc::new(pipeline)
+                    })
                 },
             ))
             .bind(format!("{}:{}", host, port))

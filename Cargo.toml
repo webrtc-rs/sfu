@@ -3,7 +3,7 @@ name = "sfu"
 version = "0.0.0"
 authors = ["Rusty Rain <y@liu.mx>"]
 edition = "2021"
-description = "A pure Rust implementation of WebRTC SFU"
+description = "A pure Rust implementation of SFU"
 license = "MIT/Apache-2.0"
 documentation = "https://docs.rs/sfu"
 repository = "https://github.com/ngr-tc/sfu"
@@ -12,7 +12,7 @@ keywords = ["networking", "protocols"]
 categories = [ "network-programming", "asynchronous" ]
 
 [dependencies]
-retty = { version = "0.5.0", features = ["runtime-tokio"] }
+retty = { version = "0.15.3", features = ["runtime-tokio"] }
 tokio = { version = "1.24.1", features = ["rt-multi-thread", "macros", "signal"] }
 hyper = { version = "0.14.16", features = ["full"] }
 clap = { version = "4.1.1", features = ["derive"] }
