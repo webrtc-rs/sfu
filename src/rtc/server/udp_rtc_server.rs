@@ -7,7 +7,7 @@ use crate::rtc::server::{server_states::ServerStates, udp_demuxer_handler::UDPDe
 
 use log::{error, info};
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc};
 
 /// udp_rtc_server starts a RTC Server on top of UDP
 pub async fn udp_rtc_server(
@@ -17,7 +17,7 @@ pub async fn udp_rtc_server(
     mut cancel_rx: broadcast::Receiver<()>,
 ) -> broadcast::Receiver<()> {
     let (done_tx, done_rx) = broadcast::channel(1);
-    let server_states = Arc::new(Mutex::new(ServerStates {}));
+    let server_states = Arc::new(ServerStates::new());
 
     tokio::spawn(async move {
         let mut bootstrap = BootstrapUdpServer::new(default_runtime().unwrap());

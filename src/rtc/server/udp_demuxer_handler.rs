@@ -4,26 +4,15 @@ use std::sync::Arc;
 use crate::rtc::server::server_states::ServerStates;
 
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
-use retty::runtime::sync::Mutex;
 use retty::transport::TaggedBytesMut;
 
-/// MatchFunc allows custom logic for mapping packets to an Endpoint
-type MatchFunc = Box<dyn (Fn(&[u8]) -> bool) + Send + Sync>;
-
-/// match_all always returns true
-fn match_all(_b: &[u8]) -> bool {
-    true
-}
-
 /// match_range is a MatchFunc that accepts packets with the first byte in [lower..upper]
-fn match_range(lower: u8, upper: u8) -> MatchFunc {
-    Box::new(move |buf: &[u8]| -> bool {
-        if buf.is_empty() {
-            return false;
-        }
-        let b = buf[0];
-        b >= lower && b <= upper
-    })
+fn match_range(lower: u8, upper: u8, buf: &[u8]) -> bool {
+    if buf.is_empty() {
+        return false;
+    }
+    let b = buf[0];
+    b >= lower && b <= upper
 }
 
 /// MatchFuncs as described in RFC7983
@@ -42,37 +31,17 @@ fn match_range(lower: u8, upper: u8) -> MatchFunc {
 /// match_dtls is a MatchFunc that accepts packets with the first byte in [20..63]
 /// as defied in RFC7983
 fn match_dtls(b: &[u8]) -> bool {
-    match_range(20, 63)(b)
+    match_range(20, 63, b)
 }
 
-/// match_srtp_or_srtcp is a MatchFunc that accepts packets with the first byte in [128..191]
+/// match_srtp is a MatchFunc that accepts packets with the first byte in [128..191]
 /// as defied in RFC7983
-fn match_srtp_or_srtcp(b: &[u8]) -> bool {
-    match_range(128, 191)(b)
-}
-
-pub(crate) fn is_rtcp(buf: &[u8]) -> bool {
-    // Not long enough to determine RTP/RTCP
-    if buf.len() < 4 {
-        return false;
-    }
-
-    let rtcp_packet_type = buf[1];
-    (192..=223).contains(&rtcp_packet_type)
-}
-
-/// match_srtp is a MatchFunc that only matches SRTP and not SRTCP
-fn match_srtp(buf: &[u8]) -> bool {
-    match_srtp_or_srtcp(buf) && !is_rtcp(buf)
-}
-
-/// match_srtcp is a MatchFunc that only matches SRTCP and not SRTP
-fn match_srtcp(buf: &[u8]) -> bool {
-    match_srtp_or_srtcp(buf) && is_rtcp(buf)
+fn match_srtp(b: &[u8]) -> bool {
+    match_range(128, 191, b)
 }
 
 struct UDPDemuxerDecoder {
-    server_states: Arc<Mutex<ServerStates>>,
+    server_states: Arc<ServerStates>,
 }
 struct UDPDemuxerEncoder;
 
@@ -82,7 +51,7 @@ pub struct UDPDemuxerHandler {
 }
 
 impl UDPDemuxerHandler {
-    pub fn new(server_states: Arc<Mutex<ServerStates>>) -> Self {
+    pub fn new(server_states: Arc<ServerStates>) -> Self {
         UDPDemuxerHandler {
             decoder: UDPDemuxerDecoder { server_states },
             encoder: UDPDemuxerEncoder {},
@@ -96,9 +65,13 @@ impl InboundHandler for UDPDemuxerDecoder {
     type Rout = Self::Rin;
 
     async fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        if match_srtp_or_srtcp(&msg.message) {
-            //TODO: dispatch the packet to Media Pipeline
+        if match_dtls(&msg.message) {
+            //TODO: dispatch the packet to Data (DTLS) Pipeline
+            unimplemented!()
+        } else if match_srtp(&msg.message) {
+            //TODO: dispatch the packet to Media (RTP) Pipeline
         } else {
+            // dispatch the packet to next handler for STUN (ICE) processing
             ctx.fire_read(msg).await;
         }
     }
