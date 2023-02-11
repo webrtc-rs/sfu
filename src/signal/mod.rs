@@ -1,9 +1,11 @@
+use crate::rtc::server::server_states::ServerStates;
 use anyhow::Result;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::{debug, error, info};
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
 // HTTP Listener to get sdp
@@ -40,6 +42,7 @@ async fn remote_handler(
 pub async fn http_sdp_server(
     host: String,
     port: u16,
+    _server_states: Arc<ServerStates>,
     sdp_tx: mpsc::Sender<String>,
     mut cancel_rx: broadcast::Receiver<()>,
 ) -> broadcast::Receiver<()> {

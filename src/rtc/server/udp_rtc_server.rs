@@ -13,11 +13,11 @@ use tokio::sync::{broadcast, mpsc};
 pub async fn udp_rtc_server(
     host: String,
     port: u16,
+    server_states: Arc<ServerStates>,
     _sdp_rx: mpsc::Receiver<String>,
     mut cancel_rx: broadcast::Receiver<()>,
 ) -> broadcast::Receiver<()> {
     let (done_tx, done_rx) = broadcast::channel(1);
-    let server_states = Arc::new(ServerStates::new());
 
     tokio::spawn(async move {
         let mut bootstrap = BootstrapUdpServer::new(default_runtime().unwrap());

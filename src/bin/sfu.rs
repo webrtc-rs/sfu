@@ -2,8 +2,10 @@ use clap::Parser;
 use log::info;
 use std::io::Write;
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
+use sfu::rtc::server::server_states::ServerStates;
 use sfu::{rtc::server::udp_rtc_server::udp_rtc_server, signal};
 
 #[derive(Parser)]
@@ -52,9 +54,26 @@ async fn main() -> anyhow::Result<()> {
     let (sdp_tx, sdp_rx) = mpsc::channel::<String>(1);
     let (cancel_tx, signal_cancel_rx) = broadcast::channel(1);
     let rtc_cancel_rx = cancel_tx.subscribe();
-    let mut signal_done_rx =
-        signal::http_sdp_server(cli.host.clone(), cli.signal_port, sdp_tx, signal_cancel_rx).await;
-    let mut rtc_done_rx = udp_rtc_server(cli.host, cli.media_port, sdp_rx, rtc_cancel_rx).await;
+
+    let server_states = Arc::new(ServerStates::new());
+
+    let mut signal_done_rx = signal::http_sdp_server(
+        cli.host.clone(),
+        cli.signal_port,
+        server_states.clone(),
+        sdp_tx,
+        signal_cancel_rx,
+    )
+    .await;
+
+    let mut rtc_done_rx = udp_rtc_server(
+        cli.host,
+        cli.media_port,
+        server_states.clone(),
+        sdp_rx,
+        rtc_cancel_rx,
+    )
+    .await;
 
     info!("Press ctrl-c to stop");
 
