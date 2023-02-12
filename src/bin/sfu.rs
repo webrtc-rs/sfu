@@ -3,7 +3,7 @@ use log::info;
 use std::io::Write;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
 use sfu::rtc::server::server_states::ServerStates;
 use sfu::{rtc::server::udp_rtc_server::udp_rtc_server, signal};
@@ -51,7 +51,6 @@ async fn main() -> anyhow::Result<()> {
         cli.host, cli.signal_port, cli.media_port
     );
 
-    let (sdp_tx, sdp_rx) = mpsc::channel::<String>(1);
     let (cancel_tx, signal_cancel_rx) = broadcast::channel(1);
     let rtc_cancel_rx = cancel_tx.subscribe();
 
@@ -61,7 +60,6 @@ async fn main() -> anyhow::Result<()> {
         cli.host.clone(),
         cli.signal_port,
         server_states.clone(),
-        sdp_tx,
         signal_cancel_rx,
     )
     .await;
@@ -70,7 +68,6 @@ async fn main() -> anyhow::Result<()> {
         cli.host,
         cli.media_port,
         server_states.clone(),
-        sdp_rx,
         rtc_cancel_rx,
     )
     .await;

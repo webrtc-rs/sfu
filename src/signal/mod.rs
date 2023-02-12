@@ -1,4 +1,5 @@
 use crate::rtc::server::server_states::ServerStates;
+use crate::rtc::session::endpoint::Endpoint;
 use anyhow::Result;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
@@ -6,25 +7,54 @@ use log::{debug, error, info};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
 // HTTP Listener to get sdp
 async fn remote_handler(
     req: Request<Body>,
-    tx: mpsc::Sender<String>,
+    server_states: Arc<ServerStates>,
 ) -> Result<Response<Body>, hyper::Error> {
     match (req.method(), req.uri().path()) {
         // A HTTP handler that processes a SessionDescription given to us from the other WebRTC-rs or Pion process
-        (&Method::POST, "/sdp") => {
-            debug!("remote_handler receive from /sdp");
-            let sdp_str = match std::str::from_utf8(&hyper::body::to_bytes(req.into_body()).await?)
-            {
-                Ok(s) => s.to_owned(),
-                Err(err) => panic!("{}", err),
-            };
+        (&Method::POST, "/join") => {
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::OK;
+            Ok(response)
+        }
+        (&Method::POST, "/offer") => {
+            debug!("remote_handler receive from /offer");
+            let bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let offer = std::str::from_utf8(&bytes).unwrap(); //TODO
+            let mut endpoint = Endpoint::new();
+            let answer = endpoint.accept_offer(offer).unwrap(); //TODO
+            server_states.insert(endpoint).await;
+            let mut response = Response::new(Body::from(answer));
+            *response.status_mut() = StatusCode::OK;
+            Ok(response)
+        }
+        (&Method::POST, "/answer") => {
+            debug!("remote_handler receive from /answer");
+            let bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let _answer = std::str::from_utf8(&bytes).unwrap(); //TODO
 
-            let _ = tx.send(sdp_str).await;
+            //endpoint.accept_answer(answer).unwrap(); //TODO
 
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::OK;
+            Ok(response)
+        }
+        (&Method::POST, "/trickle") => {
+            debug!("remote_handler receive from /trickle");
+            let bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let _trickle = std::str::from_utf8(&bytes).unwrap(); //TODO
+
+            //endpoint.accept_answer(answer).unwrap(); //TODO
+
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::OK;
+            Ok(response)
+        }
+        (&Method::POST, "/leave") => {
             let mut response = Response::new(Body::empty());
             *response.status_mut() = StatusCode::OK;
             Ok(response)
@@ -42,20 +72,19 @@ async fn remote_handler(
 pub async fn http_sdp_server(
     host: String,
     port: u16,
-    _server_states: Arc<ServerStates>,
-    sdp_tx: mpsc::Sender<String>,
+    server_states: Arc<ServerStates>,
     mut cancel_rx: broadcast::Receiver<()>,
 ) -> broadcast::Receiver<()> {
     let (done_tx, done_rx) = broadcast::channel(1);
     tokio::spawn(async move {
         let addr = SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap();
         let service = make_service_fn(move |_| {
-            let tx = sdp_tx.clone();
+            let server_states = server_states.clone();
             async move {
                 Ok::<_, hyper::Error>(service_fn(move |req| {
-                    let tx = tx.clone();
+                    let server_states = server_states.clone();
                     async move {
-                        let resp = remote_handler(req, tx).await?;
+                        let resp = remote_handler(req, server_states).await?;
                         Ok::<_, hyper::Error>(resp)
                     }
                 }))
