@@ -1,5 +1,6 @@
-use crate::rtc::server::server_states::ServerStates;
-use crate::rtc::session::endpoint::Endpoint;
+use crate::rtc::{endpoint::Endpoint, server::ServerStates};
+
+use crate::rtc::room::Room;
 use anyhow::Result;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
@@ -14,47 +15,155 @@ async fn remote_handler(
     req: Request<Body>,
     server_states: Arc<ServerStates>,
 ) -> Result<Response<Body>, hyper::Error> {
-    match (req.method(), req.uri().path()) {
+    let path: Vec<&str> = req.uri().path().split('/').collect();
+    if path.len() < 3
+        || path[2].parse::<usize>().is_err()
+        || ((path[1] == "offer"
+            || path[1] == "answer"
+            || path[1] == "trickle"
+            || path[1] == "leave")
+            && (path.len() < 4 || path[3].parse::<usize>().is_err()))
+    {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return Ok(response);
+    }
+    let room_id = path[2].parse::<usize>().unwrap();
+
+    match (req.method(), path[1]) {
         // A HTTP handler that processes a SessionDescription given to us from the other WebRTC-rs or Pion process
-        (&Method::POST, "/join") => {
+        (&Method::POST, "join") => {
+            let room = if let Some(room) = server_states.get(room_id).await {
+                room
+            } else {
+                let room = Arc::new(Room::new(room_id));
+                server_states.insert(room.clone()).await;
+                room
+            };
+
+            let endpoint_id = rand::random::<usize>();
+            let endpoint = Arc::new(Endpoint::new(room_id, endpoint_id));
+            room.insert(endpoint).await;
+
+            info!("endpoint {} joined room {}", endpoint_id, room_id);
+
             let mut response = Response::new(Body::empty());
             *response.status_mut() = StatusCode::OK;
             Ok(response)
         }
-        (&Method::POST, "/offer") => {
-            debug!("remote_handler receive from /offer");
+        (&Method::POST, "offer") => {
+            debug!("remote_handler receive from /offer/room_id/endpoint_id");
+
+            let room = if let Some(room) = server_states.get(room_id).await {
+                room
+            } else {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
+            };
+
+            let endpoint_id = path[3].parse::<usize>().unwrap();
+            let endpoint = if let Some(endpoint) = room.get(endpoint_id).await {
+                endpoint
+            } else {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
+            };
+
             let bytes = hyper::body::to_bytes(req.into_body()).await?;
             let offer = std::str::from_utf8(&bytes).unwrap(); //TODO
-            let mut endpoint = Endpoint::new();
             let answer = endpoint.accept_offer(offer).unwrap(); //TODO
-            server_states.insert(endpoint).await;
+
+            info!(
+                "endpoint {} sent offer {} in room {}",
+                endpoint_id, offer, room_id
+            );
+
             let mut response = Response::new(Body::from(answer));
             *response.status_mut() = StatusCode::OK;
             Ok(response)
         }
-        (&Method::POST, "/answer") => {
-            debug!("remote_handler receive from /answer");
-            let bytes = hyper::body::to_bytes(req.into_body()).await?;
-            let _answer = std::str::from_utf8(&bytes).unwrap(); //TODO
+        (&Method::POST, "answer") => {
+            debug!("remote_handler receive from /answer/room_id/endpoint_id");
 
-            //endpoint.accept_answer(answer).unwrap(); //TODO
+            let room = if let Some(room) = server_states.get(room_id).await {
+                room
+            } else {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
+            };
+
+            let endpoint_id = path[3].parse::<usize>().unwrap();
+            let endpoint = if let Some(endpoint) = room.get(endpoint_id).await {
+                endpoint
+            } else {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
+            };
+
+            let bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let answer = std::str::from_utf8(&bytes).unwrap(); //TODO
+            endpoint.accept_answer(answer).unwrap(); //TODO
+
+            info!(
+                "endpoint {} sent answer {} in room {}",
+                endpoint_id, answer, room_id
+            );
 
             let mut response = Response::new(Body::empty());
             *response.status_mut() = StatusCode::OK;
             Ok(response)
         }
-        (&Method::POST, "/trickle") => {
-            debug!("remote_handler receive from /trickle");
-            let bytes = hyper::body::to_bytes(req.into_body()).await?;
-            let _trickle = std::str::from_utf8(&bytes).unwrap(); //TODO
+        (&Method::POST, "trickle") => {
+            debug!("remote_handler receive from /trickle/room_id/endpoint_id");
+            let room = if let Some(room) = server_states.get(room_id).await {
+                room
+            } else {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
+            };
 
-            //endpoint.accept_answer(answer).unwrap(); //TODO
+            let endpoint_id = path[3].parse::<usize>().unwrap();
+            let endpoint = if let Some(endpoint) = room.get(endpoint_id).await {
+                endpoint
+            } else {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
+            };
+
+            let bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let trickle = std::str::from_utf8(&bytes).unwrap(); //TODO
+            endpoint.accept_trickle(trickle).unwrap(); //TODO
+
+            info!(
+                "endpoint {} sent trickle {} in room {}",
+                endpoint_id, trickle, room_id
+            );
 
             let mut response = Response::new(Body::empty());
             *response.status_mut() = StatusCode::OK;
             Ok(response)
         }
-        (&Method::POST, "/leave") => {
+        (&Method::POST, "leave") => {
+            debug!("remote_handler receive from /leave/room_id/endpoint_id");
+            let room = if let Some(room) = server_states.get(room_id).await {
+                room
+            } else {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
+            };
+
+            let endpoint_id = path[3].parse::<usize>().unwrap();
+            if let Some(endpoint) = room.remove(endpoint_id).await {
+                info!("endpoint {} left room {}", endpoint.endpoint_id(), room_id);
+            }
+
             let mut response = Response::new(Body::empty());
             *response.status_mut() = StatusCode::OK;
             Ok(response)

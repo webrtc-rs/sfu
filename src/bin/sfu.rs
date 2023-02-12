@@ -5,8 +5,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use sfu::rtc::server::server_states::ServerStates;
-use sfu::{rtc::server::udp_rtc_server::udp_rtc_server, signal};
+use sfu::{
+    rtc::server::{udp_rtc_server::udp_rtc_server, ServerStates},
+    signal,
+};
 
 #[derive(Parser)]
 #[command(name = "SFU Server")]

@@ -1,4 +1,5 @@
 pub mod data;
+pub mod endpoint;
 pub mod media;
+pub mod room;
 pub mod server;
-pub mod session;
