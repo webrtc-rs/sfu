@@ -40,27 +40,27 @@ fn match_srtp(b: &[u8]) -> bool {
     match_range(128, 191, b)
 }
 
-struct UDPDemuxerDecoder {
+struct DemuxerDecoder {
     server_states: Arc<ServerStates>,
 }
-struct UDPDemuxerEncoder;
+struct DemuxerEncoder;
 
-pub struct UDPDemuxerHandler {
-    decoder: UDPDemuxerDecoder,
-    encoder: UDPDemuxerEncoder,
+pub struct DemuxerHandler {
+    decoder: DemuxerDecoder,
+    encoder: DemuxerEncoder,
 }
 
-impl UDPDemuxerHandler {
+impl DemuxerHandler {
     pub fn new(server_states: Arc<ServerStates>) -> Self {
-        UDPDemuxerHandler {
-            decoder: UDPDemuxerDecoder { server_states },
-            encoder: UDPDemuxerEncoder {},
+        DemuxerHandler {
+            decoder: DemuxerDecoder { server_states },
+            encoder: DemuxerEncoder {},
         }
     }
 }
 
 #[async_trait]
-impl InboundHandler for UDPDemuxerDecoder {
+impl InboundHandler for DemuxerDecoder {
     type Rin = TaggedBytesMut;
     type Rout = Self::Rin;
 
@@ -78,7 +78,7 @@ impl InboundHandler for UDPDemuxerDecoder {
 }
 
 #[async_trait]
-impl OutboundHandler for UDPDemuxerEncoder {
+impl OutboundHandler for DemuxerEncoder {
     type Win = TaggedBytesMut;
     type Wout = Self::Win;
 
@@ -87,14 +87,14 @@ impl OutboundHandler for UDPDemuxerEncoder {
     }
 }
 
-impl Handler for UDPDemuxerHandler {
+impl Handler for DemuxerHandler {
     type Rin = TaggedBytesMut;
     type Rout = Self::Rin;
     type Win = TaggedBytesMut;
     type Wout = Self::Win;
 
     fn name(&self) -> &str {
-        "UDPDemuxerHandler"
+        "DemuxerHandler"
     }
 
     fn split(

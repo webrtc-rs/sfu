@@ -3,7 +3,7 @@ use retty::channel::Pipeline;
 use retty::runtime::default_runtime;
 use retty::transport::{AsyncTransportUdp, AsyncTransportWrite, TaggedBytesMut};
 
-use crate::rtc::server::{udp_demuxer_handler::UDPDemuxerHandler, ServerStates};
+use crate::rtc::server::{demuxer_handler::DemuxerHandler, ice_handler::ICEHandler, ServerStates};
 
 use log::{error, info};
 use std::sync::Arc;
@@ -27,12 +27,15 @@ pub async fn udp_rtc_server(
                     Box::pin(async move {
                         let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
-                        let async_transport_handler = AsyncTransportUdp::new(sock);
-                        let udp_demuxer_handler = UDPDemuxerHandler::new(server_states);
-
-                        pipeline.add_back(async_transport_handler).await;
-                        pipeline.add_back(udp_demuxer_handler).await;
+                        pipeline.add_back(AsyncTransportUdp::new(sock)).await;
+                        pipeline
+                            .add_back(DemuxerHandler::new(server_states.clone()))
+                            .await;
+                        pipeline
+                            .add_back(ICEHandler::new(server_states.clone()))
+                            .await;
                         pipeline.finalize().await;
+
                         Arc::new(pipeline)
                     })
                 },
