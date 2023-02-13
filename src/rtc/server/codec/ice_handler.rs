@@ -2,17 +2,15 @@ use async_trait::async_trait;
 use log::{trace, warn};
 use std::error::Error;
 use std::sync::Arc;
-use std::time::Instant;
 
-use crate::rtc::{endpoint::Endpoint, server::ServerStates};
+use crate::rtc::server::ServerStates;
 
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TaggedBytesMut;
 use stun::{
     attributes::ATTR_USERNAME,
-    message::{Message, CLASS_REQUEST, CLASS_SUCCESS_RESPONSE, METHOD_BINDING},
+    message::{Message, METHOD_BINDING},
 };
-use webrtc_ice::util::{assert_inbound_message_integrity, assert_inbound_username};
 
 struct ICEDecoder {
     server_states: Arc<ServerStates>,
@@ -34,22 +32,15 @@ impl ICEHandler {
 }
 
 impl ICEDecoder {
-    fn split_username(
-        stun_message: &Message,
-    ) -> Result<(String, String), Box<dyn Error + Send + Sync>> {
-        match stun_message.get(ATTR_USERNAME) {
+    fn extract_ids(stun_message: &Message) -> Result<(u64, u64), Box<dyn Error + Send + Sync>> {
+        let local_ufrag = match stun_message.get(ATTR_USERNAME) {
             Ok(username) => {
                 let fields: Vec<&[u8]> = username.splitn(2, |c| *c == b':').collect();
-                Ok((
-                    String::from_utf8(fields[0].to_vec()).unwrap(),
-                    String::from_utf8(fields[1].to_vec()).unwrap(),
-                ))
+                String::from_utf8(fields[0].to_vec()).unwrap()
             }
-            Err(err) => Err(Box::new(err)),
-        }
-    }
+            Err(err) => return Err(Box::new(err)),
+        };
 
-    fn extract_ids(local_ufrag: &str) -> Result<(u64, u64), Box<dyn Error + Send + Sync>> {
         if local_ufrag.len() >= 32 {
             let room_id = u64::from_str_radix(&local_ufrag[0..16], 16)?;
             let endpoint_id = u64::from_str_radix(&local_ufrag[16..32], 16)?;
@@ -57,20 +48,6 @@ impl ICEDecoder {
         } else {
             Err(Box::new(stun::Error::ErrDecodeToNil))
         }
-    }
-
-    fn stun_server_handle_message(
-        _endpoint: Arc<Endpoint>,
-        _msg: &TaggedBytesMut,
-        _stun_message: &Message,
-    ) {
-    }
-
-    fn stun_client_handle_response(
-        _endpoint: Arc<Endpoint>,
-        _now: Instant,
-        _stun_message: &Message,
-    ) {
     }
 }
 
@@ -91,23 +68,14 @@ impl InboundHandler for ICEDecoder {
                 return;
             }
 
-            let mut handled = true;
             if stun_message.typ.method == METHOD_BINDING {
-                let (local_ufrag, _remote_ufrag) = match ICEDecoder::split_username(&stun_message) {
-                    Ok(username) => username,
-                    Err(err) => {
-                        ctx.fire_read_exception(err).await;
-                        return;
-                    }
-                };
-                let (room_id, endpoint_id) = match ICEDecoder::extract_ids(&local_ufrag) {
+                let (room_id, endpoint_id) = match ICEDecoder::extract_ids(&stun_message) {
                     Ok(ids) => ids,
                     Err(err) => {
                         ctx.fire_read_exception(err).await;
                         return;
                     }
                 };
-
                 let room = match self.server_states.get(room_id).await {
                     Some(room) => room,
                     None => {
@@ -125,54 +93,15 @@ impl InboundHandler for ICEDecoder {
                     }
                 };
 
-                let ufrag_pwd = endpoint.ufrag_pwd();
-                if stun_message.typ.class == CLASS_REQUEST {
-                    let username = format!("{}:{}", ufrag_pwd.local_ufrag, ufrag_pwd.remote_ufrag);
-
-                    if let Err(err) = assert_inbound_username(&stun_message, &username) {
-                        warn!(
-                            "discard message from ({:?}), {}",
-                            msg.transport.peer_addr, err
-                        );
-                        ctx.fire_read_exception(Box::new(err)).await;
-                        return;
-                    }
-
-                    if let Err(err) = assert_inbound_message_integrity(
-                        &mut stun_message,
-                        ufrag_pwd.local_pwd.as_bytes(),
-                    ) {
-                        warn!(
-                            "discard message from ({:?}), {}",
-                            msg.transport.peer_addr, err
-                        );
-                        ctx.fire_read_exception(Box::new(err)).await;
-                        return;
-                    }
-
-                    ICEDecoder::stun_server_handle_message(endpoint, &msg, &stun_message);
-                } else if stun_message.typ.class == CLASS_SUCCESS_RESPONSE {
-                    if let Err(err) = assert_inbound_message_integrity(
-                        &mut stun_message,
-                        ufrag_pwd.remote_pwd.as_bytes(),
-                    ) {
-                        warn!(
-                            "discard message from ({:?}), {}",
-                            msg.transport.peer_addr, err
-                        );
-                        ctx.fire_read_exception(Box::new(err)).await;
-                        return;
-                    }
-
-                    ICEDecoder::stun_client_handle_response(endpoint, msg.now, &stun_message);
-                    //TODO: } else if stun_message.typ.class == CLASS_INDICATION {
-                } else {
-                    handled = false;
+                let result = {
+                    let mut ice_agent = endpoint.ice_agent.lock().await;
+                    ice_agent.handle_inbound_msg(msg, stun_message).await
+                };
+                if let Err(err) = result {
+                    ctx.fire_read_exception(err).await;
+                    return;
                 }
             } else {
-                handled = false;
-            }
-            if !handled {
                 trace!(
                     "Unhandled STUN from {:?} to {} class({}) method({})",
                     msg.transport.peer_addr,
