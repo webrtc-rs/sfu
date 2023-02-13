@@ -26,6 +26,7 @@ rand = "0.8.5"
 
 # webrtc stack
 stun = "0.4.4"
+webrtc-ice = "0.9.1"
 
 [[bin]]
 name = "sfu"
