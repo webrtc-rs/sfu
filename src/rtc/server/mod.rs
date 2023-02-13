@@ -7,7 +7,7 @@ pub(crate) mod udp_demuxer_handler;
 pub mod udp_rtc_server;
 
 pub struct ServerStates {
-    sessions: Mutex<HashMap<usize, Arc<Room>>>,
+    rooms: Mutex<HashMap<u64, Arc<Room>>>,
 }
 
 impl Default for ServerStates {
@@ -19,17 +19,17 @@ impl Default for ServerStates {
 impl ServerStates {
     pub fn new() -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
+            rooms: Mutex::new(HashMap::new()),
         }
     }
 
-    pub async fn insert(&self, session: Arc<Room>) {
-        let mut sessions = self.sessions.lock().await;
-        sessions.insert(session.room_id(), session);
+    pub async fn insert(&self, room: Arc<Room>) {
+        let mut rooms = self.rooms.lock().await;
+        rooms.insert(room.room_id(), room);
     }
 
-    pub async fn get(&self, session_id: usize) -> Option<Arc<Room>> {
-        let sessions = self.sessions.lock().await;
-        sessions.get(&session_id).cloned()
+    pub async fn get(&self, room_id: u64) -> Option<Arc<Room>> {
+        let rooms = self.rooms.lock().await;
+        rooms.get(&room_id).cloned()
     }
 }

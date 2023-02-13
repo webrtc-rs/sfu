@@ -24,6 +24,9 @@ env_logger = "0.10.0"
 anyhow = "1.0.68"
 rand = "0.8.5"
 
+# webrtc stack
+stun = "0.4.4"
+
 [[bin]]
 name = "sfu"
 path = "src/bin/sfu.rs"

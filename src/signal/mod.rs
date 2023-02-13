@@ -17,18 +17,18 @@ async fn remote_handler(
 ) -> Result<Response<Body>, hyper::Error> {
     let path: Vec<&str> = req.uri().path().split('/').collect();
     if path.len() < 3
-        || path[2].parse::<usize>().is_err()
+        || path[2].parse::<u64>().is_err()
         || ((path[1] == "offer"
             || path[1] == "answer"
             || path[1] == "trickle"
             || path[1] == "leave")
-            && (path.len() < 4 || path[3].parse::<usize>().is_err()))
+            && (path.len() < 4 || path[3].parse::<u64>().is_err()))
     {
         let mut response = Response::new(Body::empty());
         *response.status_mut() = StatusCode::BAD_REQUEST;
         return Ok(response);
     }
-    let room_id = path[2].parse::<usize>().unwrap();
+    let room_id = path[2].parse::<u64>().unwrap();
 
     match (req.method(), path[1]) {
         // A HTTP handler that processes a SessionDescription given to us from the other WebRTC-rs or Pion process
@@ -41,7 +41,7 @@ async fn remote_handler(
                 room
             };
 
-            let endpoint_id = rand::random::<usize>();
+            let endpoint_id = rand::random::<u64>();
             let endpoint = Arc::new(Endpoint::new(room_id, endpoint_id));
             room.insert(endpoint).await;
 
@@ -62,7 +62,7 @@ async fn remote_handler(
                 return Ok(response);
             };
 
-            let endpoint_id = path[3].parse::<usize>().unwrap();
+            let endpoint_id = path[3].parse::<u64>().unwrap();
             let endpoint = if let Some(endpoint) = room.get(endpoint_id).await {
                 endpoint
             } else {
@@ -95,7 +95,7 @@ async fn remote_handler(
                 return Ok(response);
             };
 
-            let endpoint_id = path[3].parse::<usize>().unwrap();
+            let endpoint_id = path[3].parse::<u64>().unwrap();
             let endpoint = if let Some(endpoint) = room.get(endpoint_id).await {
                 endpoint
             } else {
@@ -127,7 +127,7 @@ async fn remote_handler(
                 return Ok(response);
             };
 
-            let endpoint_id = path[3].parse::<usize>().unwrap();
+            let endpoint_id = path[3].parse::<u64>().unwrap();
             let endpoint = if let Some(endpoint) = room.get(endpoint_id).await {
                 endpoint
             } else {
@@ -159,7 +159,7 @@ async fn remote_handler(
                 return Ok(response);
             };
 
-            let endpoint_id = path[3].parse::<usize>().unwrap();
+            let endpoint_id = path[3].parse::<u64>().unwrap();
             if let Some(endpoint) = room.remove(endpoint_id).await {
                 info!("endpoint {} left room {}", endpoint.endpoint_id(), room_id);
             }

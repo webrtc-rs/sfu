@@ -4,19 +4,19 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct Room {
-    room_id: usize,
-    endpoints: Mutex<HashMap<usize, Arc<Endpoint>>>,
+    room_id: u64,
+    endpoints: Mutex<HashMap<u64, Arc<Endpoint>>>,
 }
 
 impl Room {
-    pub fn new(room_id: usize) -> Self {
+    pub fn new(room_id: u64) -> Self {
         Self {
             room_id,
             endpoints: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn room_id(&self) -> usize {
+    pub fn room_id(&self) -> u64 {
         self.room_id
     }
 
@@ -25,12 +25,12 @@ impl Room {
         endpoints.insert(endpoint.endpoint_id(), endpoint);
     }
 
-    pub async fn get(&self, endpoint_id: usize) -> Option<Arc<Endpoint>> {
+    pub async fn get(&self, endpoint_id: u64) -> Option<Arc<Endpoint>> {
         let endpoints = self.endpoints.lock().await;
         endpoints.get(&endpoint_id).cloned()
     }
 
-    pub async fn remove(&self, endpoint_id: usize) -> Option<Arc<Endpoint>> {
+    pub async fn remove(&self, endpoint_id: u64) -> Option<Arc<Endpoint>> {
         let mut endpoints = self.endpoints.lock().await;
         endpoints.remove(&endpoint_id)
     }
