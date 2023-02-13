@@ -12,7 +12,7 @@ keywords = ["networking", "protocols"]
 categories = [ "network-programming", "asynchronous" ]
 
 [dependencies]
-retty = { version = "0.15.3", features = ["runtime-tokio"] }
+retty = { version = "0.16.0", features = ["runtime-tokio"] }
 tokio = { version = "1.24.1", features = ["rt-multi-thread", "macros", "signal"] }
 hyper = { version = "0.14.16", features = ["full"] }
 clap = { version = "4.1.1", features = ["derive"] }

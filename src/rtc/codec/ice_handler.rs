@@ -2,13 +2,16 @@ use async_trait::async_trait;
 use log::{trace, warn};
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Instant;
 
-use crate::rtc::server::ServerStates;
+use crate::rtc::{endpoint::Endpoint, server::ServerStates};
 
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TaggedBytesMut;
-use stun::attributes::ATTR_USERNAME;
-use stun::message::{Message, CLASS_REQUEST, CLASS_SUCCESS_RESPONSE, METHOD_BINDING};
+use stun::{
+    attributes::ATTR_USERNAME,
+    message::{Message, CLASS_REQUEST, CLASS_SUCCESS_RESPONSE, METHOD_BINDING},
+};
 use webrtc_ice::util::{assert_inbound_message_integrity, assert_inbound_username};
 
 struct ICEDecoder {
@@ -54,6 +57,20 @@ impl ICEDecoder {
         } else {
             Err(Box::new(stun::Error::ErrDecodeToNil))
         }
+    }
+
+    fn stun_server_handle_message(
+        _endpoint: Arc<Endpoint>,
+        _msg: &TaggedBytesMut,
+        _stun_message: &Message,
+    ) {
+    }
+
+    fn stun_client_handle_response(
+        _endpoint: Arc<Endpoint>,
+        _now: Instant,
+        _stun_message: &Message,
+    ) {
     }
 }
 
@@ -132,6 +149,8 @@ impl InboundHandler for ICEDecoder {
                         ctx.fire_read_exception(Box::new(err)).await;
                         return;
                     }
+
+                    ICEDecoder::stun_server_handle_message(endpoint, &msg, &stun_message);
                 } else if stun_message.typ.class == CLASS_SUCCESS_RESPONSE {
                     if let Err(err) = assert_inbound_message_integrity(
                         &mut stun_message,
@@ -145,6 +164,7 @@ impl InboundHandler for ICEDecoder {
                         return;
                     }
 
+                    ICEDecoder::stun_client_handle_response(endpoint, msg.now, &stun_message);
                     //TODO: } else if stun_message.typ.class == CLASS_INDICATION {
                 } else {
                     handled = false;

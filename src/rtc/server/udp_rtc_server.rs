@@ -3,7 +3,10 @@ use retty::channel::Pipeline;
 use retty::runtime::default_runtime;
 use retty::transport::{AsyncTransportUdp, AsyncTransportWrite, TaggedBytesMut};
 
-use crate::rtc::server::{demuxer_handler::DemuxerHandler, ice_handler::ICEHandler, ServerStates};
+use crate::rtc::{
+    codec::{demuxer_handler::DemuxerHandler, ice_handler::ICEHandler},
+    server::ServerStates,
+};
 
 use log::{error, info};
 use std::sync::Arc;
