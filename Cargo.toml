@@ -1,12 +1,12 @@
 [package]
 name = "sfu"
 version = "0.0.0"
-authors = ["Rusty Rain <y@liu.mx>"]
+authors = ["Rusty Rain <y@ngr.tc>"]
 edition = "2021"
 description = "A pure Rust implementation of SFU"
 license = "MIT/Apache-2.0"
 documentation = "https://docs.rs/sfu"
-repository = "https://github.com/ngr-tc/sfu"
+repository = "https://github.com/webrtc-rs/sfu"
 homepage = "https://sfu.rs"
 keywords = ["networking", "protocols"]
 categories = [ "network-programming", "asynchronous" ]
