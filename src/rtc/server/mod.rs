@@ -1,13 +1,13 @@
+use std::cell::RefCell;
 use crate::rtc::room::Room;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::rc::Rc;
 
-pub(crate) mod codec;
+pub(crate) mod handlers;
 pub mod udp_rtc_server;
 
 pub struct ServerStates {
-    rooms: Mutex<HashMap<u64, Arc<Room>>>,
+    rooms: RefCell<HashMap<u64, Rc<Room>>>,
 }
 
 impl Default for ServerStates {
@@ -19,16 +19,16 @@ impl Default for ServerStates {
 impl ServerStates {
     pub fn new() -> Self {
         Self {
-            rooms: Mutex::new(HashMap::new()),
+            rooms: RefCell::new(HashMap::new()),
         }
     }
 
-    pub async fn insert(&self, room: Arc<Room>) {
+    pub async fn insert(&self, room: Rc<Room>) {
         let mut rooms = self.rooms.lock().await;
         rooms.insert(room.room_id(), room);
     }
 
-    pub async fn get(&self, room_id: u64) -> Option<Arc<Room>> {
+    pub async fn get(&self, room_id: u64) -> Option<Rc<Room>> {
         let rooms = self.rooms.lock().await;
         rooms.get(&room_id).cloned()
     }

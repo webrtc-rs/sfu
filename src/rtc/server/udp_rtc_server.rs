@@ -4,7 +4,7 @@ use retty::runtime::default_runtime;
 use retty::transport::{AsyncTransportUdp, AsyncTransportWrite, TaggedBytesMut};
 
 use crate::rtc::server::{
-    codec::{demuxer_handler::DemuxerHandler, ice_handler::ICEHandler},
+    handlers::{demuxer_handler::DemuxerHandler, ice_handler::ICEHandler},
     ServerStates,
 };
 
