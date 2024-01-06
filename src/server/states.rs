@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct ServerStates {
     config: Arc<ServerConfig>,
     rooms: RefCell<HashMap<RoomId, Rc<Room>>>,
@@ -17,7 +17,8 @@ impl ServerStates {
     pub fn new(config: Arc<ServerConfig>) -> Self {
         Self {
             config,
-            ..Default::default()
+            rooms: RefCell::new(HashMap::new()),
+            endpoints: RefCell::new(HashMap::new()),
         }
     }
 }

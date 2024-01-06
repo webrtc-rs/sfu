@@ -26,6 +26,7 @@ smol = "2.0.0"
 ring = "0.17.7"
 sha2 = "0.10.8"
 rustls = "0.21.7"
+waitgroup = "0.1.2"
 
 # RTC protocol
 shared = { path = "rtc/shared"}

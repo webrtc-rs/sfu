@@ -1,6 +1,6 @@
 use crate::server::certificate::RTCCertificate;
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct ServerConfig {
-    pub certificate: Option<RTCCertificate>,
+    pub certificate: RTCCertificate,
 }

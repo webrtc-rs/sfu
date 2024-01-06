@@ -1,7 +1,22 @@
-//use async_broadcast::broadcast;
+use crate::signal::{SignalingMessage, SignalingServer};
+use async_broadcast::broadcast;
 use clap::Parser;
-use log::info;
+use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
+use log::{error, info};
+use retty::bootstrap::BootstrapUdpServer;
+use retty::channel::Pipeline;
+use retty::executor::LocalExecutorBuilder;
+use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
+use sfu::server::certificate::RTCCertificate;
+use sfu::server::config::ServerConfig;
+use sfu::server::states::ServerStates;
+use std::collections::HashMap;
 use std::io::Write;
+use std::net::SocketAddr;
+use std::rc::Rc;
+use std::str::FromStr;
+use std::sync::Arc;
+use waitgroup::WaitGroup;
 
 mod signal;
 
@@ -70,48 +85,126 @@ fn main() -> anyhow::Result<()> {
             .init();
     }
 
-    info!(
+    println!(
         "listening {}@{}(signal)/[{}-{}](media)...",
         cli.host, cli.signal_port, cli.media_port_min, cli.media_port_max
     );
 
-    let _media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
-    //let (_stop_tx, mut _stop_rx) = broadcast::<()>(1);
-    //let mut port2thread_map = HashMap::new();
+    let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
+    let (stop_tx, mut stop_rx) = broadcast::<()>(1);
+    let mut media_port_thread_map = HashMap::new();
 
-    //let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
-    // let certificate = RTCCertificate::from_key_pair(key_pair)?;
+    let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
+    let server_config = Arc::new(ServerConfig {
+        certificate: RTCCertificate::from_key_pair(key_pair)?,
+    });
+    let core_num = num_cpus::get();
+    let wait_group = WaitGroup::new();
 
-    /*let (cancel_tx, signal_cancel_rx) = broadcast::channel(1);
-    let rtc_cancel_rx = cancel_tx.subscribe();
+    for port in media_ports {
+        let worker = wait_group.worker();
+        let host = cli.host.clone();
+        let mut stop_rx = stop_rx.clone();
+        let (signal_tx, signal_rx) = smol::channel::unbounded::<SignalingMessage>();
+        media_port_thread_map.insert(port, signal_tx);
 
-    let server_states = Arc::new(ServerStates::new());
+        let server_config = server_config.clone();
+        LocalExecutorBuilder::new()
+            .name(format!("media_port_{}", port).as_str())
+            .core_id(core_affinity::CoreId {
+                id: (port as usize) % core_num,
+            })
+            .spawn(move || async move {
+                let _worker = worker;
+                let _dtls_handshake_config = dtls::config::ConfigBuilder::default()
+                    .with_certificates(vec![server_config.certificate.dtls_certificate.clone()])
+                    .with_srtp_protection_profiles(vec![
+                        SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80,
+                    ])
+                    .with_extended_master_secret(dtls::config::ExtendedMasterSecretType::Require)
+                    .build(false, None)
+                    .unwrap();
+                let _server_states = Rc::new(ServerStates::new(server_config));
 
-    let mut signal_done_rx = signal::http_sdp_server(
-        cli.host.clone(),
-        cli.signal_port,
-        server_states.clone(),
-        signal_cancel_rx,
-    )
-    .await;
+                info!("listening {}:{}...", host, port);
+                let mut bootstrap = BootstrapUdpServer::new();
+                bootstrap.pipeline(Box::new(
+                    move |writer: AsyncTransportWrite<TaggedBytesMut>| {
+                        let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
-    /*let mut rtc_done_rx = udp_rtc_server(
-        cli.host,
-        cli.media_port,
-        server_states.clone(),
-        rtc_cancel_rx,
-    )
-    .await;*/
+                        let _local_addr = writer.local_addr();
+                        let async_transport_handler = AsyncTransport::new(writer);
 
-    info!("Press ctrl-c to stop");
+                        pipeline.add_back(async_transport_handler)?;
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            let _ = cancel_tx.send(());
-            let _ = rtc_done_rx.recv().await;
-            let _ = signal_done_rx.recv().await;
-        }
-    };*/
+                        pipeline.finalize()
+                    },
+                ));
+
+                if let Err(err) = bootstrap.bind(format!("{}:{}", host, port)).await {
+                    error!("bootstrap binding error: {}", err);
+                    return;
+                }
+
+                loop {
+                    tokio::select! {
+                        _ = stop_rx.recv() => {
+                            info!("media server on {}:{} receives stop signal", host, port);
+                            break;
+                        }
+                        recv = signal_rx.recv() => {
+                            match recv {
+                                Ok(_msg) => {
+                                    //TODO: receive signal msg
+                                }
+                                Err(err) => {
+                                    error!("signal_rx recv error: {}", err);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                bootstrap.graceful_stop().await;
+                info!("media server on {}:{} is gracefully down", host, port);
+            })?;
+    }
+
+    let signaling_addr = SocketAddr::from_str(&format!("{}:{}", cli.host, cli.signal_port))?;
+    let signaling_stop_rx = stop_rx.clone();
+    let signaling_handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let signaling_server = SignalingServer::new(signaling_addr, media_port_thread_map);
+            let mut done_rx = signaling_server.run(signaling_stop_rx).await;
+            let _ = done_rx.recv().await;
+            wait_group.wait().await;
+            info!("signaling server is gracefully down");
+        })
+    });
+
+    LocalExecutorBuilder::default().run(async move {
+        println!("Press Ctrl-C to stop");
+        std::thread::spawn(move || {
+            let mut stop_tx = Some(stop_tx);
+            ctrlc::set_handler(move || {
+                if let Some(stop_tx) = stop_tx.take() {
+                    let _ = stop_tx.try_broadcast(());
+                }
+            })
+            .expect("Error setting Ctrl-C handler");
+        });
+        let _ = stop_rx.recv().await;
+        println!("Wait for Signaling Sever and Media Server Gracefully Shutdown...");
+    });
+
+    let _ = signaling_handle.join();
 
     Ok(())
 }

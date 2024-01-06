@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
+use async_broadcast::{broadcast, Receiver};
 use bytes::Bytes;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
@@ -8,7 +9,6 @@ use log::{debug, error, info};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::broadcast;
 
 pub enum SignalingProtocolMessage {
     Ok {
@@ -66,8 +66,8 @@ impl SignalingServer {
     }
 
     /// http_sdp_server starts a HTTP Server that consumes SDPs
-    pub async fn run(&self, mut cancel_rx: broadcast::Receiver<()>) -> broadcast::Receiver<()> {
-        let (done_tx, done_rx) = broadcast::channel(1);
+    pub async fn run(&self, mut stop_rx: Receiver<()>) -> Receiver<()> {
+        let (done_tx, done_rx) = broadcast(1);
         let signal_addr = self.signal_addr;
         let media_port_thread_map = self.media_port_thread_map.clone();
         tokio::spawn(async move {
@@ -84,10 +84,11 @@ impl SignalingServer {
                 }
             });
             let server = Server::bind(&signal_addr).serve(service);
+            info!("signaling server is running...");
             let graceful = server.with_graceful_shutdown(async {
-                let _ = cancel_rx.recv().await;
-                info!("signaling server receives cancel signal");
-                let _ = done_tx.send(());
+                let _ = stop_rx.recv().await;
+                info!("signaling server receives stop signal");
+                let _ = done_tx.try_broadcast(());
             });
 
             // Run this server for forever until ctrl+c!

@@ -28,9 +28,9 @@ pub struct RTCDtlsFingerprint {
 #[derive(Clone, Debug)]
 pub struct RTCCertificate {
     /// DTLS certificate.
-    pub(crate) dtls_certificate: dtls::crypto::Certificate,
+    pub dtls_certificate: dtls::crypto::Certificate,
     /// Timestamp after which this certificate is no longer valid.
-    pub(crate) expires: SystemTime,
+    pub expires: SystemTime,
 }
 
 impl PartialEq for RTCCertificate {
