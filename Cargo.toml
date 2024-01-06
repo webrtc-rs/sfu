@@ -24,6 +24,16 @@ core_affinity = "0.8.1"
 num_cpus = "1.16.0"
 smol = "2.0.0"
 
+# RTC protocol
+shared = { path = "rtc/shared"}
+stun = { path = "rtc/stun"}
+rtp = { path = "rtc/rtp"}
+rtcp = { path = "rtc/rtcp"}
+srtp= { path = "rtc/srtp"}
+dtls = { path = "rtc/dtls"}
+sctp = { path = "rtc/sctp"}
+data = { path = "rtc/data"}
+
 [dev-dependencies]
 futures = "0.3.30"
 tokio = { version = "1.24.1", features = ["rt-multi-thread", "macros", "signal"] }

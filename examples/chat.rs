@@ -1,7 +1,6 @@
-use async_broadcast::broadcast;
+//use async_broadcast::broadcast;
 use clap::Parser;
 use log::info;
-use std::collections::HashMap;
 use std::io::Write;
 
 mod signal;
@@ -76,11 +75,11 @@ fn main() -> anyhow::Result<()> {
         cli.host, cli.signal_port, cli.media_port_min, cli.media_port_max
     );
 
-    let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
-    let (stop_tx, mut stop_rx) = broadcast::<()>(1);
+    let _media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
+    //let (_stop_tx, mut _stop_rx) = broadcast::<()>(1);
     //let mut port2thread_map = HashMap::new();
 
-    let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
+    //let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
     // let certificate = RTCCertificate::from_key_pair(key_pair)?;
     // fingerprints = certificate.get_fingerprints();
 

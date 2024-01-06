@@ -25,3 +25,51 @@
 <p align="center">
  A pure Rust implementation of SFU
 </p>
+
+#
+
+<details>
+<summary><b>Table of Content</b></summary>
+
+- [Building](#building)
+    - [Toolchain](#toolchain)
+    - [Monorepo Setup](#monorepo-setup)
+- [Open Source License](#open-source-license)
+- [Contributing](#contributing)
+</details>
+
+#
+
+## Building
+
+### Toolchain
+
+webrtc-rs currently requires Rust 1.75.0 to build.
+
+### Monorepo Setup
+
+All webrtc dependent crates are added as [submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) of this repository under /crates/.
+
+```
+git clone https://github.com/webrtc-rs/sfu
+cd sfu
+git submodule update --init --recursive
+```
+
+To build sfu crate:
+
+```
+cargo build [or clippy or test or fmt]
+```
+
+To build sfu-based chat example:
+
+```
+cargo run --package sfu --example chat
+```
+
+## Open Source License
+Dual licensing under both MIT and Apache-2.0 is the currently accepted standard by the Rust language community and has been used for both the compiler and many public libraries since (see https://doc.rust-lang.org/1.6.0/complement-project-faq.html#why-dual-mitasl2-license). In order to match the community standards, webrtc-rs is using the dual MIT+Apache-2.0 license.
+
+## Contributing
+Contributors or Pull Requests are Welcome!!!
