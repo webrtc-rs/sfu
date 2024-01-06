@@ -23,7 +23,7 @@
  </a>
 </p>
 <p align="center">
- A pure Rust implementation of SFU
+ SFU in Rust with Sans-IO
 </p>
 
 #
@@ -44,11 +44,11 @@
 
 ### Toolchain
 
-webrtc-rs currently requires Rust 1.75.0 to build.
+SFU.rs currently requires Rust 1.75.0+ to build.
 
 ### Monorepo Setup
 
-All webrtc dependent crates are added as [submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) of this repository under /crates/.
+All [RTC](https://github.com/webrtc-rs/rtc/) protocols are added as [submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) of this repository under /rtc/.
 
 ```
 git clone https://github.com/webrtc-rs/sfu
@@ -69,7 +69,7 @@ cargo run --package sfu --example chat
 ```
 
 ## Open Source License
-Dual licensing under both MIT and Apache-2.0 is the currently accepted standard by the Rust language community and has been used for both the compiler and many public libraries since (see https://doc.rust-lang.org/1.6.0/complement-project-faq.html#why-dual-mitasl2-license). In order to match the community standards, webrtc-rs is using the dual MIT+Apache-2.0 license.
+Dual licensing under both MIT and Apache-2.0 is the currently accepted standard by the Rust language community and has been used for both the compiler and many public libraries since (see https://doc.rust-lang.org/1.6.0/complement-project-faq.html#why-dual-mitasl2-license). In order to match the community standards, SFU.rs is using the dual MIT+Apache-2.0 license.
 
 ## Contributing
 Contributors or Pull Requests are Welcome!!!
