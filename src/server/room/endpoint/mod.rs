@@ -1,6 +1,6 @@
 use crate::shared::types::{EndpointId, RoomId};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Endpoint {
     room_id: RoomId,
     endpoint_id: EndpointId,

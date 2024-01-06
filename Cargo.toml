@@ -17,12 +17,15 @@ bytes = "1.5.0"
 log = "0.4.20"
 rand = "0.8.5"
 async-broadcast = "0.6.0"
-rcgen = { version = "0.12.0", features = ["pem", "x509-parser"] }
+rcgen = { version = "0.11", features = ["pem", "x509-parser"] }
 ctrlc = "3.4.2"
 thiserror = "1.0.53"
 core_affinity = "0.8.1"
 num_cpus = "1.16.0"
 smol = "2.0.0"
+ring = "0.17.7"
+sha2 = "0.10.8"
+rustls = "0.21.7"
 
 # RTC protocol
 shared = { path = "rtc/shared"}

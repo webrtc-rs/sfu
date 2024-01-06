@@ -2,7 +2,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+pub mod certificate;
+pub mod config;
 pub mod room;
+pub mod states;
 
 use crate::shared::types::RoomId;
 use room::Room;

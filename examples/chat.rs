@@ -81,7 +81,6 @@ fn main() -> anyhow::Result<()> {
 
     //let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
     // let certificate = RTCCertificate::from_key_pair(key_pair)?;
-    // fingerprints = certificate.get_fingerprints();
 
     /*let (cancel_tx, signal_cancel_rx) = broadcast::channel(1);
     let rtc_cancel_rx = cancel_tx.subscribe();

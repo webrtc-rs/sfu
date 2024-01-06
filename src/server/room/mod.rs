@@ -7,6 +7,7 @@ pub mod endpoint;
 use crate::shared::types::{EndpointId, RoomId};
 use endpoint::Endpoint;
 
+#[derive(Default, Debug)]
 pub struct Room {
     room_id: RoomId,
     endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
