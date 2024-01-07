@@ -1,5 +1,5 @@
 use crate::server::certificate::RTCDtlsFingerprint;
-use crate::shared::types::{EndpointId, SessionId};
+use crate::shared::types::{EndpointId, SessionId, UserName};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use ring::rand::{SecureRandom, SystemRandom};
 use sdp::util::ConnectionRole;
@@ -121,7 +121,7 @@ impl Candidate {
         self.endpoint_id
     }
 
-    pub(crate) fn username(&self) -> String {
+    pub(crate) fn username(&self) -> UserName {
         format!(
             "{}:{}",
             self.local_conn_cred.ice_ufrag, self.peer_conn_cred.ice_ufrag

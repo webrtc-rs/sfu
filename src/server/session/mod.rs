@@ -7,7 +7,7 @@ pub mod endpoint;
 
 use crate::server::certificate::RTCDtlsFingerprint;
 use crate::server::session::endpoint::candidate::{Candidate, ConnectionCredentials};
-use crate::shared::types::{EndpointId, SessionId};
+use crate::shared::types::{EndpointId, SessionId, UserName};
 use endpoint::Endpoint;
 
 #[derive(Default, Debug)]
@@ -15,7 +15,7 @@ pub struct Session {
     session_id: SessionId,
     fingerprint: RTCDtlsFingerprint,
     endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
-    candidates: RefCell<HashMap<String, Rc<Candidate>>>,
+    candidates: RefCell<HashMap<UserName, Rc<Candidate>>>,
 }
 
 impl Session {
@@ -69,7 +69,7 @@ impl Session {
         candidates.remove(&username).is_some()
     }
 
-    pub(crate) fn find_candidate(&self, username: &str) -> Option<Rc<Candidate>> {
+    pub(crate) fn find_candidate(&self, username: &UserName) -> Option<Rc<Candidate>> {
         let candidates = self.candidates.borrow();
         candidates.get(username).cloned()
     }
