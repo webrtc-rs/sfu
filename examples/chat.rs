@@ -1,4 +1,4 @@
-use crate::signal::{SignalingMessage, SignalingServer};
+use crate::signal::{handle_signaling_message, SignalingMessage, SignalingServer};
 use async_broadcast::broadcast;
 use clap::Parser;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
@@ -86,7 +86,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     println!(
-        "listening {}@{}(signal)/[{}-{}](media)...",
+        "listening {}:{}(signal)/[{}-{}](media)...",
         cli.host, cli.signal_port, cli.media_port_min, cli.media_port_max
     );
 
@@ -105,8 +105,8 @@ fn main() -> anyhow::Result<()> {
         let worker = wait_group.worker();
         let host = cli.host.clone();
         let mut stop_rx = stop_rx.clone();
-        let (signal_tx, signal_rx) = smol::channel::unbounded::<SignalingMessage>();
-        media_port_thread_map.insert(port, signal_tx);
+        let (signaling_tx, signaling_rx) = smol::channel::unbounded::<SignalingMessage>();
+        media_port_thread_map.insert(port, signaling_tx);
 
         let server_config = server_config.clone();
         LocalExecutorBuilder::new()
@@ -124,7 +124,7 @@ fn main() -> anyhow::Result<()> {
                     .with_extended_master_secret(dtls::config::ExtendedMasterSecretType::Require)
                     .build(false, None)
                     .unwrap();
-                let _server_states = Rc::new(ServerStates::new(server_config));
+                let server_states = Rc::new(ServerStates::new(server_config));
 
                 info!("listening {}:{}...", host, port);
                 let mut bootstrap = BootstrapUdpServer::new();
@@ -152,10 +152,12 @@ fn main() -> anyhow::Result<()> {
                             info!("media server on {}:{} receives stop signal", host, port);
                             break;
                         }
-                        recv = signal_rx.recv() => {
+                        recv = signaling_rx.recv() => {
                             match recv {
-                                Ok(_msg) => {
-                                    //TODO: receive signal msg
+                                Ok(signaling_msg) => {
+                                    if let Err(err) = handle_signaling_message(&server_states, signaling_msg) {
+                                        error!("handle_signaling_message error: {}", err);
+                                    }
                                 }
                                 Err(err) => {
                                     error!("signal_rx recv error: {}", err);

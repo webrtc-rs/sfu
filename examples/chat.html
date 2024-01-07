@@ -191,6 +191,16 @@ Status: <span id="ice_status">Waiting</span>
         byId('join').disabled = false;
         byId('leave').disabled = true;
         rtc.close();
+
+        let path = '/leave/'+byId("room").value+'/'+endpointId;
+        const res = await fetch(path, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        rtc = new RTCPeerConnection();
     }
 </script>
 </body>
