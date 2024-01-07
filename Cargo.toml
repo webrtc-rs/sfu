@@ -34,6 +34,7 @@ srtp= { path = "rtc/srtp"}
 dtls = { path = "rtc/dtls"}
 sctp = { path = "rtc/sctp"}
 data = { path = "rtc/data"}
+hex = { version = "0.4.3", features = [] }
 
 [dev-dependencies]
 futures = "0.3.30"

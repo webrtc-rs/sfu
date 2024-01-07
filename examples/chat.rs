@@ -124,7 +124,8 @@ fn main() -> anyhow::Result<()> {
                     .with_extended_master_secret(dtls::config::ExtendedMasterSecretType::Require)
                     .build(false, None)
                     .unwrap();
-                let server_states = Rc::new(ServerStates::new(server_config).unwrap());
+                let server_states = Rc::new(ServerStates::new(server_config,
+                                                              SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap()).unwrap());
 
                 info!("listening {}:{}...", host, port);
                 let mut bootstrap = BootstrapUdpServer::new();
@@ -132,7 +133,6 @@ fn main() -> anyhow::Result<()> {
                     move |writer: AsyncTransportWrite<TaggedBytesMut>| {
                         let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
-                        let _local_addr = writer.local_addr();
                         let async_transport_handler = AsyncTransport::new(writer);
 
                         pipeline.add_back(async_transport_handler)?;

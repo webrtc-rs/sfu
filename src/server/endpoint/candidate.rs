@@ -94,14 +94,14 @@ impl Candidate {
         endpoint_id: EndpointId,
         fingerprint: &RTCDtlsFingerprint,
         remote_conn_cred: ConnectionCredentials,
-        offer: RTCSessionDescription,
+        remote_description: RTCSessionDescription,
     ) -> Self {
         Self {
             session_id,
             endpoint_id,
             local_conn_cred: ConnectionCredentials::new(fingerprint, remote_conn_cred.role),
             remote_conn_cred,
-            remote_description: offer,
+            remote_description,
             local_description: None,
         }
     }

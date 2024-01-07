@@ -1,8 +1,18 @@
-use sdp::SessionDescription;
+mod fmtp;
+mod rtp_codec;
+mod rtp_transceiver;
+mod rtp_transceiver_direction;
+mod sdp_type;
+
+use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
+use crate::server::session::description::sdp_type::RTCSdpType;
+use sdp::{MediaDescription, SessionDescription};
 use serde::{Deserialize, Serialize};
 use shared::error::{Error, Result};
-use std::fmt;
+use std::collections::HashMap;
 use std::io::Cursor;
+
+const UNSPECIFIED_STR: &str = "Unspecified";
 
 /// SessionDescription is used to expose local and remote session descriptions.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -73,67 +83,27 @@ impl RTCSessionDescription {
     }
 }
 
-/// SDPType describes the type of an SessionDescription.
-#[derive(Default, Debug, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
-pub enum RTCSdpType {
-    #[default]
-    Unspecified = 0,
+pub(crate) const MEDIA_SECTION_APPLICATION: &str = "application";
 
-    /// indicates that a description MUST be treated as an SDP offer.
-    #[serde(rename = "offer")]
-    Offer,
-
-    /// indicates that a description MUST be treated as an
-    /// SDP answer, but not a final answer. A description used as an SDP
-    /// pranswer may be applied as a response to an SDP offer, or an update to
-    /// a previously sent SDP pranswer.
-    #[serde(rename = "pranswer")]
-    Pranswer,
-
-    /// indicates that a description MUST be treated as an SDP
-    /// final answer, and the offer-answer exchange MUST be considered complete.
-    /// A description used as an SDP answer may be applied as a response to an
-    /// SDP offer or as an update to a previously sent SDP pranswer.    
-    #[serde(rename = "answer")]
-    Answer,
-
-    /// indicates that a description MUST be treated as
-    /// canceling the current SDP negotiation and moving the SDP offer and
-    /// answer back to what it was in the previous stable state. Note the
-    /// local or remote SDP descriptions in the previous stable state could be
-    /// null if there has not yet been a successful offer-answer negotiation.
-    #[serde(rename = "rollback")]
-    Rollback,
-}
-
-const SDP_TYPE_OFFER_STR: &str = "offer";
-const SDP_TYPE_PRANSWER_STR: &str = "pranswer";
-const SDP_TYPE_ANSWER_STR: &str = "answer";
-const SDP_TYPE_ROLLBACK_STR: &str = "rollback";
-
-/// creates an SDPType from a string
-impl From<&str> for RTCSdpType {
-    fn from(raw: &str) -> Self {
-        match raw {
-            SDP_TYPE_OFFER_STR => RTCSdpType::Offer,
-            SDP_TYPE_PRANSWER_STR => RTCSdpType::Pranswer,
-            SDP_TYPE_ANSWER_STR => RTCSdpType::Answer,
-            SDP_TYPE_ROLLBACK_STR => RTCSdpType::Rollback,
-            _ => RTCSdpType::Unspecified,
+pub(crate) fn get_mid_value(media: &MediaDescription) -> Option<&String> {
+    for attr in &media.attributes {
+        if attr.key == "mid" {
+            return attr.value.as_ref();
         }
     }
+    None
 }
 
-impl fmt::Display for RTCSdpType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            RTCSdpType::Offer => write!(f, "{SDP_TYPE_OFFER_STR}"),
-            RTCSdpType::Pranswer => write!(f, "{SDP_TYPE_PRANSWER_STR}"),
-            RTCSdpType::Answer => write!(f, "{SDP_TYPE_ANSWER_STR}"),
-            RTCSdpType::Rollback => write!(f, "{SDP_TYPE_ROLLBACK_STR}"),
-            _ => write!(f, "Unspecified"),
-        }
-    }
+/// RTPTransceiver represents a combination of an RTPSender and an RTPReceiver that share a common mid.
+pub(crate) struct RTCRtpTransceiver {}
+
+#[derive(Default)]
+pub(crate) struct MediaSection {
+    pub(crate) id: String,
+    pub(crate) transceivers: Vec<RTCRtpTransceiver>,
+    pub(crate) data: bool,
+    pub(crate) rid_map: HashMap<String, String>,
+    pub(crate) offered_direction: Option<RTCRtpTransceiverDirection>,
 }
 
 #[cfg(test)]
@@ -226,6 +196,104 @@ mod test {
             if let Ok(sd) = result {
                 assert!(sd.sdp == desc.sdp && sd.sdp_type == desc.sdp_type);
             }
+        }
+    }
+
+    #[test]
+    fn test_new_rtp_transceiver_direction() {
+        let tests = vec![
+            ("Unspecified", RTCRtpTransceiverDirection::Unspecified),
+            ("sendrecv", RTCRtpTransceiverDirection::Sendrecv),
+            ("sendonly", RTCRtpTransceiverDirection::Sendonly),
+            ("recvonly", RTCRtpTransceiverDirection::Recvonly),
+            ("inactive", RTCRtpTransceiverDirection::Inactive),
+        ];
+
+        for (ct_str, expected_type) in tests {
+            assert_eq!(RTCRtpTransceiverDirection::from(ct_str), expected_type);
+        }
+    }
+
+    #[test]
+    fn test_rtp_transceiver_direction_string() {
+        let tests = vec![
+            (RTCRtpTransceiverDirection::Unspecified, "Unspecified"),
+            (RTCRtpTransceiverDirection::Sendrecv, "sendrecv"),
+            (RTCRtpTransceiverDirection::Sendonly, "sendonly"),
+            (RTCRtpTransceiverDirection::Recvonly, "recvonly"),
+            (RTCRtpTransceiverDirection::Inactive, "inactive"),
+        ];
+
+        for (d, expected_string) in tests {
+            assert_eq!(d.to_string(), expected_string);
+        }
+    }
+
+    #[test]
+    fn test_rtp_transceiver_has_send() {
+        let tests = vec![
+            (RTCRtpTransceiverDirection::Unspecified, false),
+            (RTCRtpTransceiverDirection::Sendrecv, true),
+            (RTCRtpTransceiverDirection::Sendonly, true),
+            (RTCRtpTransceiverDirection::Recvonly, false),
+            (RTCRtpTransceiverDirection::Inactive, false),
+        ];
+
+        for (d, expected_value) in tests {
+            assert_eq!(d.has_send(), expected_value);
+        }
+    }
+
+    #[test]
+    fn test_rtp_transceiver_has_recv() {
+        let tests = vec![
+            (RTCRtpTransceiverDirection::Unspecified, false),
+            (RTCRtpTransceiverDirection::Sendrecv, true),
+            (RTCRtpTransceiverDirection::Sendonly, false),
+            (RTCRtpTransceiverDirection::Recvonly, true),
+            (RTCRtpTransceiverDirection::Inactive, false),
+        ];
+
+        for (d, expected_value) in tests {
+            assert_eq!(d.has_recv(), expected_value);
+        }
+    }
+
+    #[test]
+    fn test_rtp_transceiver_from_send_recv() {
+        let tests = vec![
+            (RTCRtpTransceiverDirection::Sendrecv, (true, true)),
+            (RTCRtpTransceiverDirection::Sendonly, (true, false)),
+            (RTCRtpTransceiverDirection::Recvonly, (false, true)),
+            (RTCRtpTransceiverDirection::Inactive, (false, false)),
+        ];
+
+        for (expected_value, (send, recv)) in tests {
+            assert_eq!(
+                RTCRtpTransceiverDirection::from_send_recv(send, recv),
+                expected_value
+            );
+        }
+    }
+
+    #[test]
+    fn test_rtp_transceiver_intersect() {
+        use RTCRtpTransceiverDirection::*;
+
+        let tests = vec![
+            ((Sendrecv, Recvonly), Recvonly),
+            ((Sendrecv, Sendonly), Sendonly),
+            ((Sendrecv, Inactive), Inactive),
+            ((Sendonly, Inactive), Inactive),
+            ((Recvonly, Inactive), Inactive),
+            ((Recvonly, Sendrecv), Recvonly),
+            ((Sendonly, Sendrecv), Sendonly),
+            ((Sendonly, Recvonly), Inactive),
+            ((Recvonly, Recvonly), Recvonly),
+        ];
+
+        for ((a, b), expected_direction) in tests {
+            assert_eq!(a.intersect(b), expected_direction);
         }
     }
 }
