@@ -16,7 +16,7 @@ pub struct ConnectionCredentials {
 }
 
 impl ConnectionCredentials {
-    pub(crate) fn new(fingerprint: &RTCDtlsFingerprint, peer_role: ConnectionRole) -> Self {
+    pub(crate) fn new(fingerprint: &RTCDtlsFingerprint, remote_role: ConnectionRole) -> Self {
         let rng = SystemRandom::new();
 
         let mut user = [0u8; 9];
@@ -28,7 +28,7 @@ impl ConnectionCredentials {
             ice_ufrag: BASE64_STANDARD.encode(&user[..]),
             ice_pwd: BASE64_STANDARD.encode(&password[..]),
             fingerprint: fingerprint.clone(),
-            role: if peer_role == ConnectionRole::Active {
+            role: if remote_role == ConnectionRole::Active {
                 ConnectionRole::Passive
             } else {
                 ConnectionRole::Active
@@ -82,10 +82,10 @@ impl ConnectionCredentials {
 pub struct Candidate {
     session_id: SessionId,
     endpoint_id: EndpointId,
+    remote_conn_cred: ConnectionCredentials,
     local_conn_cred: ConnectionCredentials,
-    peer_conn_cred: ConnectionCredentials,
-    offer: RTCSessionDescription,
-    answer: Option<RTCSessionDescription>,
+    remote_description: RTCSessionDescription,
+    local_description: Option<RTCSessionDescription>,
 }
 
 impl Candidate {
@@ -93,21 +93,21 @@ impl Candidate {
         session_id: SessionId,
         endpoint_id: EndpointId,
         fingerprint: &RTCDtlsFingerprint,
-        peer_conn_cred: ConnectionCredentials,
+        remote_conn_cred: ConnectionCredentials,
         offer: RTCSessionDescription,
     ) -> Self {
         Self {
             session_id,
             endpoint_id,
-            local_conn_cred: ConnectionCredentials::new(fingerprint, peer_conn_cred.role),
-            peer_conn_cred,
-            offer,
-            answer: None,
+            local_conn_cred: ConnectionCredentials::new(fingerprint, remote_conn_cred.role),
+            remote_conn_cred,
+            remote_description: offer,
+            local_description: None,
         }
     }
 
-    pub(crate) fn peer_connection_credentials(&self) -> &ConnectionCredentials {
-        &self.peer_conn_cred
+    pub(crate) fn remote_connection_credentials(&self) -> &ConnectionCredentials {
+        &self.remote_conn_cred
     }
 
     pub(crate) fn local_connection_credentials(&self) -> &ConnectionCredentials {
@@ -125,19 +125,23 @@ impl Candidate {
     pub(crate) fn username(&self) -> UserName {
         format!(
             "{}:{}",
-            self.local_conn_cred.ice_ufrag, self.peer_conn_cred.ice_ufrag
+            self.local_conn_cred.ice_ufrag, self.remote_conn_cred.ice_ufrag
         )
     }
 
-    pub(crate) fn offer(&self) -> &RTCSessionDescription {
-        &self.offer
+    pub(crate) fn set_remote_description(&mut self, remote_description: &RTCSessionDescription) {
+        self.remote_description = remote_description.clone();
     }
 
-    pub(crate) fn set_answer(&mut self, answer: &RTCSessionDescription) {
-        self.answer = Some(answer.clone());
+    pub(crate) fn remote_description(&self) -> &RTCSessionDescription {
+        &self.remote_description
     }
 
-    pub(crate) fn answer(&mut self) -> Option<&RTCSessionDescription> {
-        self.answer.as_ref()
+    pub(crate) fn set_local_description(&mut self, local_description: &RTCSessionDescription) {
+        self.local_description = Some(local_description.clone());
+    }
+
+    pub(crate) fn local_description(&mut self) -> Option<&RTCSessionDescription> {
+        self.local_description.as_ref()
     }
 }

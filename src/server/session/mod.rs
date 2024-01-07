@@ -42,7 +42,7 @@ impl Session {
     ) -> Result<RTCSessionDescription> {
         offer.unmarshal()?;
         let parsed = offer.unmarshal()?;
-        let peer_conn_cred = ConnectionCredentials::from_sdp(&parsed)?;
+        let remote_conn_cred = ConnectionCredentials::from_sdp(&parsed)?;
         offer.parsed = Some(parsed);
 
         let answer_sdp = offer.sdp.clone();
@@ -51,13 +51,13 @@ impl Session {
             self.session_id,
             endpoint_id,
             &self.fingerprint,
-            peer_conn_cred,
+            remote_conn_cred,
             offer,
         );
 
         //TODO: generate Answer SDP
         let answer = RTCSessionDescription::answer(answer_sdp)?;
-        candidate.set_answer(&answer);
+        candidate.set_local_description(&answer);
 
         self.add_candidate(Rc::new(candidate));
 
