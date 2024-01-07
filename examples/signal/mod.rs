@@ -8,7 +8,6 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::{debug, error, info};
 use sdp::SessionDescription;
-use sfu::server::session::endpoint::candidate::ConnectionCredentials;
 use sfu::server::states::ServerStates;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
@@ -424,9 +423,8 @@ fn handle_offer_message(
         );
 
         let offer_sdp: SessionDescription = offer_str.try_into()?;
-        let peer_conn_cred = ConnectionCredentials::from_sdp(&offer_sdp)?;
         let session = server_states.create_or_get_session(session_id);
-        let answer = session.accept_offer(session_id, endpoint_id, peer_conn_cred, offer_sdp);
+        let answer = session.accept_offer(endpoint_id, offer_sdp)?;
         let answer_str = answer.marshal();
         info!("generate answer sdp: {}", answer_str);
         Ok(Bytes::from(answer_str))

@@ -1,4 +1,5 @@
 use sdp::SessionDescription;
+use shared::error::Result;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -34,13 +35,12 @@ impl Session {
 
     pub fn accept_offer(
         &self,
-        session_id: SessionId,
         endpoint_id: EndpointId,
-        peer_conn_cred: ConnectionCredentials,
         offer_sdp: SessionDescription,
-    ) -> SessionDescription {
+    ) -> Result<SessionDescription> {
+        let peer_conn_cred = ConnectionCredentials::from_sdp(&offer_sdp)?;
         let mut candidate = Candidate::new(
-            session_id,
+            self.session_id,
             endpoint_id,
             &self.fingerprint,
             peer_conn_cred,
@@ -53,7 +53,7 @@ impl Session {
 
         self.add_candidate(Rc::new(candidate));
 
-        answer_sdp
+        Ok(answer_sdp)
     }
 
     pub(crate) fn add_candidate(&self, candidate: Rc<Candidate>) -> bool {
