@@ -1,4 +1,5 @@
 use crate::server::certificate::RTCDtlsFingerprint;
+use crate::server::session::description::RTCSessionDescription;
 use crate::shared::types::{EndpointId, SessionId, UserName};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -83,8 +84,8 @@ pub struct Candidate {
     endpoint_id: EndpointId,
     local_conn_cred: ConnectionCredentials,
     peer_conn_cred: ConnectionCredentials,
-    offer_sdp: SessionDescription,
-    answer_sdp: Option<SessionDescription>,
+    offer: RTCSessionDescription,
+    answer: Option<RTCSessionDescription>,
 }
 
 impl Candidate {
@@ -93,15 +94,15 @@ impl Candidate {
         endpoint_id: EndpointId,
         fingerprint: &RTCDtlsFingerprint,
         peer_conn_cred: ConnectionCredentials,
-        offer_sdp: SessionDescription,
+        offer: RTCSessionDescription,
     ) -> Self {
         Self {
             session_id,
             endpoint_id,
             local_conn_cred: ConnectionCredentials::new(fingerprint, peer_conn_cred.role),
             peer_conn_cred,
-            offer_sdp,
-            answer_sdp: None,
+            offer,
+            answer: None,
         }
     }
 
@@ -128,15 +129,15 @@ impl Candidate {
         )
     }
 
-    pub(crate) fn offer_sdp(&self) -> &SessionDescription {
-        &self.offer_sdp
+    pub(crate) fn offer(&self) -> &RTCSessionDescription {
+        &self.offer
     }
 
-    pub(crate) fn set_answer_sdp(&mut self, answer_sdp: &SessionDescription) {
-        self.answer_sdp = Some(answer_sdp.clone());
+    pub(crate) fn set_answer(&mut self, answer: &RTCSessionDescription) {
+        self.answer = Some(answer.clone());
     }
 
-    pub(crate) fn answer_sdp(&mut self) -> Option<&SessionDescription> {
-        self.answer_sdp.as_ref()
+    pub(crate) fn answer(&mut self) -> Option<&RTCSessionDescription> {
+        self.answer.as_ref()
     }
 }

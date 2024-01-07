@@ -7,7 +7,7 @@ use futures::channel::oneshot::Sender;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::{debug, error, info};
-use sdp::SessionDescription;
+use sfu::server::session::description::RTCSessionDescription;
 use sfu::server::states::ServerStates;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
@@ -422,10 +422,10 @@ fn handle_offer_message(
             session_id, endpoint_id, offer_str,
         );
 
-        let offer_sdp: SessionDescription = offer_str.try_into()?;
+        let offer_sdp = serde_json::from_str::<RTCSessionDescription>(&offer_str)?;
         let session = server_states.create_or_get_session(session_id);
         let answer = session.accept_offer(endpoint_id, offer_sdp)?;
-        let answer_str = answer.marshal();
+        let answer_str = serde_json::to_string(&answer)?;
         info!("generate answer sdp: {}", answer_str);
         Ok(Bytes::from(answer_str))
     };

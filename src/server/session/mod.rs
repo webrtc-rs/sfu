@@ -1,15 +1,17 @@
-use sdp::SessionDescription;
 use shared::error::Result;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-pub mod endpoint;
+pub mod description;
 
 use crate::server::certificate::RTCDtlsFingerprint;
-use crate::server::session::endpoint::candidate::{Candidate, ConnectionCredentials};
+use crate::server::endpoint::{
+    candidate::{Candidate, ConnectionCredentials},
+    Endpoint,
+};
+use crate::server::session::description::RTCSessionDescription;
 use crate::shared::types::{EndpointId, SessionId, UserName};
-use endpoint::Endpoint;
 
 #[derive(Default, Debug)]
 pub struct Session {
@@ -36,24 +38,30 @@ impl Session {
     pub fn accept_offer(
         &self,
         endpoint_id: EndpointId,
-        offer_sdp: SessionDescription,
-    ) -> Result<SessionDescription> {
-        let peer_conn_cred = ConnectionCredentials::from_sdp(&offer_sdp)?;
+        mut offer: RTCSessionDescription,
+    ) -> Result<RTCSessionDescription> {
+        offer.unmarshal()?;
+        let parsed = offer.unmarshal()?;
+        let peer_conn_cred = ConnectionCredentials::from_sdp(&parsed)?;
+        offer.parsed = Some(parsed);
+
+        let answer_sdp = offer.sdp.clone();
+
         let mut candidate = Candidate::new(
             self.session_id,
             endpoint_id,
             &self.fingerprint,
             peer_conn_cred,
-            offer_sdp,
+            offer,
         );
 
         //TODO: generate Answer SDP
-        let answer_sdp = SessionDescription::default();
-        candidate.set_answer_sdp(&answer_sdp);
+        let answer = RTCSessionDescription::answer(answer_sdp)?;
+        candidate.set_answer(&answer);
 
         self.add_candidate(Rc::new(candidate));
 
-        Ok(answer_sdp)
+        Ok(answer)
     }
 
     pub(crate) fn add_candidate(&self, candidate: Rc<Candidate>) -> bool {

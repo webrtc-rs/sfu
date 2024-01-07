@@ -1,5 +1,6 @@
 use crate::server::config::ServerConfig;
-use crate::server::session::{endpoint::Endpoint, Session};
+use crate::server::endpoint::Endpoint;
+use crate::server::session::Session;
 use crate::shared::types::{FourTuple, SessionId};
 use shared::error::{Error, Result};
 use std::cell::RefCell;
