@@ -12,8 +12,8 @@
 </head>
 
 <body>
-<label for="room">Room: </label>
-<input type="number" id="room"></input>
+<label for="session">Session: </label>
+<input type="number" id="session"></input>
 <button id="join" onClick="startRtc()">Join</button>
 <button id="leave" onClick="leaveRtc()" disabled>Leave</button>
 <button id="cam" onClick="startCam()" disabled>Cam</button>
@@ -26,7 +26,7 @@ Status: <span id="ice_status">Waiting</span>
     const byTag = (tag) => [].slice.call(document.getElementsByTagName(tag));
     var callback = null;
 
-    byId("room").value = Math.floor(Math.random() * 1000000000);
+    byId("session").value = Math.floor(Math.random() * 1000000000);
     let endpointId = Math.floor(Math.random() * 1000000000);
     let streamCam;
     let streamMic;
@@ -146,10 +146,10 @@ Status: <span id="ice_status">Waiting</span>
         });
     };
     async function startRtc() {
-        let path = '/offer/'+byId("room").value+'/'+endpointId;
+        let path = '/offer/'+byId("session").value+'/'+endpointId;
         byId('ice_status').innerText = 'Connecting';
-        byId('chan_status').innerText = 'Joining room ' + byId("room").value + ' as endpoint ' + endpointId;
-        byId("room").disabled = true;
+        byId('chan_status').innerText = 'Joining session ' + byId("session").value + ' as endpoint ' + endpointId;
+        byId("session").disabled = true;
         byId('join').disabled = true;
         byId('leave').disabled = false;
         dataChannel = rtc.createDataChannel("offer/answer");
@@ -164,7 +164,7 @@ Status: <span id="ice_status">Waiting</span>
             }
         };
         dataChannel.onopen = () => {
-            byId('chan_status').innerText = 'Joined room ' + byId("room").value + ' as endpoint ' + endpointId;
+            byId('chan_status').innerText = 'Joined session ' + byId("session").value + ' as endpoint ' + endpointId;
             byId('mic').disabled = false;
             byId('cam').disabled = false;
         };
@@ -187,12 +187,12 @@ Status: <span id="ice_status">Waiting</span>
     async function leaveRtc() {
         byId('ice_status').innerText = 'Waiting';
         byId('chan_status').innerText = 'Click Join Button...'
-        byId("room").disabled = false;
+        byId("session").disabled = false;
         byId('join').disabled = false;
         byId('leave').disabled = true;
         rtc.close();
 
-        let path = '/leave/'+byId("room").value+'/'+endpointId;
+        let path = '/leave/'+byId("session").value+'/'+endpointId;
         const res = await fetch(path, {
             method: 'POST',
             headers: {

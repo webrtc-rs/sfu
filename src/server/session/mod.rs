@@ -6,41 +6,41 @@ use std::rc::Rc;
 pub mod endpoint;
 
 use crate::server::certificate::RTCDtlsFingerprint;
-use crate::server::room::endpoint::candidate::{Candidate, ConnectionCredentials};
-use crate::shared::types::{EndpointId, RoomId};
+use crate::server::session::endpoint::candidate::{Candidate, ConnectionCredentials};
+use crate::shared::types::{EndpointId, SessionId};
 use endpoint::Endpoint;
 
 #[derive(Default, Debug)]
-pub struct Room {
-    room_id: RoomId,
+pub struct Session {
+    session_id: SessionId,
     fingerprint: RTCDtlsFingerprint,
     endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
     candidates: RefCell<HashMap<String, Rc<Candidate>>>,
 }
 
-impl Room {
-    pub fn new(room_id: RoomId, fingerprint: RTCDtlsFingerprint) -> Self {
+impl Session {
+    pub fn new(session_id: SessionId, fingerprint: RTCDtlsFingerprint) -> Self {
         Self {
-            room_id,
+            session_id,
             fingerprint,
             endpoints: RefCell::new(HashMap::new()),
             candidates: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn room_id(&self) -> u64 {
-        self.room_id
+    pub fn session_id(&self) -> u64 {
+        self.session_id
     }
 
     pub fn accept_offer(
         &self,
-        room_id: RoomId,
+        session_id: SessionId,
         endpoint_id: EndpointId,
         peer_conn_cred: ConnectionCredentials,
         offer_sdp: SessionDescription,
     ) -> SessionDescription {
         let mut candidate = Candidate::new(
-            room_id,
+            session_id,
             endpoint_id,
             &self.fingerprint,
             peer_conn_cred,

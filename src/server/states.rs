@@ -1,6 +1,6 @@
 use crate::server::config::ServerConfig;
-use crate::server::room::{endpoint::Endpoint, Room};
-use crate::shared::types::{FourTuple, RoomId};
+use crate::server::session::{endpoint::Endpoint, Session};
+use crate::shared::types::{FourTuple, SessionId};
 use shared::error::{Error, Result};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct ServerStates {
     config: Arc<ServerConfig>,
-    rooms: RefCell<HashMap<RoomId, Rc<Room>>>,
+    sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
     endpoints: RefCell<HashMap<FourTuple, Rc<Endpoint>>>,
 }
 
@@ -24,18 +24,18 @@ impl ServerStates {
 
         Ok(Self {
             config,
-            rooms: RefCell::new(HashMap::new()),
+            sessions: RefCell::new(HashMap::new()),
             endpoints: RefCell::new(HashMap::new()),
         })
     }
 
-    pub fn create_or_get_session(&self, room_id: RoomId) -> Rc<Room> {
-        let mut rooms = self.rooms.borrow_mut();
-        if let Some(room) = rooms.get(&room_id) {
-            room.clone()
+    pub fn create_or_get_session(&self, session_id: SessionId) -> Rc<Session> {
+        let mut sessions = self.sessions.borrow_mut();
+        if let Some(session) = sessions.get(&session_id) {
+            session.clone()
         } else {
-            let room = Rc::new(Room::new(
-                room_id,
+            let session = Rc::new(Session::new(
+                session_id,
                 self.config
                     .certificate
                     .get_fingerprints()
@@ -43,8 +43,8 @@ impl ServerStates {
                     .unwrap()
                     .clone(),
             ));
-            rooms.insert(room_id, Rc::clone(&room));
-            room
+            sessions.insert(session_id, Rc::clone(&session));
+            session
         }
     }
 }

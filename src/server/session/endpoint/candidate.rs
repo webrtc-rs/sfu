@@ -1,5 +1,5 @@
 use crate::server::certificate::RTCDtlsFingerprint;
-use crate::shared::types::{EndpointId, RoomId};
+use crate::shared::types::{EndpointId, SessionId};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use ring::rand::{SecureRandom, SystemRandom};
 use sdp::util::ConnectionRole;
@@ -79,7 +79,7 @@ impl ConnectionCredentials {
 
 #[derive(Default, Debug)]
 pub struct Candidate {
-    room_id: RoomId,
+    session_id: SessionId,
     endpoint_id: EndpointId,
     local_conn_cred: ConnectionCredentials,
     peer_conn_cred: ConnectionCredentials,
@@ -89,14 +89,14 @@ pub struct Candidate {
 
 impl Candidate {
     pub(crate) fn new(
-        room_id: RoomId,
+        session_id: SessionId,
         endpoint_id: EndpointId,
         fingerprint: &RTCDtlsFingerprint,
         peer_conn_cred: ConnectionCredentials,
         offer_sdp: SessionDescription,
     ) -> Self {
         Self {
-            room_id,
+            session_id,
             endpoint_id,
             local_conn_cred: ConnectionCredentials::new(fingerprint, peer_conn_cred.role),
             peer_conn_cred,
@@ -113,8 +113,8 @@ impl Candidate {
         &self.local_conn_cred
     }
 
-    pub(crate) fn room_id(&self) -> RoomId {
-        self.room_id
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     pub(crate) fn endpoint_id(&self) -> EndpointId {

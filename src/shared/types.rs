@@ -2,7 +2,7 @@ use retty::transport::TransportContext;
 use std::net::SocketAddr;
 
 pub type EndpointId = u64;
-pub type RoomId = u64;
+pub type SessionId = u64;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct FourTuple {

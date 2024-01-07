@@ -8,7 +8,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::{debug, error, info};
 use sdp::SessionDescription;
-use sfu::server::room::endpoint::candidate::ConnectionCredentials;
+use sfu::server::session::endpoint::candidate::ConnectionCredentials;
 use sfu::server::states::ServerStates;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
@@ -20,34 +20,34 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 
 pub enum SignalingProtocolMessage {
     Ok {
-        room_id: u64,
+        session_id: u64,
         endpoint_id: u64,
     },
     Err {
-        room_id: u64,
+        session_id: u64,
         endpoint_id: u64,
         reason: Bytes,
     },
     Join {
-        room_id: u64,
+        session_id: u64,
     },
     Offer {
-        room_id: u64,
+        session_id: u64,
         endpoint_id: u64,
         offer_sdp: Bytes,
     },
     Answer {
-        room_id: u64,
+        session_id: u64,
         endpoint_id: u64,
         answer_sdp: Bytes,
     },
     Trickle {
-        room_id: u64,
+        session_id: u64,
         endpoint_id: u64,
         trickle_sdp: Bytes,
     },
     Leave {
-        room_id: u64,
+        session_id: u64,
         endpoint_id: u64,
     },
 }
@@ -145,22 +145,22 @@ async fn remote_handler(
         *response.status_mut() = StatusCode::BAD_REQUEST;
         return Ok(response);
     }
-    let room_id = path[2].parse::<u64>().unwrap();
+    let session_id = path[2].parse::<u64>().unwrap();
     let mut sorted_ports: Vec<u16> = media_port_thread_map.keys().map(|x| *x).collect();
     sorted_ports.sort();
     assert!(!sorted_ports.is_empty());
-    let port = sorted_ports[(room_id as usize) % sorted_ports.len()];
+    let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
     let event_base = media_port_thread_map.get(&port).unwrap();
     let (response_tx, response_rx) =
         futures::channel::oneshot::channel::<SignalingProtocolMessage>();
 
     match (req.method(), path[1]) {
         (&Method::POST, "join") => {
-            debug!("remote_handler receive from /join/room_id");
+            debug!("remote_handler receive from /join/session_id");
 
             if event_base
                 .send(SignalingMessage {
-                    request: SignalingProtocolMessage::Join { room_id },
+                    request: SignalingProtocolMessage::Join { session_id },
                     response_tx,
                 })
                 .await
@@ -169,7 +169,7 @@ async fn remote_handler(
                 if let Ok(response) = response_rx.await {
                     match response {
                         SignalingProtocolMessage::Ok {
-                            room_id: _,
+                            session_id: _,
                             endpoint_id,
                         } => {
                             let mut response =
@@ -178,7 +178,7 @@ async fn remote_handler(
                             return Ok(response);
                         }
                         SignalingProtocolMessage::Err {
-                            room_id: _,
+                            session_id: _,
                             endpoint_id: _,
                             reason,
                         } => {
@@ -192,7 +192,7 @@ async fn remote_handler(
             }
         }
         (&Method::POST, "offer") => {
-            debug!("remote_handler receive from /offer/room_id/endpoint_id");
+            debug!("remote_handler receive from /offer/session_id/endpoint_id");
 
             let endpoint_id = path[3].parse::<u64>().unwrap();
             let offer_sdp = hyper::body::to_bytes(req.into_body()).await?;
@@ -200,7 +200,7 @@ async fn remote_handler(
             if event_base
                 .send(SignalingMessage {
                     request: SignalingProtocolMessage::Offer {
-                        room_id,
+                        session_id,
                         endpoint_id,
                         offer_sdp,
                     },
@@ -212,7 +212,7 @@ async fn remote_handler(
                 if let Ok(response) = response_rx.await {
                     match response {
                         SignalingProtocolMessage::Answer {
-                            room_id: _,
+                            session_id: _,
                             endpoint_id: _,
                             answer_sdp,
                         } => {
@@ -221,7 +221,7 @@ async fn remote_handler(
                             return Ok(response);
                         }
                         SignalingProtocolMessage::Err {
-                            room_id: _,
+                            session_id: _,
                             endpoint_id: _,
                             reason,
                         } => {
@@ -235,7 +235,7 @@ async fn remote_handler(
             }
         }
         (&Method::POST, "answer") => {
-            debug!("remote_handler receive from /answer/room_id/endpoint_id");
+            debug!("remote_handler receive from /answer/session_id/endpoint_id");
 
             let endpoint_id = path[3].parse::<u64>().unwrap();
             let answer_sdp = hyper::body::to_bytes(req.into_body()).await?;
@@ -243,7 +243,7 @@ async fn remote_handler(
             if event_base
                 .send(SignalingMessage {
                     request: SignalingProtocolMessage::Answer {
-                        room_id,
+                        session_id,
                         endpoint_id,
                         answer_sdp,
                     },
@@ -255,7 +255,7 @@ async fn remote_handler(
                 if let Ok(response) = response_rx.await {
                     match response {
                         SignalingProtocolMessage::Ok {
-                            room_id: _,
+                            session_id: _,
                             endpoint_id: _,
                         } => {
                             let mut response = Response::default();
@@ -263,7 +263,7 @@ async fn remote_handler(
                             return Ok(response);
                         }
                         SignalingProtocolMessage::Err {
-                            room_id: _,
+                            session_id: _,
                             endpoint_id: _,
                             reason,
                         } => {
@@ -277,14 +277,14 @@ async fn remote_handler(
             }
         }
         (&Method::POST, "leave") => {
-            debug!("remote_handler receive from /leave/room_id/endpoint_id");
+            debug!("remote_handler receive from /leave/session_id/endpoint_id");
 
             let endpoint_id = path[3].parse::<u64>().unwrap();
 
             if event_base
                 .send(SignalingMessage {
                     request: SignalingProtocolMessage::Leave {
-                        room_id,
+                        session_id,
                         endpoint_id,
                     },
                     response_tx,
@@ -295,7 +295,7 @@ async fn remote_handler(
                 if let Ok(response) = response_rx.await {
                     match response {
                         SignalingProtocolMessage::Ok {
-                            room_id: _,
+                            session_id: _,
                             endpoint_id: _,
                         } => {
                             let mut response = Response::default();
@@ -303,7 +303,7 @@ async fn remote_handler(
                             return Ok(response);
                         }
                         SignalingProtocolMessage::Err {
-                            room_id: _,
+                            session_id: _,
                             endpoint_id: _,
                             reason,
                         } => {
@@ -334,12 +334,12 @@ pub fn handle_signaling_message(
     signaling_msg: SignalingMessage,
 ) -> Result<()> {
     match signaling_msg.request {
-        SignalingProtocolMessage::Join { room_id } => {
+        SignalingProtocolMessage::Join { session_id } => {
             let endpoint_id: u64 = rand::random();
             Ok(signaling_msg
                 .response_tx
                 .send(SignalingProtocolMessage::Ok {
-                    room_id,
+                    session_id,
                     endpoint_id,
                 })
                 .map_err(|_| {
@@ -350,53 +350,53 @@ pub fn handle_signaling_message(
                 })?)
         }
         SignalingProtocolMessage::Offer {
-            room_id,
+            session_id,
             endpoint_id,
             offer_sdp,
         } => handle_offer_message(
             server_states,
-            room_id,
+            session_id,
             endpoint_id,
             offer_sdp,
             signaling_msg.response_tx,
         ),
         SignalingProtocolMessage::Answer {
-            room_id,
+            session_id,
             endpoint_id,
             answer_sdp,
         } => handle_answer_message(
             server_states,
-            room_id,
+            session_id,
             endpoint_id,
             answer_sdp,
             signaling_msg.response_tx,
         ),
         SignalingProtocolMessage::Leave {
-            room_id,
+            session_id,
             endpoint_id,
         } => handle_leave_message(
             server_states,
-            room_id,
+            session_id,
             endpoint_id,
             signaling_msg.response_tx,
         ),
         SignalingProtocolMessage::Ok {
-            room_id,
+            session_id,
             endpoint_id,
         }
         | SignalingProtocolMessage::Err {
-            room_id,
+            session_id,
             endpoint_id,
             reason: _,
         }
         | SignalingProtocolMessage::Trickle {
-            room_id,
+            session_id,
             endpoint_id,
             trickle_sdp: _,
         } => Ok(signaling_msg
             .response_tx
             .send(SignalingProtocolMessage::Err {
-                room_id,
+                session_id,
                 endpoint_id,
                 reason: Bytes::from("Invalid Request"),
             })
@@ -411,7 +411,7 @@ pub fn handle_signaling_message(
 
 fn handle_offer_message(
     server_states: &Rc<ServerStates>,
-    room_id: u64,
+    session_id: u64,
     endpoint_id: u64,
     offer: Bytes,
     response_tx: Sender<SignalingProtocolMessage>,
@@ -420,13 +420,13 @@ fn handle_offer_message(
         let offer_str = String::from_utf8(offer.to_vec())?;
         info!(
             "handle_offer_message: {}/{}/{}",
-            room_id, endpoint_id, offer_str,
+            session_id, endpoint_id, offer_str,
         );
 
         let offer_sdp: SessionDescription = offer_str.try_into()?;
         let peer_conn_cred = ConnectionCredentials::from_sdp(&offer_sdp)?;
-        let room = server_states.create_or_get_session(room_id);
-        let answer = room.accept_offer(room_id, endpoint_id, peer_conn_cred, offer_sdp);
+        let session = server_states.create_or_get_session(session_id);
+        let answer = session.accept_offer(session_id, endpoint_id, peer_conn_cred, offer_sdp);
         let answer_str = answer.marshal();
         info!("generate answer sdp: {}", answer_str);
         Ok(Bytes::from(answer_str))
@@ -435,7 +435,7 @@ fn handle_offer_message(
     match try_handle() {
         Ok(answer_sdp) => Ok(response_tx
             .send(SignalingProtocolMessage::Answer {
-                room_id,
+                session_id,
                 endpoint_id,
                 answer_sdp,
             })
@@ -447,7 +447,7 @@ fn handle_offer_message(
             })?),
         Err(err) => Ok(response_tx
             .send(SignalingProtocolMessage::Err {
-                room_id,
+                session_id,
                 endpoint_id,
                 reason: Bytes::from(err.to_string()),
             })
@@ -462,7 +462,7 @@ fn handle_offer_message(
 
 fn handle_answer_message(
     _server_states: &Rc<ServerStates>,
-    room_id: u64,
+    session_id: u64,
     endpoint_id: u64,
     answer_sdp: Bytes,
     response_tx: Sender<SignalingProtocolMessage>,
@@ -470,7 +470,7 @@ fn handle_answer_message(
     let try_handle = || -> Result<()> {
         info!(
             "handle_answer_message: {}/{}/{}",
-            room_id,
+            session_id,
             endpoint_id,
             String::from_utf8(answer_sdp.to_vec())?
         );
@@ -480,7 +480,7 @@ fn handle_answer_message(
     match try_handle() {
         Ok(_) => Ok(response_tx
             .send(SignalingProtocolMessage::Ok {
-                room_id,
+                session_id,
                 endpoint_id,
             })
             .map_err(|_| {
@@ -491,7 +491,7 @@ fn handle_answer_message(
             })?),
         Err(err) => Ok(response_tx
             .send(SignalingProtocolMessage::Err {
-                room_id,
+                session_id,
                 endpoint_id,
                 reason: Bytes::from(err.to_string()),
             })
@@ -506,19 +506,19 @@ fn handle_answer_message(
 
 fn handle_leave_message(
     _server_states: &Rc<ServerStates>,
-    room_id: u64,
+    session_id: u64,
     endpoint_id: u64,
     response_tx: Sender<SignalingProtocolMessage>,
 ) -> Result<()> {
     let try_handle = || -> Result<()> {
-        info!("handle_leave_message: {}/{}", room_id, endpoint_id,);
+        info!("handle_leave_message: {}/{}", session_id, endpoint_id,);
         Ok(())
     };
 
     match try_handle() {
         Ok(_) => Ok(response_tx
             .send(SignalingProtocolMessage::Ok {
-                room_id,
+                session_id,
                 endpoint_id,
             })
             .map_err(|_| {
@@ -529,7 +529,7 @@ fn handle_leave_message(
             })?),
         Err(err) => Ok(response_tx
             .send(SignalingProtocolMessage::Err {
-                room_id,
+                session_id,
                 endpoint_id,
                 reason: Bytes::from(err.to_string()),
             })
