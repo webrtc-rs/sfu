@@ -43,7 +43,7 @@ pub enum DTLSMessageEvent {
 pub enum RTPMessageEvent {
     RAW(BytesMut),
     RTP(rtp::packet::Packet),
-    RTCP(Vec<Box<dyn rtcp::packet::Packet + Send + Sync>>),
+    RTCP(Vec<Box<dyn rtcp::packet::Packet>>),
 }
 
 #[derive(Debug)]

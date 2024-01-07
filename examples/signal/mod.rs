@@ -8,6 +8,7 @@ use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::{debug, error, info};
 use sfu::server::states::ServerStates;
 use std::collections::HashMap;
+use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -339,7 +340,8 @@ pub fn handle_signaling_message(
                     endpoint_id,
                 })
                 .map_err(|_| {
-                    shared::error::Error::Other(
+                    Error::new(
+                        ErrorKind::Other,
                         "failed to send back signaling message response".to_string(),
                     )
                 })?)
@@ -396,7 +398,8 @@ pub fn handle_signaling_message(
                 reason: Bytes::from("Invalid Request"),
             })
             .map_err(|_| {
-                shared::error::Error::Other(
+                Error::new(
+                    ErrorKind::Other,
                     "failed to send back signaling message response".to_string(),
                 )
             })?),
@@ -426,7 +429,8 @@ fn handle_offer_message(
             answer_sdp,
         })
         .map_err(|_| {
-            shared::error::Error::Other(
+            Error::new(
+                ErrorKind::Other,
                 "failed to send back signaling message response".to_string(),
             )
         })?)
@@ -452,7 +456,8 @@ fn handle_answer_message(
             endpoint_id,
         })
         .map_err(|_| {
-            shared::error::Error::Other(
+            Error::new(
+                ErrorKind::Other,
                 "failed to send back signaling message response".to_string(),
             )
         })?)
@@ -471,7 +476,8 @@ fn handle_leave_message(
             endpoint_id,
         })
         .map_err(|_| {
-            shared::error::Error::Other(
+            Error::new(
+                ErrorKind::Other,
                 "failed to send back signaling message response".to_string(),
             )
         })?)
