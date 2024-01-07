@@ -15,14 +15,16 @@ categories = [ "network-programming", "asynchronous" ]
 retty = "0.26.0"
 bytes = "1.5.0"
 log = "0.4.20"
+base64 = "0.21.5"
 rand = "0.8.5"
 rcgen = { version = "0.11", features = ["pem", "x509-parser"] }
 ring = "0.17.7"
 sha2 = "0.10.8"
 rustls = "0.21.7"
 
-# RTC protocol
+# RTC protocols
 shared = { path = "rtc/shared"}
+sdp = { path = "rtc/sdp"}
 stun = { path = "rtc/stun"}
 rtp = { path = "rtc/rtp"}
 rtcp = { path = "rtc/rtcp"}

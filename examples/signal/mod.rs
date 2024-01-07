@@ -3,9 +3,12 @@
 use anyhow::Result;
 use async_broadcast::{broadcast, Receiver};
 use bytes::Bytes;
+use futures::channel::oneshot::Sender;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::{debug, error, info};
+use sdp::SessionDescription;
+use sfu::server::room::endpoint::candidate::ConnectionCredentials;
 use sfu::server::states::ServerStates;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
@@ -51,7 +54,7 @@ pub enum SignalingProtocolMessage {
 
 pub struct SignalingMessage {
     pub request: SignalingProtocolMessage,
-    pub response_tx: futures::channel::oneshot::Sender<SignalingProtocolMessage>,
+    pub response_tx: Sender<SignalingProtocolMessage>,
 }
 
 pub struct SignalingServer {
@@ -407,33 +410,54 @@ pub fn handle_signaling_message(
 }
 
 fn handle_offer_message(
-    _server_states: &Rc<ServerStates>,
+    server_states: &Rc<ServerStates>,
     room_id: u64,
     endpoint_id: u64,
-    offer_sdp: Bytes,
-    response_tx: futures::channel::oneshot::Sender<SignalingProtocolMessage>,
+    offer: Bytes,
+    response_tx: Sender<SignalingProtocolMessage>,
 ) -> Result<()> {
-    info!(
-        "handle_offer_message: {}/{}/{}",
-        room_id,
-        endpoint_id,
-        String::from_utf8(offer_sdp.to_vec())?
-    );
+    let try_handle = || -> Result<Bytes> {
+        let offer_str = String::from_utf8(offer.to_vec())?;
+        info!(
+            "handle_offer_message: {}/{}/{}",
+            room_id, endpoint_id, offer_str,
+        );
 
-    let answer_sdp = offer_sdp;
+        let offer_sdp: SessionDescription = offer_str.try_into()?;
+        let peer_conn_cred = ConnectionCredentials::from_sdp(&offer_sdp)?;
+        let room = server_states.create_or_get_session(room_id);
+        let candidate = room.create_candidate(room_id, endpoint_id, peer_conn_cred, offer_sdp);
+        let answer = room.create_answer_sdp(&candidate);
+        let answer_str = answer.marshal();
+        Ok(Bytes::from(answer_str))
+    };
 
-    Ok(response_tx
-        .send(SignalingProtocolMessage::Answer {
-            room_id,
-            endpoint_id,
-            answer_sdp,
-        })
-        .map_err(|_| {
-            Error::new(
-                ErrorKind::Other,
-                "failed to send back signaling message response".to_string(),
-            )
-        })?)
+    match try_handle() {
+        Ok(answer_sdp) => Ok(response_tx
+            .send(SignalingProtocolMessage::Answer {
+                room_id,
+                endpoint_id,
+                answer_sdp,
+            })
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::Other,
+                    "failed to send back signaling message response".to_string(),
+                )
+            })?),
+        Err(err) => Ok(response_tx
+            .send(SignalingProtocolMessage::Err {
+                room_id,
+                endpoint_id,
+                reason: Bytes::from(err.to_string()),
+            })
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::Other,
+                    "failed to send back signaling message response".to_string(),
+                )
+            })?),
+    }
 }
 
 fn handle_answer_message(
@@ -441,44 +465,79 @@ fn handle_answer_message(
     room_id: u64,
     endpoint_id: u64,
     answer_sdp: Bytes,
-    response_tx: futures::channel::oneshot::Sender<SignalingProtocolMessage>,
+    response_tx: Sender<SignalingProtocolMessage>,
 ) -> Result<()> {
-    info!(
-        "handle_answer_message: {}/{}/{}",
-        room_id,
-        endpoint_id,
-        String::from_utf8(answer_sdp.to_vec())?
-    );
-
-    Ok(response_tx
-        .send(SignalingProtocolMessage::Ok {
+    let try_handle = || -> Result<()> {
+        info!(
+            "handle_answer_message: {}/{}/{}",
             room_id,
             endpoint_id,
-        })
-        .map_err(|_| {
-            Error::new(
-                ErrorKind::Other,
-                "failed to send back signaling message response".to_string(),
-            )
-        })?)
+            String::from_utf8(answer_sdp.to_vec())?
+        );
+        Ok(())
+    };
+
+    match try_handle() {
+        Ok(_) => Ok(response_tx
+            .send(SignalingProtocolMessage::Ok {
+                room_id,
+                endpoint_id,
+            })
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::Other,
+                    "failed to send back signaling message response".to_string(),
+                )
+            })?),
+        Err(err) => Ok(response_tx
+            .send(SignalingProtocolMessage::Err {
+                room_id,
+                endpoint_id,
+                reason: Bytes::from(err.to_string()),
+            })
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::Other,
+                    "failed to send back signaling message response".to_string(),
+                )
+            })?),
+    }
 }
 
 fn handle_leave_message(
     _server_states: &Rc<ServerStates>,
     room_id: u64,
     endpoint_id: u64,
-    response_tx: futures::channel::oneshot::Sender<SignalingProtocolMessage>,
+    response_tx: Sender<SignalingProtocolMessage>,
 ) -> Result<()> {
-    info!("handle_leave_message: {}/{}", room_id, endpoint_id,);
-    Ok(response_tx
-        .send(SignalingProtocolMessage::Ok {
-            room_id,
-            endpoint_id,
-        })
-        .map_err(|_| {
-            Error::new(
-                ErrorKind::Other,
-                "failed to send back signaling message response".to_string(),
-            )
-        })?)
+    let try_handle = || -> Result<()> {
+        info!("handle_leave_message: {}/{}", room_id, endpoint_id,);
+        Ok(())
+    };
+
+    match try_handle() {
+        Ok(_) => Ok(response_tx
+            .send(SignalingProtocolMessage::Ok {
+                room_id,
+                endpoint_id,
+            })
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::Other,
+                    "failed to send back signaling message response".to_string(),
+                )
+            })?),
+        Err(err) => Ok(response_tx
+            .send(SignalingProtocolMessage::Err {
+                room_id,
+                endpoint_id,
+                reason: Bytes::from(err.to_string()),
+            })
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::Other,
+                    "failed to send back signaling message response".to_string(),
+                )
+            })?),
+    }
 }

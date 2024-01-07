@@ -124,7 +124,7 @@ fn main() -> anyhow::Result<()> {
                     .with_extended_master_secret(dtls::config::ExtendedMasterSecretType::Require)
                     .build(false, None)
                     .unwrap();
-                let server_states = Rc::new(ServerStates::new(server_config));
+                let server_states = Rc::new(ServerStates::new(server_config).unwrap());
 
                 info!("listening {}:{}...", host, port);
                 let mut bootstrap = BootstrapUdpServer::new();
