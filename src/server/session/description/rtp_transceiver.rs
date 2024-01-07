@@ -1,3 +1,8 @@
+use crate::server::session::description::rtp_codec::{RTCRtpCodecParameters, RTPCodecType};
+use crate::server::session::description::rtp_receiver::RTCRtpReceiver;
+use crate::server::session::description::rtp_sender::RTCRtpSender;
+use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
+
 /// SSRC represents a synchronization source
 /// A synchronization source is a randomly chosen
 /// value meant to be globally unique within a particular
@@ -39,4 +44,22 @@ pub struct RTCPFeedback {
     /// The parameter value depends on the type.
     /// For example, type="nack" parameter="pli" will send Picture Loss Indicator packets.
     pub parameter: String,
+}
+
+/// RTPTransceiver represents a combination of an RTPSender and an RTPReceiver that share a common mid.
+#[derive(Debug, Clone)]
+pub struct RTCRtpTransceiver {
+    pub(crate) mid: String,
+    pub(crate) sender: RTCRtpSender,
+    pub(crate) receiver: RTCRtpReceiver,
+    pub(crate) direction: RTCRtpTransceiverDirection,
+    pub(crate) current_direction: RTCRtpTransceiverDirection,
+
+    pub(crate) codecs: Vec<RTCRtpCodecParameters>, // User provided codecs via set_codec_preferences
+
+    pub(crate) stopped: bool,
+    pub(crate) kind: RTPCodecType,
+    //media_engine: Arc<MediaEngine>,
+
+    //trigger_negotiation_needed: Mutex<TriggerNegotiationNeededFnOption>,
 }

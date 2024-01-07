@@ -1,4 +1,4 @@
-use crate::server::certificate::RTCDtlsFingerprint;
+use crate::server::certificate::{RTCCertificate, RTCDtlsFingerprint};
 use crate::server::session::description::RTCSessionDescription;
 use crate::shared::types::{EndpointId, SessionId, UserName};
 use base64::{prelude::BASE64_STANDARD, Engine};
@@ -9,14 +9,14 @@ use shared::error::{Error, Result};
 
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct ConnectionCredentials {
-    ice_ufrag: String,
-    ice_pwd: String,
-    fingerprint: RTCDtlsFingerprint,
-    role: ConnectionRole,
+    pub(crate) ice_ufrag: String,
+    pub(crate) ice_pwd: String,
+    pub(crate) fingerprint: RTCDtlsFingerprint,
+    pub(crate) role: ConnectionRole,
 }
 
 impl ConnectionCredentials {
-    pub(crate) fn new(fingerprint: &RTCDtlsFingerprint, remote_role: ConnectionRole) -> Self {
+    pub(crate) fn new(certificate: &RTCCertificate, remote_role: ConnectionRole) -> Self {
         let rng = SystemRandom::new();
 
         let mut user = [0u8; 9];
@@ -27,7 +27,7 @@ impl ConnectionCredentials {
         Self {
             ice_ufrag: BASE64_STANDARD.encode(&user[..]),
             ice_pwd: BASE64_STANDARD.encode(&password[..]),
-            fingerprint: fingerprint.clone(),
+            fingerprint: certificate.get_fingerprints().first().unwrap().clone(),
             role: if remote_role == ConnectionRole::Active {
                 ConnectionRole::Passive
             } else {
@@ -92,14 +92,14 @@ impl Candidate {
     pub(crate) fn new(
         session_id: SessionId,
         endpoint_id: EndpointId,
-        fingerprint: &RTCDtlsFingerprint,
+        certificate: &RTCCertificate,
         remote_conn_cred: ConnectionCredentials,
         remote_description: RTCSessionDescription,
     ) -> Self {
         Self {
             session_id,
             endpoint_id,
-            local_conn_cred: ConnectionCredentials::new(fingerprint, remote_conn_cred.role),
+            local_conn_cred: ConnectionCredentials::new(certificate, remote_conn_cred.role),
             remote_conn_cred,
             remote_description,
             local_description: None,

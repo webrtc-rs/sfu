@@ -45,12 +45,7 @@ impl ServerStates {
             let session = Rc::new(Session::new(
                 session_id,
                 self.local_addr,
-                self.config
-                    .certificate
-                    .get_fingerprints()
-                    .first()
-                    .unwrap()
-                    .clone(),
+                self.config.certificate.clone(),
             ));
             sessions.insert(session_id, Rc::clone(&session));
             session
