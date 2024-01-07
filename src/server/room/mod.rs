@@ -32,28 +32,28 @@ impl Room {
         self.room_id
     }
 
-    pub fn create_candidate(
+    pub fn accept_offer(
         &self,
         room_id: RoomId,
         endpoint_id: EndpointId,
         peer_conn_cred: ConnectionCredentials,
         offer_sdp: SessionDescription,
-    ) -> Rc<Candidate> {
-        let candidate = Rc::new(Candidate::new(
+    ) -> SessionDescription {
+        let mut candidate = Candidate::new(
             room_id,
             endpoint_id,
             &self.fingerprint,
             peer_conn_cred,
             offer_sdp,
-        ));
+        );
 
-        self.add_candidate(Rc::clone(&candidate));
+        //TODO: generate Answer SDP
+        let answer_sdp = SessionDescription::default();
+        candidate.set_answer_sdp(&answer_sdp);
 
-        candidate
-    }
+        self.add_candidate(Rc::new(candidate));
 
-    pub fn create_answer_sdp(&self, _candidate: &Rc<Candidate>) -> SessionDescription {
-        SessionDescription::default()
+        answer_sdp
     }
 
     pub(crate) fn add_candidate(&self, candidate: Rc<Candidate>) -> bool {

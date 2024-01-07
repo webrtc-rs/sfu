@@ -84,6 +84,7 @@ pub struct Candidate {
     local_conn_cred: ConnectionCredentials,
     peer_conn_cred: ConnectionCredentials,
     offer_sdp: SessionDescription,
+    answer_sdp: Option<SessionDescription>,
 }
 
 impl Candidate {
@@ -100,6 +101,7 @@ impl Candidate {
             local_conn_cred: ConnectionCredentials::new(fingerprint, peer_conn_cred.role),
             peer_conn_cred,
             offer_sdp,
+            answer_sdp: None,
         }
     }
 
@@ -128,5 +130,13 @@ impl Candidate {
 
     pub(crate) fn offer_sdp(&self) -> &SessionDescription {
         &self.offer_sdp
+    }
+
+    pub(crate) fn set_answer_sdp(&mut self, answer_sdp: &SessionDescription) {
+        self.answer_sdp = Some(answer_sdp.clone());
+    }
+
+    pub(crate) fn answer_sdp(&mut self) -> Option<&SessionDescription> {
+        self.answer_sdp.as_ref()
     }
 }

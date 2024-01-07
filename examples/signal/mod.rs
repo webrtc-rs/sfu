@@ -426,9 +426,9 @@ fn handle_offer_message(
         let offer_sdp: SessionDescription = offer_str.try_into()?;
         let peer_conn_cred = ConnectionCredentials::from_sdp(&offer_sdp)?;
         let room = server_states.create_or_get_session(room_id);
-        let candidate = room.create_candidate(room_id, endpoint_id, peer_conn_cred, offer_sdp);
-        let answer = room.create_answer_sdp(&candidate);
+        let answer = room.accept_offer(room_id, endpoint_id, peer_conn_cred, offer_sdp);
         let answer_str = answer.marshal();
+        info!("generate answer sdp: {}", answer_str);
         Ok(Bytes::from(answer_str))
     };
 
