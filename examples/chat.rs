@@ -8,6 +8,7 @@ use retty::channel::Pipeline;
 use retty::executor::LocalExecutorBuilder;
 use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
 use sfu::handlers::demuxer::DemuxerHandler;
+use sfu::handlers::gateway::GatewayHandler;
 use sfu::handlers::stun::StunHandler;
 use sfu::server::certificate::RTCCertificate;
 use sfu::server::config::ServerConfig;
@@ -131,7 +132,7 @@ fn main() -> anyhow::Result<()> {
 
                 info!("listening {}:{}...", host, port);
 
-                let _server_states_moved = server_states.clone();
+                let server_states_moved = server_states.clone();
                 let mut bootstrap = BootstrapUdpServer::new();
                 bootstrap.pipeline(Box::new(
                     move |writer: AsyncTransportWrite<TaggedBytesMut>| {
@@ -140,10 +141,14 @@ fn main() -> anyhow::Result<()> {
                         let async_transport_handler = AsyncTransport::new(writer);
                         let demuxer_handler = DemuxerHandler::new();
                         let stun_handler = StunHandler::new();
+                        //TODO: add DTLS and RTP handlers                        
+                        let gateway_handler = GatewayHandler::new(Rc::clone(&server_states_moved));
 
                         pipeline.add_back(async_transport_handler);
                         pipeline.add_back(demuxer_handler);
                         pipeline.add_back(stun_handler);
+                        //TODO: add DTLS and RTP handlers
+                        pipeline.add_back(gateway_handler);
 
                         pipeline.finalize()
                     },
