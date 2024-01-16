@@ -120,19 +120,6 @@ pub(crate) fn get_peer_direction(media: &MediaDescription) -> RTCRtpTransceiverD
     RTCRtpTransceiverDirection::Unspecified
 }
 
-pub(crate) fn find_by_mid(
-    mid: &str,
-    local_transceivers: &mut Vec<RTCRtpTransceiver>,
-) -> Option<RTCRtpTransceiver> {
-    for (i, t) in local_transceivers.iter().enumerate() {
-        if t.mid == mid {
-            return Some(local_transceivers.remove(i));
-        }
-    }
-
-    None
-}
-
 pub(crate) fn get_rids(media: &MediaDescription) -> HashMap<String, String> {
     let mut rids = HashMap::new();
     for attr in &media.attributes {
@@ -147,9 +134,9 @@ pub(crate) fn get_rids(media: &MediaDescription) -> HashMap<String, String> {
 }
 
 #[derive(Default)]
-pub(crate) struct MediaSection {
+pub(crate) struct MediaSection<'a> {
     pub(crate) id: String,
-    pub(crate) transceivers: Vec<RTCRtpTransceiver>,
+    pub(crate) transceivers: Vec<&'a RTCRtpTransceiver>,
     pub(crate) data: bool,
     pub(crate) rid_map: HashMap<String, String>,
     pub(crate) offered_direction: Option<RTCRtpTransceiverDirection>,
@@ -284,7 +271,7 @@ pub(crate) fn add_transceiver_sdp(
     dtls_fingerprints: &[RTCDtlsFingerprint],
     ice_params: &RTCIceParameters,
     candidate: &SocketAddr,
-    media_section: &MediaSection,
+    media_section: &MediaSection<'_>,
     params: AddTransceiverSdpParams,
 ) -> Result<(SessionDescription, bool)> {
     if media_section.transceivers.is_empty() {
@@ -509,7 +496,7 @@ pub(crate) fn populate_sdp(
     candidate: &SocketAddr,
     ice_params: &RTCIceParameters,
     connection_role: ConnectionRole,
-    media_sections: &[MediaSection],
+    media_sections: &[MediaSection<'_>],
     media_description_fingerprint: bool,
 ) -> Result<SessionDescription> {
     let media_dtls_fingerprints = if media_description_fingerprint {

@@ -20,8 +20,8 @@ use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::{
-    find_by_mid, get_mid_value, get_peer_direction, get_rids, populate_sdp, update_sdp_origin,
-    MediaSection, RTCSessionDescription, MEDIA_SECTION_APPLICATION,
+    get_mid_value, get_peer_direction, get_rids, populate_sdp, update_sdp_origin, MediaSection,
+    RTCSessionDescription, MEDIA_SECTION_APPLICATION,
 };
 use crate::shared::types::{EndpointId, SessionId, UserName};
 
@@ -100,10 +100,10 @@ impl Session {
 
     pub fn create_pending_answer(&self, candidate: &Candidate) -> Result<RTCSessionDescription> {
         let use_identity = false; //TODO: self.config.idp_login_url.is_some();
-        let mut local_transceivers = vec![]; //TODO: self.get_transceivers();
+        let local_transceivers = vec![]; //TODO: self.get_transceivers();
         let mut d = self.generate_matched_sdp(
             candidate,
-            &mut local_transceivers,
+            &local_transceivers,
             use_identity,
             false, /*includeUnmatched */
             DTLSRole::Server.to_connection_role(),
@@ -128,7 +128,7 @@ impl Session {
     pub(crate) fn generate_unmatched_sdp(
         &self,
         candidate: &Candidate,
-        local_transceivers: &mut Vec<RTCRtpTransceiver>,
+        local_transceivers: &[RTCRtpTransceiver],
         use_identity: bool,
     ) -> Result<SessionDescription> {
         let d = SessionDescription::new_jsep_session_description(use_identity);
@@ -137,7 +137,7 @@ impl Session {
 
         let mut media_sections = vec![];
 
-        for t in local_transceivers {
+        for t in local_transceivers.iter() {
             if t.stopped {
                 // An "m=" section is generated for each
                 // RtpTransceiver that has been added to the PeerConnection, excluding
@@ -145,10 +145,10 @@ impl Session {
                 continue;
             }
 
-            t.sender.negotiated = true;
+            t.sender.set_negotiated();
             media_sections.push(MediaSection {
                 id: t.mid.clone(),
-                transceivers: vec![t.clone()],
+                transceivers: vec![t],
                 ..Default::default()
             });
         }
@@ -184,7 +184,7 @@ impl Session {
     pub(crate) fn generate_matched_sdp(
         &self,
         candidate: &Candidate,
-        local_transceivers: &mut Vec<RTCRtpTransceiver>,
+        local_transceivers: &[RTCRtpTransceiver],
         use_identity: bool,
         include_unmatched: bool,
         connection_role: ConnectionRole,
@@ -223,14 +223,13 @@ impl Session {
                         continue;
                     }
 
-                    if let Some(mut t) = find_by_mid(mid_value, local_transceivers) {
-                        t.sender.negotiated = true;
-                        let media_transceivers = vec![t];
+                    if let Some(t) = local_transceivers.iter().find(|t| &t.mid == mid_value) {
+                        t.sender.set_negotiated();
 
                         #[allow(clippy::unnecessary_lazy_evaluations)]
                         media_sections.push(MediaSection {
                             id: mid_value.to_owned(),
-                            transceivers: media_transceivers,
+                            transceivers: vec![t],
                             rid_map: get_rids(media),
                             offered_direction: (!include_unmatched).then(|| direction),
                             ..Default::default()
@@ -244,11 +243,11 @@ impl Session {
 
         // If we are offering also include unmatched local transceivers
         if include_unmatched {
-            for t in local_transceivers {
-                t.sender.negotiated = true;
+            for t in local_transceivers.iter() {
+                t.sender.set_negotiated();
                 media_sections.push(MediaSection {
                     id: t.mid.clone(),
-                    transceivers: vec![t.clone()],
+                    transceivers: vec![t],
                     ..Default::default()
                 });
             }
