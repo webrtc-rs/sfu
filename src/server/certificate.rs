@@ -5,6 +5,7 @@ use rcgen::{CertificateParams, KeyPair};
 use ring::rand::SystemRandom;
 use ring::rsa;
 use ring::signature::{EcdsaKeyPair, Ed25519KeyPair};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::error::{Error, Result};
 use std::ops::Add;
@@ -12,7 +13,7 @@ use std::time::{Duration, SystemTime};
 
 /// DTLSFingerprint specifies the hash function algorithm and certificate
 /// fingerprint as described in <https://tools.ietf.org/html/rfc4572>.
-#[derive(Default, Debug, Clone, Eq, PartialEq)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RTCDtlsFingerprint {
     /// Algorithm specifies one of the the hash function algorithms defined in
     /// the 'Hash function Textual Names' registry.

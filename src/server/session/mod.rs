@@ -1,4 +1,5 @@
 use sdp::description::session::Origin;
+use sdp::util::ConnectionRole;
 use sdp::SessionDescription;
 use shared::error::{Error, Result};
 use std::cell::RefCell;
@@ -9,6 +10,7 @@ use std::rc::Rc;
 pub mod description;
 
 use crate::server::certificate::RTCCertificate;
+use crate::server::endpoint::candidate::{DTLSRole, DEFAULT_DTLS_ROLE_OFFER};
 use crate::server::endpoint::{
     candidate::{Candidate, ConnectionCredentials},
     Endpoint,
@@ -27,17 +29,21 @@ use crate::shared::types::{EndpointId, SessionId, UserName};
 pub struct Session {
     session_id: SessionId,
     local_addr: SocketAddr,
-    certificate: RTCCertificate,
+    certificates: Vec<RTCCertificate>,
     endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
     candidates: RefCell<HashMap<UserName, Rc<Candidate>>>,
 }
 
 impl Session {
-    pub fn new(session_id: SessionId, local_addr: SocketAddr, certificate: RTCCertificate) -> Self {
+    pub fn new(
+        session_id: SessionId,
+        local_addr: SocketAddr,
+        certificates: Vec<RTCCertificate>,
+    ) -> Self {
         Self {
             session_id,
             local_addr,
-            certificate,
+            certificates,
             endpoints: RefCell::new(HashMap::new()),
             candidates: RefCell::new(HashMap::new()),
         }
@@ -79,15 +85,12 @@ impl Session {
         let mut candidate = Candidate::new(
             self.session_id,
             endpoint_id,
-            &self.certificate,
+            &self.certificates,
             remote_conn_cred,
             offer,
         );
 
-        let answer = self.create_pending_answer(
-            candidate.remote_description().parsed.as_ref().unwrap(),
-            candidate.local_connection_credentials(),
-        )?;
+        let answer = self.create_pending_answer(&candidate)?;
         candidate.set_local_description(&answer);
 
         self.add_candidate(Rc::new(candidate));
@@ -95,19 +98,15 @@ impl Session {
         Ok(answer)
     }
 
-    pub fn create_pending_answer(
-        &self,
-        remote_description: &SessionDescription,
-        local_connection_credentials: &ConnectionCredentials,
-    ) -> Result<RTCSessionDescription> {
+    pub fn create_pending_answer(&self, candidate: &Candidate) -> Result<RTCSessionDescription> {
         let use_identity = false; //TODO: self.config.idp_login_url.is_some();
-        let local_transceivers = vec![]; //TODO: self.get_transceivers();
+        let mut local_transceivers = vec![]; //TODO: self.get_transceivers();
         let mut d = self.generate_matched_sdp(
-            remote_description,
-            local_connection_credentials,
-            local_transceivers,
+            candidate,
+            &mut local_transceivers,
             use_identity,
             false, /*includeUnmatched */
+            DTLSRole::Server.to_connection_role(),
         )?;
 
         let mut sdp_origin = Origin::default();
@@ -124,67 +123,128 @@ impl Session {
         Ok(answer)
     }
 
+    /// generate_unmatched_sdp generates an SDP that doesn't take remote state into account
+    /// This is used for the initial call for CreateOffer
+    pub(crate) fn generate_unmatched_sdp(
+        &self,
+        candidate: &Candidate,
+        local_transceivers: &mut Vec<RTCRtpTransceiver>,
+        use_identity: bool,
+    ) -> Result<SessionDescription> {
+        let d = SessionDescription::new_jsep_session_description(use_identity);
+
+        let ice_params = candidate.get_local_parameters();
+
+        let mut media_sections = vec![];
+
+        for t in local_transceivers {
+            if t.stopped {
+                // An "m=" section is generated for each
+                // RtpTransceiver that has been added to the PeerConnection, excluding
+                // any stopped RtpTransceivers;
+                continue;
+            }
+
+            t.sender.negotiated = true;
+            media_sections.push(MediaSection {
+                id: t.mid.clone(),
+                transceivers: vec![t.clone()],
+                ..Default::default()
+            });
+        }
+
+        /*TODO: if data_channels_requested */
+        {
+            media_sections.push(MediaSection {
+                id: format!("{}", media_sections.len()),
+                data: true,
+                ..Default::default()
+            });
+        }
+
+        let dtls_fingerprints = if let Some(cert) = self.certificates.first() {
+            cert.get_fingerprints()
+        } else {
+            return Err(Error::Other("ErrNonCertificate".to_string()));
+        };
+
+        populate_sdp(
+            d,
+            &dtls_fingerprints,
+            &self.local_addr,
+            ice_params,
+            DEFAULT_DTLS_ROLE_OFFER.to_connection_role(),
+            &media_sections,
+            true,
+        )
+    }
+
     /// generate_matched_sdp generates a SDP and takes the remote state into account
     /// this is used everytime we have a remote_description
     pub(crate) fn generate_matched_sdp(
         &self,
-        remote_description: &SessionDescription,
-        local_connection_credentials: &ConnectionCredentials,
-        mut local_transceivers: Vec<RTCRtpTransceiver>,
+        candidate: &Candidate,
+        local_transceivers: &mut Vec<RTCRtpTransceiver>,
         use_identity: bool,
         include_unmatched: bool,
+        connection_role: ConnectionRole,
     ) -> Result<SessionDescription> {
         let d = SessionDescription::new_jsep_session_description(use_identity);
 
+        let ice_params = candidate.get_local_parameters();
+
+        let remote_description = candidate.remote_description();
         let mut media_sections = vec![];
         let mut already_have_application_media_section = false;
-        for media in &remote_description.media_descriptions {
-            if let Some(mid_value) = get_mid_value(media) {
-                if mid_value.is_empty() {
-                    return Err(Error::Other(
-                        "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
-                    ));
-                }
+        if let Some(parsed) = remote_description.parsed.as_ref() {
+            for media in &parsed.media_descriptions {
+                if let Some(mid_value) = get_mid_value(media) {
+                    if mid_value.is_empty() {
+                        return Err(Error::Other(
+                            "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
+                        ));
+                    }
 
-                if media.media_name.media == MEDIA_SECTION_APPLICATION {
-                    media_sections.push(MediaSection {
-                        id: mid_value.to_owned(),
-                        data: true,
-                        ..Default::default()
-                    });
-                    already_have_application_media_section = true;
-                    continue;
-                }
+                    if media.media_name.media == MEDIA_SECTION_APPLICATION {
+                        media_sections.push(MediaSection {
+                            id: mid_value.to_owned(),
+                            data: true,
+                            ..Default::default()
+                        });
+                        already_have_application_media_section = true;
+                        continue;
+                    }
 
-                let kind = RTPCodecType::from(media.media_name.media.as_str());
-                let direction = get_peer_direction(media);
-                if kind == RTPCodecType::Unspecified
-                    || direction == RTCRtpTransceiverDirection::Unspecified
-                {
-                    continue;
-                }
+                    let kind = RTPCodecType::from(media.media_name.media.as_str());
+                    let direction = get_peer_direction(media);
+                    if kind == RTPCodecType::Unspecified
+                        || direction == RTCRtpTransceiverDirection::Unspecified
+                    {
+                        continue;
+                    }
 
-                if let Some(mut t) = find_by_mid(mid_value, &mut local_transceivers) {
-                    t.sender.negotiated = true;
-                    let media_transceivers = vec![t];
+                    if let Some(mut t) = find_by_mid(mid_value, local_transceivers) {
+                        t.sender.negotiated = true;
+                        let media_transceivers = vec![t];
 
-                    #[allow(clippy::unnecessary_lazy_evaluations)]
-                    media_sections.push(MediaSection {
-                        id: mid_value.to_owned(),
-                        transceivers: media_transceivers,
-                        rid_map: get_rids(media),
-                        offered_direction: (!include_unmatched).then(|| direction),
-                        ..Default::default()
-                    });
-                } else {
-                    return Err(Error::Other("ErrPeerConnTransceiverMidNil".to_string()));
+                        #[allow(clippy::unnecessary_lazy_evaluations)]
+                        media_sections.push(MediaSection {
+                            id: mid_value.to_owned(),
+                            transceivers: media_transceivers,
+                            rid_map: get_rids(media),
+                            offered_direction: (!include_unmatched).then(|| direction),
+                            ..Default::default()
+                        });
+                    } else {
+                        return Err(Error::Other("ErrPeerConnTransceiverMidNil".to_string()));
+                    }
                 }
             }
         }
 
         // If we are offering also include unmatched local transceivers
         if include_unmatched {
-            for t in &mut local_transceivers {
+            for t in local_transceivers {
                 t.sender.negotiated = true;
                 media_sections.push(MediaSection {
                     id: t.mid.clone(),
@@ -202,11 +262,18 @@ impl Session {
             }
         }
 
+        let dtls_fingerprints = if let Some(cert) = self.certificates.first() {
+            cert.get_fingerprints()
+        } else {
+            return Err(Error::Other("ErrNonCertificate".to_string()));
+        };
+
         populate_sdp(
             d,
-            self.certificate.get_fingerprints(),
+            &dtls_fingerprints,
             &self.local_addr,
-            local_connection_credentials,
+            ice_params,
+            connection_role,
             &media_sections,
             true,
         )

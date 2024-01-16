@@ -7,7 +7,7 @@ pub(crate) mod rtp_transceiver_direction;
 pub(crate) mod sdp_type;
 
 use crate::server::certificate::RTCDtlsFingerprint;
-use crate::server::endpoint::candidate::ConnectionCredentials;
+use crate::server::endpoint::candidate::RTCIceParameters;
 use crate::server::session::description::rtp_codec::RTCRtpParameters;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
@@ -27,8 +27,8 @@ use std::io::Cursor;
 use std::net::SocketAddr;
 use url::Url;
 
-const UNSPECIFIED_STR: &str = "Unspecified";
-const SDP_ATTRIBUTE_RID: &str = "rid";
+pub(crate) const UNSPECIFIED_STR: &str = "Unspecified";
+pub(crate) const SDP_ATTRIBUTE_RID: &str = "rid";
 
 /// SessionDescription is used to expose local and remote session descriptions.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -212,7 +212,7 @@ pub(crate) fn add_candidate_to_media_descriptions(
 pub(crate) struct AddDataMediaSectionParams {
     should_add_candidates: bool,
     mid_value: String,
-    ice_params: ConnectionCredentials,
+    ice_params: RTCIceParameters,
     dtls_role: ConnectionRole,
     ice_gathering_state: RTCIceGatheringState,
 }
@@ -255,7 +255,10 @@ pub(crate) fn add_data_media_section(
     .with_property_attribute(RTCRtpTransceiverDirection::Sendrecv.to_string())
     .with_value_attribute("sctp-port".to_owned(), "5000".to_owned()) //TODO: configurable
     .with_value_attribute("max-message-size".to_owned(), "262144".to_owned()) //TODO: configurable
-    .with_ice_credentials(params.ice_params.ice_ufrag, params.ice_params.ice_pwd);
+    .with_ice_credentials(
+        params.ice_params.username_fragment,
+        params.ice_params.password,
+    );
 
     for f in dtls_fingerprints {
         media = media.with_fingerprint(f.algorithm.clone(), f.value.to_uppercase());
@@ -279,7 +282,7 @@ pub(crate) struct AddTransceiverSdpParams {
 pub(crate) fn add_transceiver_sdp(
     mut d: SessionDescription,
     dtls_fingerprints: &[RTCDtlsFingerprint],
-    ice_params: &ConnectionCredentials,
+    ice_params: &RTCIceParameters,
     candidate: &SocketAddr,
     media_section: &MediaSection,
     params: AddTransceiverSdpParams,
@@ -300,7 +303,10 @@ pub(crate) fn add_transceiver_sdp(
     let mut media = MediaDescription::new_jsep_media_description(t.kind.to_string(), vec![])
         .with_value_attribute(ATTR_KEY_CONNECTION_SETUP.to_owned(), dtls_role.to_string())
         .with_value_attribute(ATTR_KEY_MID.to_owned(), mid_value.clone())
-        .with_ice_credentials(ice_params.ice_ufrag.clone(), ice_params.ice_pwd.clone())
+        .with_ice_credentials(
+            ice_params.username_fragment.clone(),
+            ice_params.password.clone(),
+        )
         .with_property_attribute(ATTR_KEY_RTCPMUX.to_owned())
         .with_property_attribute(ATTR_KEY_RTCPRSIZE.to_owned());
 
@@ -499,14 +505,15 @@ pub(crate) fn add_transceiver_sdp(
 /// populate_sdp serializes a PeerConnections state into an SDP
 pub(crate) fn populate_sdp(
     mut d: SessionDescription,
-    dtls_fingerprints: Vec<RTCDtlsFingerprint>,
+    dtls_fingerprints: &[RTCDtlsFingerprint],
     candidate: &SocketAddr,
-    ice_params: &ConnectionCredentials,
+    ice_params: &RTCIceParameters,
+    connection_role: ConnectionRole,
     media_sections: &[MediaSection],
     media_description_fingerprint: bool,
 ) -> Result<SessionDescription> {
     let media_dtls_fingerprints = if media_description_fingerprint {
-        dtls_fingerprints.clone()
+        dtls_fingerprints.to_vec()
     } else {
         vec![]
     };
@@ -536,7 +543,7 @@ pub(crate) fn populate_sdp(
                 should_add_candidates,
                 mid_value: m.id.clone(),
                 ice_params: ice_params.clone(),
-                dtls_role: ice_params.role,
+                dtls_role: connection_role,
                 ice_gathering_state: RTCIceGatheringState::Complete,
             };
             d = add_data_media_section(d, &media_dtls_fingerprints, candidate, params)?;
@@ -545,7 +552,7 @@ pub(crate) fn populate_sdp(
             let params = AddTransceiverSdpParams {
                 should_add_candidates,
                 mid_value: m.id.clone(),
-                dtls_role: ice_params.role,
+                dtls_role: connection_role,
                 ice_gathering_state: RTCIceGatheringState::Complete,
                 offered_direction: m.offered_direction,
             };
@@ -567,7 +574,7 @@ pub(crate) fn populate_sdp(
     }
 
     if !media_description_fingerprint {
-        for fingerprint in &dtls_fingerprints {
+        for fingerprint in dtls_fingerprints {
             d = d.with_fingerprint(
                 fingerprint.algorithm.clone(),
                 fingerprint.value.to_uppercase(),

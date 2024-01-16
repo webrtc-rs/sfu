@@ -96,7 +96,7 @@ fn main() -> anyhow::Result<()> {
 
     let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
     let server_config = Arc::new(ServerConfig {
-        certificate: RTCCertificate::from_key_pair(key_pair)?,
+        certificates: vec![RTCCertificate::from_key_pair(key_pair)?],
     });
     let core_num = num_cpus::get();
     let wait_group = WaitGroup::new();
@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
             .spawn(move || async move {
                 let _worker = worker;
                 let _dtls_handshake_config = dtls::config::ConfigBuilder::default()
-                    .with_certificates(vec![server_config.certificate.dtls_certificate.clone()])
+                    .with_certificates(server_config.certificates.iter().map(|c| c.dtls_certificate.clone()).collect())
                     .with_srtp_protection_profiles(vec![
                         SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80,
                     ])

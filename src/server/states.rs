@@ -20,7 +20,9 @@ pub struct ServerStates {
 impl ServerStates {
     pub fn new(config: Arc<ServerConfig>, local_addr: SocketAddr) -> Result<Self> {
         let _ = config
-            .certificate
+            .certificates
+            .first()
+            .ok_or(Error::ErrInvalidCertificate)?
             .get_fingerprints()
             .first()
             .ok_or(Error::ErrInvalidCertificate)?;
@@ -45,7 +47,7 @@ impl ServerStates {
             let session = Rc::new(Session::new(
                 session_id,
                 self.local_addr,
-                self.config.certificate.clone(),
+                self.config.certificates.clone(),
             ));
             sessions.insert(session_id, Rc::clone(&session));
             session
