@@ -1,10 +1,7 @@
-use async_trait::async_trait;
-use std::sync::Arc;
-
-use crate::server::ServerStates;
-
+use crate::server::states::ServerStates;
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TaggedBytesMut;
+use std::rc::Rc;
 
 /// match_range is a MatchFunc that accepts packets with the first byte in [lower..upper]
 fn match_range(lower: u8, upper: u8, buf: &[u8]) -> bool {
@@ -41,7 +38,7 @@ fn match_srtp(b: &[u8]) -> bool {
 }
 
 struct DemuxerDecoder {
-    server_states: Arc<ServerStates>,
+    server_states: Rc<ServerStates>,
 }
 struct DemuxerEncoder;
 
@@ -51,7 +48,7 @@ pub struct DemuxerHandler {
 }
 
 impl DemuxerHandler {
-    pub fn new(server_states: Arc<ServerStates>) -> Self {
+    pub fn new(server_states: Rc<ServerStates>) -> Self {
         DemuxerHandler {
             decoder: DemuxerDecoder { server_states },
             encoder: DemuxerEncoder {},
@@ -59,12 +56,11 @@ impl DemuxerHandler {
     }
 }
 
-#[async_trait]
 impl InboundHandler for DemuxerDecoder {
     type Rin = TaggedBytesMut;
     type Rout = Self::Rin;
 
-    async fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
+    fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
         if match_dtls(&msg.message) {
             //TODO: dispatch the packet to Data (DTLS) Pipeline
             unimplemented!()
@@ -72,18 +68,17 @@ impl InboundHandler for DemuxerDecoder {
             //TODO: dispatch the packet to Media (RTP) Pipeline
         } else {
             // dispatch the packet to next handler for STUN (ICE) processing
-            ctx.fire_read(msg).await;
+            ctx.fire_read(msg);
         }
     }
 }
 
-#[async_trait]
 impl OutboundHandler for DemuxerEncoder {
     type Win = TaggedBytesMut;
     type Wout = Self::Win;
 
-    async fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        ctx.fire_write(msg).await;
+    fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
+        ctx.fire_write(msg);
     }
 }
 

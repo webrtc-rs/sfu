@@ -7,6 +7,7 @@ use retty::bootstrap::BootstrapUdpServer;
 use retty::channel::Pipeline;
 use retty::executor::LocalExecutorBuilder;
 use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
+use sfu::handlers::demuxer::DemuxerHandler;
 use sfu::server::certificate::RTCCertificate;
 use sfu::server::config::ServerConfig;
 use sfu::server::states::ServerStates;
@@ -128,14 +129,19 @@ fn main() -> anyhow::Result<()> {
                                                               SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap()).unwrap());
 
                 info!("listening {}:{}...", host, port);
+
+                let server_states_moved = server_states.clone();
                 let mut bootstrap = BootstrapUdpServer::new();
                 bootstrap.pipeline(Box::new(
                     move |writer: AsyncTransportWrite<TaggedBytesMut>| {
                         let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
                         let async_transport_handler = AsyncTransport::new(writer);
+                        let demuxer = DemuxerHandler::new(Rc::clone(&server_states_moved));
 
-                        pipeline.add_back(async_transport_handler)?;
+                        pipeline.add_back(async_transport_handler);
+                        pipeline.add_back(demuxer);
+
 
                         pipeline.finalize()
                     },
