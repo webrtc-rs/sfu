@@ -136,7 +136,7 @@ pub(crate) fn get_rids(media: &MediaDescription) -> HashMap<String, String> {
 #[derive(Default)]
 pub(crate) struct MediaSection<'a> {
     pub(crate) id: String,
-    pub(crate) transceivers: Vec<&'a RTCRtpTransceiver>,
+    pub(crate) transceiver: Option<&'a RTCRtpTransceiver>,
     pub(crate) data: bool,
     pub(crate) rid_map: HashMap<String, String>,
     pub(crate) offered_direction: Option<RTCRtpTransceiverDirection>,
@@ -274,7 +274,7 @@ pub(crate) fn add_transceiver_sdp(
     media_section: &MediaSection<'_>,
     params: AddTransceiverSdpParams,
 ) -> Result<(SessionDescription, bool)> {
-    if media_section.transceivers.is_empty() {
+    if media_section.transceiver.is_none() {
         return Err(Error::Other("ErrSDPZeroTransceivers".to_string()));
     }
     let (should_add_candidates, mid_value, dtls_role, ice_gathering_state) = (
@@ -284,9 +284,8 @@ pub(crate) fn add_transceiver_sdp(
         params.ice_gathering_state,
     );
 
-    let transceivers = &media_section.transceivers;
     // Use the first transceiver to generate the section attributes
-    let t = &transceivers[0];
+    let t = &media_section.transceiver.as_ref().unwrap();
     let mut media = MediaDescription::new_jsep_media_description(t.kind.to_string(), vec![])
         .with_value_attribute(ATTR_KEY_CONNECTION_SETUP.to_owned(), dtls_role.to_string())
         .with_value_attribute(ATTR_KEY_MID.to_owned(), mid_value.clone())
@@ -391,47 +390,41 @@ pub(crate) fn add_transceiver_sdp(
         );
     }
 
-    for mt in transceivers {
-        let sender = &mt.sender;
-        if let Some(track) = &sender.track {
-            media = media.with_media_source(
-                sender.ssrc,
-                track.stream_id.to_owned(), /* cname */
-                track.stream_id.to_owned(), /* streamLabel */
-                track.id.to_owned(),
-            );
+    let sender = &t.sender;
+    if let Some(track) = &sender.track {
+        media = media.with_media_source(
+            sender.ssrc,
+            track.stream_id.to_owned(), /* cname */
+            track.stream_id.to_owned(), /* streamLabel */
+            track.id.to_owned(),
+        );
 
-            // Send msid based on the configured track if we haven't already
-            // sent on this sender. If we have sent we must keep the msid line consistent, this
-            // is handled below.
-            if sender.initial_track_id.is_none() {
-                for stream_id in &sender.associated_media_stream_ids {
-                    media =
-                        media.with_property_attribute(format!("msid:{} {}", stream_id, track.id));
-                }
-
-                //TODO: sender.initial_track_id = Some(track.id.to_string());
-                break;
-            }
-        }
-
-        if let Some(track_id) = &sender.initial_track_id {
-            // After we have include an msid attribute in an offer it must stay the same for
-            // all subsequent offer even if the track or transceiver direction changes.
-            //
-            // [RFC 8829 Section 5.2.2](https://datatracker.ietf.org/doc/html/rfc8829#section-5.2.2)
-            //
-            // For RtpTransceivers that are not stopped, the "a=msid" line or
-            // lines MUST stay the same if they are present in the current
-            // description, regardless of changes to the transceiver's direction
-            // or track.  If no "a=msid" line is present in the current
-            // description, "a=msid" line(s) MUST be generated according to the
-            // same rules as for an initial offer.
+        // Send msid based on the configured track if we haven't already
+        // sent on this sender. If we have sent we must keep the msid line consistent, this
+        // is handled below.
+        if sender.initial_track_id.is_none() {
             for stream_id in &sender.associated_media_stream_ids {
-                media = media.with_property_attribute(format!("msid:{stream_id} {track_id}"));
+                media = media.with_property_attribute(format!("msid:{} {}", stream_id, track.id));
             }
 
-            break;
+            //TODO: sender.initial_track_id = Some(track.id.to_string());
+        }
+    }
+
+    if let Some(track_id) = &sender.initial_track_id {
+        // After we have include an msid attribute in an offer it must stay the same for
+        // all subsequent offer even if the track or transceiver direction changes.
+        //
+        // [RFC 8829 Section 5.2.2](https://datatracker.ietf.org/doc/html/rfc8829#section-5.2.2)
+        //
+        // For RtpTransceivers that are not stopped, the "a=msid" line or
+        // lines MUST stay the same if they are present in the current
+        // description, regardless of changes to the transceiver's direction
+        // or track.  If no "a=msid" line is present in the current
+        // description, "a=msid" line(s) MUST be generated according to the
+        // same rules as for an initial offer.
+        for stream_id in &sender.associated_media_stream_ids {
+            media = media.with_property_attribute(format!("msid:{stream_id} {track_id}"));
         }
     }
 
@@ -513,13 +506,9 @@ pub(crate) fn populate_sdp(
     };
 
     for (i, m) in media_sections.iter().enumerate() {
-        if m.data && !m.transceivers.is_empty() {
+        if m.data && m.transceiver.is_some() {
             return Err(Error::Other(
                 "ErrSDPMediaSectionMediaDataChanInvalid".to_string(),
-            ));
-        } else if m.transceivers.len() > 1 {
-            return Err(Error::Other(
-                "ErrSDPMediaSectionMultipleTrackInvalid".to_string(),
             ));
         }
 

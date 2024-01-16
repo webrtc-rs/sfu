@@ -3,7 +3,7 @@ use sdp::util::ConnectionRole;
 use sdp::SessionDescription;
 use shared::error::{Error, Result};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
@@ -152,7 +152,7 @@ impl Session {
             t.sender.set_negotiated();
             media_sections.push(MediaSection {
                 id: t.mid.clone(),
-                transceivers: vec![t],
+                transceiver: Some(t),
                 ..Default::default()
             });
         }
@@ -198,6 +198,7 @@ impl Session {
 
         let mut media_sections = vec![];
         let mut already_have_application_media_section = false;
+        let mut matched = HashSet::new();
         if let Some(parsed) = remote_description.parsed.as_ref() {
             for media in &parsed.media_descriptions {
                 if let Some(mid_value) = get_mid_value(media) {
@@ -227,11 +228,12 @@ impl Session {
 
                     if let Some(t) = local_transceivers.iter().find(|t| &t.mid == mid_value) {
                         t.sender.set_negotiated();
+                        matched.insert(t.mid.clone());
 
                         #[allow(clippy::unnecessary_lazy_evaluations)]
                         media_sections.push(MediaSection {
                             id: mid_value.to_owned(),
-                            transceivers: vec![t],
+                            transceiver: Some(t),
                             rid_map: get_rids(media),
                             offered_direction: (!include_unmatched).then(|| direction),
                             ..Default::default()
@@ -246,12 +248,14 @@ impl Session {
         // If we are offering also include unmatched local transceivers
         if include_unmatched {
             for t in local_transceivers.iter() {
-                t.sender.set_negotiated();
-                media_sections.push(MediaSection {
-                    id: t.mid.clone(),
-                    transceivers: vec![t],
-                    ..Default::default()
-                });
+                if !matched.contains(&t.mid) {
+                    t.sender.set_negotiated();
+                    media_sections.push(MediaSection {
+                        id: t.mid.clone(),
+                        transceiver: Some(t),
+                        ..Default::default()
+                    });
+                }
             }
 
             if !already_have_application_media_section {
