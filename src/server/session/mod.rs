@@ -10,7 +10,7 @@ use std::rc::Rc;
 pub mod description;
 
 use crate::server::certificate::RTCCertificate;
-use crate::server::endpoint::candidate::{DTLSRole, DEFAULT_DTLS_ROLE_OFFER};
+use crate::server::endpoint::candidate::{DTLSRole, RTCIceParameters, DEFAULT_DTLS_ROLE_OFFER};
 use crate::server::endpoint::{
     candidate::{Candidate, ConnectionCredentials},
     Endpoint,
@@ -82,27 +82,33 @@ impl Session {
         let remote_conn_cred = ConnectionCredentials::from_sdp(&parsed)?;
         offer.parsed = Some(parsed);
 
-        let mut candidate = Candidate::new(
+        let local_conn_cred =
+            ConnectionCredentials::new(&self.certificates, remote_conn_cred.dtls_params.role);
+
+        let answer = self.create_pending_answer(&offer, &local_conn_cred.ice_params)?;
+
+        self.add_candidate(Rc::new(Candidate::new(
             self.session_id,
             endpoint_id,
-            &self.certificates,
             remote_conn_cred,
+            local_conn_cred,
             offer,
-        );
-
-        let answer = self.create_pending_answer(&candidate)?;
-        candidate.set_local_description(&answer);
-
-        self.add_candidate(Rc::new(candidate));
+            answer.clone(),
+        )));
 
         Ok(answer)
     }
 
-    pub fn create_pending_answer(&self, candidate: &Candidate) -> Result<RTCSessionDescription> {
+    pub fn create_pending_answer(
+        &self,
+        remote_description: &RTCSessionDescription,
+        local_ice_params: &RTCIceParameters,
+    ) -> Result<RTCSessionDescription> {
         let use_identity = false; //TODO: self.config.idp_login_url.is_some();
         let local_transceivers = vec![]; //TODO: self.get_transceivers();
         let mut d = self.generate_matched_sdp(
-            candidate,
+            remote_description,
+            local_ice_params,
             &local_transceivers,
             use_identity,
             false, /*includeUnmatched */
@@ -127,13 +133,11 @@ impl Session {
     /// This is used for the initial call for CreateOffer
     pub(crate) fn generate_unmatched_sdp(
         &self,
-        candidate: &Candidate,
+        local_ice_params: &RTCIceParameters,
         local_transceivers: &[RTCRtpTransceiver],
         use_identity: bool,
     ) -> Result<SessionDescription> {
         let d = SessionDescription::new_jsep_session_description(use_identity);
-
-        let ice_params = candidate.get_local_parameters();
 
         let mut media_sections = vec![];
 
@@ -172,7 +176,7 @@ impl Session {
             d,
             &dtls_fingerprints,
             &self.local_addr,
-            ice_params,
+            local_ice_params,
             DEFAULT_DTLS_ROLE_OFFER.to_connection_role(),
             &media_sections,
             true,
@@ -183,7 +187,8 @@ impl Session {
     /// this is used everytime we have a remote_description
     pub(crate) fn generate_matched_sdp(
         &self,
-        candidate: &Candidate,
+        remote_description: &RTCSessionDescription,
+        local_ice_params: &RTCIceParameters,
         local_transceivers: &[RTCRtpTransceiver],
         use_identity: bool,
         include_unmatched: bool,
@@ -191,9 +196,6 @@ impl Session {
     ) -> Result<SessionDescription> {
         let d = SessionDescription::new_jsep_session_description(use_identity);
 
-        let ice_params = candidate.get_local_parameters();
-
-        let remote_description = candidate.remote_description();
         let mut media_sections = vec![];
         let mut already_have_application_media_section = false;
         if let Some(parsed) = remote_description.parsed.as_ref() {
@@ -271,7 +273,7 @@ impl Session {
             d,
             &dtls_fingerprints,
             &self.local_addr,
-            ice_params,
+            local_ice_params,
             connection_role,
             &media_sections,
             true,

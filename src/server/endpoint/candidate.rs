@@ -188,27 +188,25 @@ pub struct Candidate {
     remote_conn_cred: ConnectionCredentials,
     local_conn_cred: ConnectionCredentials,
     remote_description: RTCSessionDescription,
-    local_description: Option<RTCSessionDescription>,
+    local_description: RTCSessionDescription,
 }
 
 impl Candidate {
     pub(crate) fn new(
         session_id: SessionId,
         endpoint_id: EndpointId,
-        certificates: &[RTCCertificate],
         remote_conn_cred: ConnectionCredentials,
+        local_conn_cred: ConnectionCredentials,
         remote_description: RTCSessionDescription,
+        local_description: RTCSessionDescription,
     ) -> Self {
         Self {
             session_id,
             endpoint_id,
-            local_conn_cred: ConnectionCredentials::new(
-                certificates,
-                remote_conn_cred.dtls_params.role,
-            ),
+            local_conn_cred,
             remote_conn_cred,
             remote_description,
-            local_description: None,
+            local_description,
         }
     }
 
@@ -246,19 +244,11 @@ impl Candidate {
         )
     }
 
-    pub(crate) fn set_remote_description(&mut self, remote_description: &RTCSessionDescription) {
-        self.remote_description = remote_description.clone();
-    }
-
     pub(crate) fn remote_description(&self) -> &RTCSessionDescription {
         &self.remote_description
     }
 
-    pub(crate) fn set_local_description(&mut self, local_description: &RTCSessionDescription) {
-        self.local_description = Some(local_description.clone());
-    }
-
-    pub(crate) fn local_description(&mut self) -> Option<&RTCSessionDescription> {
-        self.local_description.as_ref()
+    pub(crate) fn local_description(&self) -> &RTCSessionDescription {
+        &self.local_description
     }
 }
