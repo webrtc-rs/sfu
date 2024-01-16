@@ -33,6 +33,12 @@ pub struct DataChannelMessage {
 }
 
 #[derive(Debug)]
+pub enum STUNMessageEvent {
+    RAW(BytesMut),
+    STUN(stun::message::Message),
+}
+
+#[derive(Debug)]
 pub enum DTLSMessageEvent {
     RAW(BytesMut),
     SCTP(DataChannelMessage),
@@ -48,6 +54,7 @@ pub enum RTPMessageEvent {
 
 #[derive(Debug)]
 pub enum MessageEvent {
+    STUN(STUNMessageEvent),
     DTLS(DTLSMessageEvent),
     RTP(RTPMessageEvent),
 }

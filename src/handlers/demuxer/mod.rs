@@ -1,7 +1,9 @@
-use crate::server::states::ServerStates;
+use crate::shared::messages::{
+    DTLSMessageEvent, MessageEvent, RTPMessageEvent, STUNMessageEvent, TaggedMessageEvent,
+};
+use log::{debug, error};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TaggedBytesMut;
-use std::rc::Rc;
 
 /// match_range is a MatchFunc that accepts packets with the first byte in [lower..upper]
 fn match_range(lower: u8, upper: u8, buf: &[u8]) -> bool {
@@ -37,56 +39,79 @@ fn match_srtp(b: &[u8]) -> bool {
     match_range(128, 191, b)
 }
 
-struct DemuxerDecoder {
-    server_states: Rc<ServerStates>,
-}
-struct DemuxerEncoder;
+#[derive(Default)]
+struct DemuxerInbound;
+#[derive(Default)]
+struct DemuxerOutbound;
 
+#[derive(Default)]
 pub struct DemuxerHandler {
-    decoder: DemuxerDecoder,
-    encoder: DemuxerEncoder,
+    demuxer_inbound: DemuxerInbound,
+    demuxer_outbound: DemuxerOutbound,
 }
 
 impl DemuxerHandler {
-    pub fn new(server_states: Rc<ServerStates>) -> Self {
-        DemuxerHandler {
-            decoder: DemuxerDecoder { server_states },
-            encoder: DemuxerEncoder {},
-        }
+    pub fn new() -> Self {
+        DemuxerHandler::default()
     }
 }
 
-impl InboundHandler for DemuxerDecoder {
+impl InboundHandler for DemuxerInbound {
     type Rin = TaggedBytesMut;
-    type Rout = Self::Rin;
+    type Rout = TaggedMessageEvent;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        if match_dtls(&msg.message) {
-            //TODO: dispatch the packet to Data (DTLS) Pipeline
-            unimplemented!()
+        if msg.message.is_empty() {
+            error!("drop invalid packet due to zero length");
+        } else if match_dtls(&msg.message) {
+            ctx.fire_read(TaggedMessageEvent {
+                now: msg.now,
+                transport: msg.transport,
+                message: MessageEvent::DTLS(DTLSMessageEvent::RAW(msg.message)),
+            });
         } else if match_srtp(&msg.message) {
-            //TODO: dispatch the packet to Media (RTP) Pipeline
+            ctx.fire_read(TaggedMessageEvent {
+                now: msg.now,
+                transport: msg.transport,
+                message: MessageEvent::RTP(RTPMessageEvent::RAW(msg.message)),
+            });
         } else {
-            // dispatch the packet to next handler for STUN (ICE) processing
-            ctx.fire_read(msg);
+            ctx.fire_read(TaggedMessageEvent {
+                now: msg.now,
+                transport: msg.transport,
+                message: MessageEvent::STUN(STUNMessageEvent::RAW(msg.message)),
+            });
         }
     }
 }
 
-impl OutboundHandler for DemuxerEncoder {
-    type Win = TaggedBytesMut;
-    type Wout = Self::Win;
+impl OutboundHandler for DemuxerOutbound {
+    type Win = TaggedMessageEvent;
+    type Wout = TaggedBytesMut;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        ctx.fire_write(msg);
+        match msg.message {
+            MessageEvent::STUN(STUNMessageEvent::RAW(message))
+            | MessageEvent::DTLS(DTLSMessageEvent::RAW(message))
+            | MessageEvent::RTP(RTPMessageEvent::RAW(message)) => {
+                ctx.fire_write(TaggedBytesMut {
+                    now: msg.now,
+                    transport: msg.transport,
+                    message,
+                });
+            }
+            _ => {
+                debug!("drop non-RAW packet {:?}", msg.message);
+            }
+        }
     }
 }
 
 impl Handler for DemuxerHandler {
     type Rin = TaggedBytesMut;
-    type Rout = Self::Rin;
-    type Win = TaggedBytesMut;
-    type Wout = Self::Win;
+    type Rout = TaggedMessageEvent;
+    type Win = TaggedMessageEvent;
+    type Wout = TaggedBytesMut;
 
     fn name(&self) -> &str {
         "DemuxerHandler"
@@ -98,6 +123,9 @@ impl Handler for DemuxerHandler {
         Box<dyn InboundHandler<Rin = Self::Rin, Rout = Self::Rout>>,
         Box<dyn OutboundHandler<Win = Self::Win, Wout = Self::Wout>>,
     ) {
-        (Box::new(self.decoder), Box::new(self.encoder))
+        (
+            Box::new(self.demuxer_inbound),
+            Box::new(self.demuxer_outbound),
+        )
     }
 }
