@@ -10,7 +10,7 @@ use std::rc::Rc;
 pub mod description;
 
 use crate::server::certificate::RTCCertificate;
-use crate::server::endpoint::candidate::{DTLSRole, RTCIceParameters, DEFAULT_DTLS_ROLE_OFFER};
+use crate::server::endpoint::candidate::{DTLSRole, RTCIceParameters};
 use crate::server::endpoint::{
     candidate::{Candidate, ConnectionCredentials},
     Endpoint,
@@ -127,60 +127,6 @@ impl Session {
         };
 
         Ok(answer)
-    }
-
-    /// generate_unmatched_sdp generates an SDP that doesn't take remote state into account
-    /// This is used for the initial call for CreateOffer
-    pub(crate) fn generate_unmatched_sdp(
-        &self,
-        local_ice_params: &RTCIceParameters,
-        local_transceivers: &[RTCRtpTransceiver],
-        use_identity: bool,
-    ) -> Result<SessionDescription> {
-        let d = SessionDescription::new_jsep_session_description(use_identity);
-
-        let mut media_sections = vec![];
-
-        for t in local_transceivers.iter() {
-            if t.stopped {
-                // An "m=" section is generated for each
-                // RtpTransceiver that has been added to the PeerConnection, excluding
-                // any stopped RtpTransceivers;
-                continue;
-            }
-
-            t.sender.set_negotiated();
-            media_sections.push(MediaSection {
-                id: t.mid.clone(),
-                transceiver: Some(t),
-                ..Default::default()
-            });
-        }
-
-        /*TODO: if data_channels_requested */
-        {
-            media_sections.push(MediaSection {
-                id: format!("{}", media_sections.len()),
-                data: true,
-                ..Default::default()
-            });
-        }
-
-        let dtls_fingerprints = if let Some(cert) = self.certificates.first() {
-            cert.get_fingerprints()
-        } else {
-            return Err(Error::Other("ErrNonCertificate".to_string()));
-        };
-
-        populate_sdp(
-            d,
-            &dtls_fingerprints,
-            &self.local_addr,
-            local_ice_params,
-            DEFAULT_DTLS_ROLE_OFFER.to_connection_role(),
-            &media_sections,
-            true,
-        )
     }
 
     /// generate_matched_sdp generates a SDP and takes the remote state into account
