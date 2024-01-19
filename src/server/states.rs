@@ -18,6 +18,7 @@ pub struct ServerStates {
     sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
 
     // Thread-local map
+    //TODO: add idle timeout cleanup logic to remove idle endpoint and candidates
     endpoints: RefCell<HashMap<FourTuple, Rc<Endpoint>>>,
     candidates: RefCell<HashMap<UserName, Rc<Candidate>>>,
 }
@@ -59,6 +60,10 @@ impl ServerStates {
             sessions.insert(session_id, Rc::clone(&session));
             session
         }
+    }
+
+    pub(crate) fn get_session(&self, session_id: &SessionId) -> Option<Rc<Session>> {
+        self.sessions.borrow().get(session_id).cloned()
     }
 
     // set pending offer and return answer

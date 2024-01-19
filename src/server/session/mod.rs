@@ -1,3 +1,4 @@
+use retty::transport::TransportContext;
 use sdp::description::session::Origin;
 use sdp::util::ConnectionRole;
 use sdp::SessionDescription;
@@ -10,7 +11,8 @@ use std::rc::Rc;
 pub mod description;
 
 use crate::server::certificate::RTCCertificate;
-use crate::server::endpoint::candidate::{DTLSRole, RTCIceParameters};
+use crate::server::endpoint::candidate::{Candidate, DTLSRole, RTCIceParameters};
+use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
 use crate::server::session::description::rtp_codec::RTPCodecType;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
@@ -49,7 +51,43 @@ impl Session {
         self.session_id
     }
 
-    pub fn create_pending_answer(
+    pub(crate) fn add_endpoint(
+        self: &Rc<Self>,
+        candidate: &Rc<Candidate>,
+        transport_context: &TransportContext,
+    ) -> Result<(bool, Rc<Endpoint>, Rc<Transport>)> {
+        let endpoint_id = candidate.endpoint_id();
+        let endpoint = self.get_endpoint(&endpoint_id);
+        let four_tuple = transport_context.into();
+        if let Some(endpoint) = endpoint {
+            if let Some(transport) = endpoint.get_transport(&four_tuple) {
+                Ok((true, endpoint, transport))
+            } else {
+                let transport = Rc::new(Transport::new(
+                    four_tuple,
+                    Rc::downgrade(&endpoint),
+                    Rc::clone(candidate),
+                ));
+                endpoint.add_transport(Rc::clone(&transport));
+                Ok((true, endpoint, transport))
+            }
+        } else {
+            let endpoint = Rc::new(Endpoint::new(Rc::downgrade(self), endpoint_id));
+            let transport = Rc::new(Transport::new(
+                four_tuple,
+                Rc::downgrade(&endpoint),
+                Rc::clone(candidate),
+            ));
+            endpoint.add_transport(Rc::clone(&transport));
+            Ok((false, endpoint, transport))
+        }
+    }
+
+    pub(crate) fn get_endpoint(&self, endpoint_id: &EndpointId) -> Option<Rc<Endpoint>> {
+        self.endpoints.borrow().get(endpoint_id).cloned()
+    }
+
+    pub(crate) fn create_pending_answer(
         &self,
         _endpoint_id: EndpointId,
         remote_description: &RTCSessionDescription,
