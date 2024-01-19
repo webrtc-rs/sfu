@@ -1,7 +1,7 @@
 pub mod candidate;
 
 use crate::server::session::Session;
-use crate::shared::types::EndpointId;
+use crate::types::EndpointId;
 use std::rc::Weak;
 
 #[derive(Default, Debug)]

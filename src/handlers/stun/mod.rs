@@ -1,4 +1,4 @@
-use crate::shared::messages::{MessageEvent, STUNMessageEvent, TaggedMessageEvent};
+use crate::messages::{MessageEvent, STUNMessageEvent, TaggedMessageEvent};
 use bytes::BytesMut;
 use log::{debug, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};

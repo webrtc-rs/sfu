@@ -1,5 +1,5 @@
+use crate::messages::{MessageEvent, STUNMessageEvent, TaggedMessageEvent};
 use crate::server::states::ServerStates;
-use crate::shared::messages::{MessageEvent, STUNMessageEvent, TaggedMessageEvent};
 use log::warn;
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;

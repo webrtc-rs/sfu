@@ -1,6 +1,6 @@
 use crate::server::certificate::{RTCCertificate, RTCDtlsFingerprint};
 use crate::server::session::description::{RTCSessionDescription, UNSPECIFIED_STR};
-use crate::shared::types::{EndpointId, SessionId, UserName};
+use crate::types::{EndpointId, SessionId, UserName};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use ring::rand::{SecureRandom, SystemRandom};
 use sdp::util::ConnectionRole;

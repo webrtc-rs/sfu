@@ -1,4 +1,4 @@
-use crate::shared::messages::{
+use crate::messages::{
     DTLSMessageEvent, MessageEvent, RTPMessageEvent, STUNMessageEvent, TaggedMessageEvent,
 };
 use log::{debug, error};

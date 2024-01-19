@@ -2,5 +2,6 @@
 #![allow(dead_code)]
 
 pub mod handlers;
+pub mod messages;
 pub mod server;
-pub mod shared;
+pub mod types;

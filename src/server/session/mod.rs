@@ -23,7 +23,7 @@ use crate::server::session::description::{
     get_mid_value, get_peer_direction, get_rids, populate_sdp, update_sdp_origin, MediaSection,
     RTCSessionDescription, MEDIA_SECTION_APPLICATION,
 };
-use crate::shared::types::{EndpointId, SessionId, UserName};
+use crate::types::{EndpointId, SessionId, UserName};
 
 #[derive(Debug)]
 pub struct Session {
