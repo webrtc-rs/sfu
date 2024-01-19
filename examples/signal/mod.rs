@@ -423,8 +423,7 @@ fn handle_offer_message(
         );
 
         let offer_sdp = serde_json::from_str::<RTCSessionDescription>(&offer_str)?;
-        let session = server_states.create_or_get_session(session_id);
-        let answer = session.accept_pending_offer(endpoint_id, offer_sdp)?;
+        let answer = server_states.accept_pending_offer(session_id, endpoint_id, offer_sdp)?;
         let answer_str = serde_json::to_string(&answer)?;
         info!("generate answer sdp: {}", answer_str);
         Ok(Bytes::from(answer_str))

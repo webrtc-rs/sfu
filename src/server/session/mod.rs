@@ -11,10 +11,7 @@ pub mod description;
 
 use crate::server::certificate::RTCCertificate;
 use crate::server::endpoint::candidate::{DTLSRole, RTCIceParameters};
-use crate::server::endpoint::{
-    candidate::{Candidate, ConnectionCredentials},
-    Endpoint,
-};
+use crate::server::endpoint::Endpoint;
 use crate::server::session::description::rtp_codec::RTPCodecType;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
@@ -23,7 +20,7 @@ use crate::server::session::description::{
     get_mid_value, get_peer_direction, get_rids, populate_sdp, update_sdp_origin, MediaSection,
     RTCSessionDescription, MEDIA_SECTION_APPLICATION,
 };
-use crate::types::{EndpointId, SessionId, UserName};
+use crate::types::{EndpointId, SessionId};
 
 #[derive(Debug)]
 pub struct Session {
@@ -31,7 +28,6 @@ pub struct Session {
     local_addr: SocketAddr,
     certificates: Vec<RTCCertificate>,
     endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
-    candidates: RefCell<HashMap<UserName, Rc<Candidate>>>,
 }
 
 impl Session {
@@ -44,8 +40,8 @@ impl Session {
             session_id,
             local_addr,
             certificates,
+
             endpoints: RefCell::new(HashMap::new()),
-            candidates: RefCell::new(HashMap::new()),
         }
     }
 
@@ -53,54 +49,9 @@ impl Session {
         self.session_id
     }
 
-    pub(crate) fn add_candidate(&self, candidate: Rc<Candidate>) -> bool {
-        let username = candidate.username();
-        let mut candidates = self.candidates.borrow_mut();
-        candidates.insert(username, candidate).is_some()
-    }
-
-    //TODO: add idle timeout to remove candidate
-    pub(crate) fn remove_candidate(&self, candidate: &Rc<Candidate>) -> bool {
-        let username = candidate.username();
-        let mut candidates = self.candidates.borrow_mut();
-        candidates.remove(&username).is_some()
-    }
-
-    pub(crate) fn find_candidate(&self, username: &UserName) -> Option<Rc<Candidate>> {
-        let candidates = self.candidates.borrow();
-        candidates.get(username).cloned()
-    }
-
-    // set pending offer and return answer
-    pub fn accept_pending_offer(
-        &self,
-        endpoint_id: EndpointId,
-        mut offer: RTCSessionDescription,
-    ) -> Result<RTCSessionDescription> {
-        offer.unmarshal()?;
-        let parsed = offer.unmarshal()?;
-        let remote_conn_cred = ConnectionCredentials::from_sdp(&parsed)?;
-        offer.parsed = Some(parsed);
-
-        let local_conn_cred =
-            ConnectionCredentials::new(&self.certificates, remote_conn_cred.dtls_params.role);
-
-        let answer = self.create_pending_answer(&offer, &local_conn_cred.ice_params)?;
-
-        self.add_candidate(Rc::new(Candidate::new(
-            self.session_id,
-            endpoint_id,
-            remote_conn_cred,
-            local_conn_cred,
-            offer,
-            answer.clone(),
-        )));
-
-        Ok(answer)
-    }
-
     pub fn create_pending_answer(
         &self,
+        _endpoint_id: EndpointId,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
     ) -> Result<RTCSessionDescription> {
