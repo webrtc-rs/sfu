@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use crate::messages::{DTLSMessageEvent, MessageEvent, TaggedMessageEvent};
 use crate::server::states::ServerStates;
-use dtls::config::HandshakeConfig;
 use dtls::endpoint::EndpointEvent;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use dtls::state::State;
@@ -31,9 +30,12 @@ pub struct DtlsHandler {
 }
 
 impl DtlsHandler {
-    pub fn new(server_states: Rc<ServerStates>, handshake_config: HandshakeConfig) -> Self {
+    pub fn new(
+        server_states: Rc<ServerStates>,
+        dtls_handshake_config: dtls::config::HandshakeConfig,
+    ) -> Self {
         let dtls_endpoint = Rc::new(RefCell::new(dtls::endpoint::Endpoint::new(Some(
-            handshake_config,
+            dtls_handshake_config,
         ))));
 
         DtlsHandler {

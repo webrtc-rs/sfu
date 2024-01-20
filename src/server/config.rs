@@ -8,7 +8,7 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub certificates: Vec<RTCCertificate>,
-
+    pub(crate) sctp_server_config: Arc<sctp::ServerConfig>,
     pub(crate) endpoint_idle_timeout: Duration,
     pub(crate) candidate_idle_timeout: Duration,
 }
@@ -18,6 +18,7 @@ impl ServerConfig {
     pub fn new(certificates: Vec<RTCCertificate>) -> Self {
         Self {
             certificates,
+            sctp_server_config: Arc::new(sctp::ServerConfig::default()),
             endpoint_idle_timeout: Duration::from_secs(30), //TODO: be to configurable
             candidate_idle_timeout: Duration::from_secs(30), //TODO: be to configurable
         }

@@ -10,6 +10,7 @@ use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
 use sfu::handlers::demuxer::DemuxerHandler;
 use sfu::handlers::dtls::DtlsHandler;
 use sfu::handlers::gateway::GatewayHandler;
+use sfu::handlers::sctp::SctpHandler;
 use sfu::handlers::stun::StunHandler;
 use sfu::server::certificate::RTCCertificate;
 use sfu::server::config::ServerConfig;
@@ -128,6 +129,8 @@ fn main() -> anyhow::Result<()> {
                     .with_extended_master_secret(dtls::config::ExtendedMasterSecretType::Require)
                     .build(false, None)
                     .unwrap();
+                let sctp_endpoint_config = sctp::EndpointConfig::default();
+
                 let server_states = Rc::new(ServerStates::new(server_config,
                                                               SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap()).unwrap());
 
@@ -135,6 +138,7 @@ fn main() -> anyhow::Result<()> {
 
                 let server_states_moved = server_states.clone();
                 let dtls_handshake_config_moved = dtls_handshake_config.clone();
+                let sctp_endpoint_config_moved = sctp_endpoint_config.clone();
                 let mut bootstrap = BootstrapUdpServer::new();
                 bootstrap.pipeline(Box::new(
                     move |writer: AsyncTransportWrite<TaggedBytesMut>| {
@@ -144,6 +148,7 @@ fn main() -> anyhow::Result<()> {
                         let demuxer_handler = DemuxerHandler::new();
                         let stun_handler = StunHandler::new();
                         let dtls_handler = DtlsHandler::new(Rc::clone(&server_states_moved), dtls_handshake_config_moved.clone());
+                        let sctp_handler = SctpHandler::new(Rc::clone(&server_states_moved), sctp_endpoint_config_moved.clone());
                         //TODO: add DTLS and RTP handlers                        
                         let gateway_handler = GatewayHandler::new(Rc::clone(&server_states_moved));
 
@@ -151,6 +156,7 @@ fn main() -> anyhow::Result<()> {
                         pipeline.add_back(demuxer_handler);
                         pipeline.add_back(stun_handler);
                         pipeline.add_back(dtls_handler);
+                        pipeline.add_back(sctp_handler);
                         //TODO: add DTLS and RTP handlers
                         pipeline.add_back(gateway_handler);
 
