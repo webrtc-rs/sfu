@@ -98,9 +98,9 @@ fn main() -> anyhow::Result<()> {
     let mut media_port_thread_map = HashMap::new();
 
     let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
-    let server_config = Arc::new(ServerConfig {
-        certificates: vec![RTCCertificate::from_key_pair(key_pair)?],
-    });
+    let server_config = Arc::new(ServerConfig::new(vec![RTCCertificate::from_key_pair(
+        key_pair,
+    )?]));
     let core_num = num_cpus::get();
     let wait_group = WaitGroup::new();
 

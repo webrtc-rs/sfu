@@ -5,12 +5,11 @@ use sdp::SessionDescription;
 use shared::error::{Error, Result};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 use std::rc::Rc;
 
 pub mod description;
 
-use crate::server::certificate::RTCCertificate;
+use crate::server::config::SessionConfig;
 use crate::server::endpoint::candidate::{Candidate, DTLSRole, RTCIceParameters};
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
@@ -25,30 +24,27 @@ use crate::server::session::description::{
 use crate::types::{EndpointId, SessionId};
 
 #[derive(Debug)]
-pub struct Session {
+pub(crate) struct Session {
+    session_config: SessionConfig,
     session_id: SessionId,
-    local_addr: SocketAddr,
-    certificates: Vec<RTCCertificate>,
     endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
 }
 
 impl Session {
-    pub fn new(
-        session_id: SessionId,
-        local_addr: SocketAddr,
-        certificates: Vec<RTCCertificate>,
-    ) -> Self {
+    pub(crate) fn new(session_config: SessionConfig, session_id: SessionId) -> Self {
         Self {
+            session_config,
             session_id,
-            local_addr,
-            certificates,
-
             endpoints: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn session_id(&self) -> u64 {
+    pub(crate) fn session_id(&self) -> u64 {
         self.session_id
+    }
+
+    pub(crate) fn session_config(&self) -> &SessionConfig {
+        &self.session_config
     }
 
     pub(crate) fn add_endpoint(
@@ -202,16 +198,17 @@ impl Session {
             }
         }
 
-        let dtls_fingerprints = if let Some(cert) = self.certificates.first() {
-            cert.get_fingerprints()
-        } else {
-            return Err(Error::Other("ErrNonCertificate".to_string()));
-        };
+        let dtls_fingerprints =
+            if let Some(cert) = self.session_config.server_config.certificates.first() {
+                cert.get_fingerprints()
+            } else {
+                return Err(Error::Other("ErrNonCertificate".to_string()));
+            };
 
         populate_sdp(
             d,
             &dtls_fingerprints,
-            &self.local_addr,
+            &self.session_config.local_addr,
             local_ice_params,
             connection_role,
             &media_sections,

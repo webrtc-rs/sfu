@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 
 pub type SessionId = u64;
 pub type EndpointId = u64;
-
 pub type UserName = String;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]

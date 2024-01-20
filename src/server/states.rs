@@ -1,31 +1,31 @@
-use crate::server::config::ServerConfig;
+use crate::server::config::{ServerConfig, SessionConfig};
 use crate::server::endpoint::candidate::{Candidate, ConnectionCredentials};
-use crate::server::endpoint::Endpoint;
 use crate::server::session::description::RTCSessionDescription;
 use crate::server::session::Session;
-use crate::types::{EndpointId, FourTuple, SessionId, UserName};
+use crate::types::{EndpointId, SessionId, UserName};
 use shared::error::{Error, Result};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct ServerStates {
-    config: Arc<ServerConfig>,
+    server_config: Arc<ServerConfig>,
     local_addr: SocketAddr,
     sessions: RefCell<HashMap<SessionId, Rc<Session>>>,
 
-    // Thread-local map
     //TODO: add idle timeout cleanup logic to remove idle endpoint and candidates
-    endpoints: RefCell<HashMap<FourTuple, Rc<Endpoint>>>,
     candidates: RefCell<HashMap<UserName, Rc<Candidate>>>,
+    //endpoints: RefCell<HashMap<FourTuple, Rc<Endpoint>>>,
 }
 
 impl ServerStates {
-    pub fn new(config: Arc<ServerConfig>, local_addr: SocketAddr) -> Result<Self> {
-        let _ = config
+    /// create new server states
+    pub fn new(server_config: Arc<ServerConfig>, local_addr: SocketAddr) -> Result<Self> {
+        let _ = server_config
             .certificates
             .first()
             .ok_or(Error::ErrInvalidCertificate)?
@@ -34,40 +34,17 @@ impl ServerStates {
             .ok_or(Error::ErrInvalidCertificate)?;
 
         Ok(Self {
-            config,
+            server_config,
             local_addr,
             sessions: RefCell::new(HashMap::new()),
 
-            endpoints: RefCell::new(HashMap::new()),
             candidates: RefCell::new(HashMap::new()),
+            //endpoints: RefCell::new(HashMap::new()),
         })
     }
 
-    pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr
-    }
-
-    pub fn create_or_get_session(&self, session_id: SessionId) -> Rc<Session> {
-        let mut sessions = self.sessions.borrow_mut();
-        if let Some(session) = sessions.get(&session_id) {
-            session.clone()
-        } else {
-            let session = Rc::new(Session::new(
-                session_id,
-                self.local_addr,
-                self.config.certificates.clone(),
-            ));
-            sessions.insert(session_id, Rc::clone(&session));
-            session
-        }
-    }
-
-    pub(crate) fn get_session(&self, session_id: &SessionId) -> Option<Rc<Session>> {
-        self.sessions.borrow().get(session_id).cloned()
-    }
-
-    // set pending offer and return answer
-    pub fn accept_pending_offer(
+    /// accept offer and return answer
+    pub fn accept_offer(
         &self,
         session_id: SessionId,
         endpoint_id: EndpointId,
@@ -79,7 +56,7 @@ impl ServerStates {
         offer.parsed = Some(parsed);
 
         let local_conn_cred = ConnectionCredentials::new(
-            &self.config.certificates,
+            &self.server_config.certificates,
             remote_conn_cred.dtls_params.role,
         );
 
@@ -94,22 +71,43 @@ impl ServerStates {
             local_conn_cred,
             offer,
             answer.clone(),
+            Instant::now() + self.server_config.candidate_idle_timeout,
         )));
 
         Ok(answer)
     }
 
-    pub(crate) fn add_candidate(&self, candidate: Rc<Candidate>) -> bool {
-        let username = candidate.username();
-        let mut candidates = self.candidates.borrow_mut();
-        candidates.insert(username, candidate).is_some()
+    pub(crate) fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 
-    //TODO: add idle timeout to remove candidate
-    pub(crate) fn remove_candidate(&self, candidate: &Rc<Candidate>) -> bool {
+    pub(crate) fn create_or_get_session(&self, session_id: SessionId) -> Rc<Session> {
+        let mut sessions = self.sessions.borrow_mut();
+        if let Some(session) = sessions.get(&session_id) {
+            session.clone()
+        } else {
+            let session = Rc::new(Session::new(
+                SessionConfig::new(Arc::clone(&self.server_config), self.local_addr),
+                session_id,
+            ));
+            sessions.insert(session_id, Rc::clone(&session));
+            session
+        }
+    }
+
+    pub(crate) fn get_session(&self, session_id: &SessionId) -> Option<Rc<Session>> {
+        self.sessions.borrow().get(session_id).cloned()
+    }
+
+    pub(crate) fn add_candidate(&self, candidate: Rc<Candidate>) -> Option<Rc<Candidate>> {
         let username = candidate.username();
         let mut candidates = self.candidates.borrow_mut();
-        candidates.remove(&username).is_some()
+        candidates.insert(username, candidate)
+    }
+
+    pub(crate) fn remove_candidate(&self, username: &UserName) -> Option<Rc<Candidate>> {
+        let mut candidates = self.candidates.borrow_mut();
+        candidates.remove(username)
     }
 
     pub(crate) fn find_candidate(&self, username: &UserName) -> Option<Rc<Candidate>> {

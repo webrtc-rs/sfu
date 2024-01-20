@@ -8,6 +8,7 @@ use sdp::SessionDescription;
 use serde::{Deserialize, Serialize};
 use shared::error::{Error, Result};
 use std::fmt;
+use std::time::Instant;
 
 /// DtlsRole indicates the role of the DTLS transport.
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,7 +182,7 @@ impl ConnectionCredentials {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Candidate {
     session_id: SessionId,
     endpoint_id: EndpointId,
@@ -189,6 +190,7 @@ pub struct Candidate {
     local_conn_cred: ConnectionCredentials,
     remote_description: RTCSessionDescription,
     local_description: RTCSessionDescription,
+    expired_time: Instant,
 }
 
 impl Candidate {
@@ -199,6 +201,7 @@ impl Candidate {
         local_conn_cred: ConnectionCredentials,
         remote_description: RTCSessionDescription,
         local_description: RTCSessionDescription,
+        expired_time: Instant,
     ) -> Self {
         Self {
             session_id,
@@ -207,6 +210,7 @@ impl Candidate {
             remote_conn_cred,
             remote_description,
             local_description,
+            expired_time,
         }
     }
 
@@ -250,5 +254,9 @@ impl Candidate {
 
     pub(crate) fn local_description(&self) -> &RTCSessionDescription {
         &self.local_description
+    }
+
+    pub(crate) fn expired_time(&self) -> Instant {
+        self.expired_time
     }
 }
