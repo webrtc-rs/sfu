@@ -33,6 +33,13 @@ pub struct DataChannelMessage {
 }
 
 #[derive(Debug)]
+pub struct ApplicationMessage {
+    pub(crate) association_handle: usize,
+    pub(crate) stream_id: u16,
+    pub(crate) payload: BytesMut,
+}
+
+#[derive(Debug)]
 pub enum STUNMessageEvent {
     RAW(BytesMut),
     STUN(stun::message::Message),
@@ -42,7 +49,7 @@ pub enum STUNMessageEvent {
 pub enum DTLSMessageEvent {
     RAW(BytesMut),
     SCTP(DataChannelMessage),
-    APPLICATION(BytesMut),
+    APPLICATION(ApplicationMessage),
 }
 
 #[derive(Debug)]

@@ -7,6 +7,7 @@ use retty::bootstrap::BootstrapUdpServer;
 use retty::channel::Pipeline;
 use retty::executor::LocalExecutorBuilder;
 use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
+use sfu::handlers::data::DataChannelHandler;
 use sfu::handlers::demuxer::DemuxerHandler;
 use sfu::handlers::dtls::DtlsHandler;
 use sfu::handlers::gateway::GatewayHandler;
@@ -149,6 +150,7 @@ fn main() -> anyhow::Result<()> {
                         let stun_handler = StunHandler::new();
                         let dtls_handler = DtlsHandler::new(Rc::clone(&server_states_moved), dtls_handshake_config_moved.clone());
                         let sctp_handler = SctpHandler::new(Rc::clone(&server_states_moved), sctp_endpoint_config_moved.clone());
+                        let data_channel_handler = DataChannelHandler::new();
                         //TODO: add DTLS and RTP handlers                        
                         let gateway_handler = GatewayHandler::new(Rc::clone(&server_states_moved));
 
@@ -157,6 +159,7 @@ fn main() -> anyhow::Result<()> {
                         pipeline.add_back(stun_handler);
                         pipeline.add_back(dtls_handler);
                         pipeline.add_back(sctp_handler);
+                        pipeline.add_back(data_channel_handler);
                         //TODO: add DTLS and RTP handlers
                         pipeline.add_back(gateway_handler);
 

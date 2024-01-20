@@ -126,7 +126,9 @@ impl InboundHandler for SctpInbound {
                                         association_handle: ch.0,
                                         stream_id: id,
                                         data_message_type: to_data_message_type(chunks.ppi),
-                                        params: DataChannelMessageParams::Inbound { seq_num: 0 },
+                                        params: DataChannelMessageParams::Inbound {
+                                            seq_num: chunks.ssn,
+                                        },
                                         payload: BytesMut::from(&self.internal_buffer[0..n]),
                                     });
                                 }
