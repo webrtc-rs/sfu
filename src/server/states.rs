@@ -4,6 +4,7 @@ use crate::server::session::description::RTCSessionDescription;
 use crate::server::session::Session;
 use crate::types::{EndpointId, SessionId, UserName};
 use shared::error::{Error, Result};
+use srtp::context::Context;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -11,7 +12,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-#[derive(Debug)]
 pub struct ServerStates {
     server_config: Arc<ServerConfig>,
     local_addr: SocketAddr,
@@ -19,6 +19,8 @@ pub struct ServerStates {
 
     //TODO: add idle timeout cleanup logic to remove idle endpoint and candidates
     candidates: RefCell<HashMap<UserName, Rc<Candidate>>>,
+    local_srtp_contexts: RefCell<HashMap<SocketAddr, Context>>,
+    remote_srtp_contexts: RefCell<HashMap<SocketAddr, Context>>,
     //endpoints: RefCell<HashMap<FourTuple, Rc<Endpoint>>>,
 }
 
@@ -39,6 +41,8 @@ impl ServerStates {
             sessions: RefCell::new(HashMap::new()),
 
             candidates: RefCell::new(HashMap::new()),
+            local_srtp_contexts: RefCell::new(HashMap::new()),
+            remote_srtp_contexts: RefCell::new(HashMap::new()),
             //endpoints: RefCell::new(HashMap::new()),
         })
     }
@@ -79,6 +83,14 @@ impl ServerStates {
 
     pub(crate) fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    pub(crate) fn local_srtp_contexts(&self) -> &RefCell<HashMap<SocketAddr, Context>> {
+        &self.local_srtp_contexts
+    }
+
+    pub(crate) fn remote_srtp_contexts(&self) -> &RefCell<HashMap<SocketAddr, Context>> {
+        &self.remote_srtp_contexts
     }
 
     pub(crate) fn create_or_get_session(&self, session_id: SessionId) -> Rc<Session> {

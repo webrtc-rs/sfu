@@ -8,6 +8,7 @@ use retty::channel::Pipeline;
 use retty::executor::LocalExecutorBuilder;
 use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
 use sfu::handlers::demuxer::DemuxerHandler;
+use sfu::handlers::dtls::DtlsHandler;
 use sfu::handlers::gateway::GatewayHandler;
 use sfu::handlers::stun::StunHandler;
 use sfu::server::certificate::RTCCertificate;
@@ -119,7 +120,7 @@ fn main() -> anyhow::Result<()> {
             })
             .spawn(move || async move {
                 let _worker = worker;
-                let _dtls_handshake_config = dtls::config::ConfigBuilder::default()
+                let dtls_handshake_config = dtls::config::ConfigBuilder::default()
                     .with_certificates(server_config.certificates.iter().map(|c| c.dtls_certificate.clone()).collect())
                     .with_srtp_protection_profiles(vec![
                         SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80,
@@ -133,6 +134,7 @@ fn main() -> anyhow::Result<()> {
                 info!("listening {}:{}...", host, port);
 
                 let server_states_moved = server_states.clone();
+                let dtls_handshake_config_moved = dtls_handshake_config.clone();
                 let mut bootstrap = BootstrapUdpServer::new();
                 bootstrap.pipeline(Box::new(
                     move |writer: AsyncTransportWrite<TaggedBytesMut>| {
@@ -141,12 +143,14 @@ fn main() -> anyhow::Result<()> {
                         let async_transport_handler = AsyncTransport::new(writer);
                         let demuxer_handler = DemuxerHandler::new();
                         let stun_handler = StunHandler::new();
+                        let dtls_handler = DtlsHandler::new(Rc::clone(&server_states_moved), dtls_handshake_config_moved.clone());
                         //TODO: add DTLS and RTP handlers                        
                         let gateway_handler = GatewayHandler::new(Rc::clone(&server_states_moved));
 
                         pipeline.add_back(async_transport_handler);
                         pipeline.add_back(demuxer_handler);
                         pipeline.add_back(stun_handler);
+                        pipeline.add_back(dtls_handler);
                         //TODO: add DTLS and RTP handlers
                         pipeline.add_back(gateway_handler);
 
