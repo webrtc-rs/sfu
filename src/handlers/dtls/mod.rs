@@ -159,6 +159,7 @@ impl OutboundHandler for DtlsOutbound {
                 dtls_endpoint.write(msg.transport.peer_addr, &dtls_message)
             };
             if let Err(err) = try_write() {
+                error!("try_write with error {}", err);
                 ctx.fire_write_exception(Box::new(err));
             }
             handle_outgoing(ctx, &self.dtls_endpoint, msg.transport.local_addr);

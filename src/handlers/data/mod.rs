@@ -5,7 +5,7 @@ use crate::messages::{
 use data::message::{message_channel_ack::*, message_channel_open::*, message_type::*, *};
 use log::{debug, error};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
-use shared::error::{Error, Result};
+use shared::error::Result;
 use shared::marshal::*;
 
 #[derive(Default)]
@@ -66,7 +66,7 @@ impl InboundHandler for DataChannelInbound {
                         } else {
                             Ok((None, None))
                         }
-                    } else if message.data_message_type == DataChannelMessageType::Binary {
+                    } else {
                         Ok((
                             Some(ApplicationMessage {
                                 association_handle: message.association_handle,
@@ -75,8 +75,6 @@ impl InboundHandler for DataChannelInbound {
                             }),
                             None,
                         ))
-                    } else {
-                        Err(Error::UnknownProtocol)
                     }
                 };
 

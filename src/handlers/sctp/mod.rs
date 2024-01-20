@@ -56,7 +56,14 @@ impl SctpHandler {
                 sctp_endpoint: Rc::clone(&sctp_endpoint),
 
                 transmits: VecDeque::new(),
-                internal_buffer: vec![0u8; 1500],
+                internal_buffer: vec![
+                    0u8;
+                    server_states
+                        .server_config()
+                        .sctp_server_config
+                        .transport
+                        .max_message_size() as usize
+                ],
             },
             sctp_outbound: SctpOutbound {
                 server_states,
@@ -240,13 +247,14 @@ impl OutboundHandler for SctpOutbound {
                 msg.transport.peer_addr, message
             );
             let mut try_write = || -> Result<()> {
-                let max_payload_size = {
-                    self.sctp_endpoint
-                        .borrow()
-                        .endpoint_config()
-                        .get_max_payload_size() as usize
+                let max_message_size = {
+                    self.server_states
+                        .server_config()
+                        .sctp_server_config
+                        .transport
+                        .max_message_size() as usize as usize
                 };
-                if message.payload.len() > max_payload_size {
+                if message.payload.len() > max_message_size {
                     return Err(Error::ErrOutboundPacketTooLarge);
                 }
 
@@ -288,6 +296,7 @@ impl OutboundHandler for SctpOutbound {
                 Ok(())
             };
             if let Err(err) = try_write() {
+                error!("try_write with error {}", err);
                 ctx.fire_write_exception(Box::new(err));
             }
             handle_outgoing(ctx, &mut self.transmits, msg.transport.local_addr);
