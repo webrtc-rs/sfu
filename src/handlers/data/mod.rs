@@ -131,7 +131,7 @@ impl OutboundHandler for DataChannelOutbound {
                 message: MessageEvent::DTLS(DTLSMessageEvent::SCTP(DataChannelMessage {
                     association_handle: message.association_handle,
                     stream_id: message.stream_id,
-                    data_message_type: DataChannelMessageType::Binary,
+                    data_message_type: DataChannelMessageType::Text,
                     params: DataChannelMessageParams::Outbound {
                         ordered: true,
                         reliable: true,

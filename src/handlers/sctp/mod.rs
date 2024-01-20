@@ -252,7 +252,7 @@ impl OutboundHandler for SctpOutbound {
                         .server_config()
                         .sctp_server_config
                         .transport
-                        .max_message_size() as usize as usize
+                        .max_message_size() as usize
                 };
                 if message.payload.len() > max_message_size {
                     return Err(Error::ErrOutboundPacketTooLarge);

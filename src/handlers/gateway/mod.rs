@@ -6,6 +6,7 @@ use crate::server::endpoint::{candidate::Candidate, Endpoint};
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::RTCSessionDescription;
 use crate::server::states::ServerStates;
+use bytes::BytesMut;
 use log::{debug, info, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;
@@ -167,26 +168,47 @@ impl GatewayInbound {
         &mut self,
         now: Instant,
         transport_context: TransportContext,
-        message: ApplicationMessage,
+        mut message: ApplicationMessage,
     ) -> Result<TaggedMessageEvent> {
-        let sdp_str = String::from_utf8(message.payload.to_vec())?;
-        info!("handle_dtls_message: {}", sdp_str);
+        let request_sdp_str = String::from_utf8(message.payload.to_vec())?;
+        info!("handle_dtls_message: request_sdp {}", request_sdp_str);
 
-        let mut sdp = serde_json::from_str::<RTCSessionDescription>(&sdp_str)
+        let mut request_sdp = serde_json::from_str::<RTCSessionDescription>(&request_sdp_str)
             .map_err(|err| Error::Other(err.to_string()))?;
-        sdp.parsed = Some(sdp.unmarshal()?);
+        request_sdp.parsed = Some(request_sdp.unmarshal()?);
 
-        match sdp.sdp_type {
-            RTCSdpType::Offer => {}
-            RTCSdpType::Answer => {}
-            _ => {}
+        let response_sdp = match request_sdp.sdp_type {
+            RTCSdpType::Offer => self.handle_offer_sdp(request_sdp)?,
+            RTCSdpType::Answer => self.handle_answer_sdp(request_sdp)?,
+            _ => {
+                return Err(Error::Other(format!(
+                    "Unsupport SDP type {}",
+                    request_sdp.sdp_type
+                )))
+            }
         };
+
+        let response_sdp_str =
+            serde_json::to_string(&response_sdp).map_err(|err| Error::Other(err.to_string()))?;
+        info!("handle_dtls_message: response_sdp {}", response_sdp_str);
+        message.payload = BytesMut::from(response_sdp_str.as_str());
 
         Ok(TaggedMessageEvent {
             now,
             transport: transport_context,
             message: MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)),
         })
+    }
+
+    fn handle_offer_sdp(&mut self, offer: RTCSessionDescription) -> Result<RTCSessionDescription> {
+        Ok(offer)
+    }
+
+    fn handle_answer_sdp(
+        &mut self,
+        answer: RTCSessionDescription,
+    ) -> Result<RTCSessionDescription> {
+        Ok(answer)
     }
 
     fn check_stun_message(
