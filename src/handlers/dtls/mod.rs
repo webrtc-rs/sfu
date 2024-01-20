@@ -10,7 +10,7 @@ use crate::server::states::ServerStates;
 use dtls::endpoint::EndpointEvent;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use dtls::state::State;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use shared::error::{Error, Result};
 use srtp::context::Context;
 use srtp::option::{srtcp_replay_protection, srtp_replay_protection};
@@ -82,6 +82,7 @@ impl InboundHandler for DtlsInbound {
                                     if let Err(err) =
                                         self.update_srtp_contexts(state, msg.transport.peer_addr)
                                     {
+                                        error!("try_read with error {}", err);
                                         ctx.fire_read_exception(Box::new(err));
                                     }
                                 } else {
@@ -102,7 +103,10 @@ impl InboundHandler for DtlsInbound {
                         }
                     }
                 }
-                Err(err) => ctx.fire_read_exception(Box::new(err)),
+                Err(err) => {
+                    error!("try_read with error {}", err);
+                    ctx.fire_read_exception(Box::new(err))
+                }
             };
             handle_outgoing(ctx, &self.dtls_endpoint, msg.transport.local_addr);
         } else {
@@ -123,6 +127,7 @@ impl InboundHandler for DtlsInbound {
             Ok(())
         };
         if let Err(err) = try_timeout() {
+            error!("try_timeout with error {}", err);
             ctx.fire_read_exception(Box::new(err));
         }
         handle_outgoing(ctx, &self.dtls_endpoint, self.server_states.local_addr());

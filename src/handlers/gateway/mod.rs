@@ -1,8 +1,12 @@
-use crate::messages::{MessageEvent, STUNMessageEvent, TaggedMessageEvent};
+use crate::messages::{
+    ApplicationMessage, DTLSMessageEvent, MessageEvent, STUNMessageEvent, TaggedMessageEvent,
+};
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::{candidate::Candidate, Endpoint};
+use crate::server::session::description::sdp_type::RTCSdpType;
+use crate::server::session::description::RTCSessionDescription;
 use crate::server::states::ServerStates;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;
 use shared::error::{Error, Result};
@@ -50,6 +54,9 @@ impl InboundHandler for GatewayInbound {
             match msg.message {
                 MessageEvent::STUN(STUNMessageEvent::STUN(message)) => Ok(Some(
                     self.handle_stun_message(msg.now, msg.transport, message)?,
+                )),
+                MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)) => Ok(Some(
+                    self.handle_dtls_message(msg.now, msg.transport, message)?,
                 )),
                 _ => {
                     warn!(
@@ -153,6 +160,32 @@ impl GatewayInbound {
             now,
             transport: transport_context,
             message: MessageEvent::STUN(STUNMessageEvent::STUN(response)),
+        })
+    }
+
+    fn handle_dtls_message(
+        &mut self,
+        now: Instant,
+        transport_context: TransportContext,
+        message: ApplicationMessage,
+    ) -> Result<TaggedMessageEvent> {
+        let sdp_str = String::from_utf8(message.payload.to_vec())?;
+        info!("handle_dtls_message: {}", sdp_str);
+
+        let mut sdp = serde_json::from_str::<RTCSessionDescription>(&sdp_str)
+            .map_err(|err| Error::Other(err.to_string()))?;
+        sdp.parsed = Some(sdp.unmarshal()?);
+
+        match sdp.sdp_type {
+            RTCSdpType::Offer => {}
+            RTCSdpType::Answer => {}
+            _ => {}
+        };
+
+        Ok(TaggedMessageEvent {
+            now,
+            transport: transport_context,
+            message: MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)),
         })
     }
 

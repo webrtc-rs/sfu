@@ -4,7 +4,7 @@ use crate::messages::{
 };
 use crate::server::states::ServerStates;
 use bytes::BytesMut;
-use log::debug;
+use log::{debug, error};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;
 use sctp::{
@@ -74,7 +74,7 @@ impl InboundHandler for SctpInbound {
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
         if let MessageEvent::DTLS(DTLSMessageEvent::RAW(dtls_message)) = msg.message {
-            debug!("recv dtls RAW {:?}", msg.transport.peer_addr);
+            debug!("recv sctp RAW {:?}", msg.transport.peer_addr);
             let try_read = || -> Result<Vec<DataChannelMessage>> {
                 let handle_result = {
                     let mut sctp_endpoint = self.sctp_endpoint.borrow_mut();
@@ -167,7 +167,10 @@ impl InboundHandler for SctpInbound {
                         })
                     }
                 }
-                Err(err) => ctx.fire_read_exception(Box::new(err)),
+                Err(err) => {
+                    error!("try_read with error {}", err);
+                    ctx.fire_read_exception(Box::new(err))
+                }
             };
             handle_outgoing(ctx, &mut self.transmits, msg.transport.local_addr);
         } else {
@@ -203,6 +206,7 @@ impl InboundHandler for SctpInbound {
             Ok(())
         };
         if let Err(err) = try_timeout() {
+            error!("try_timeout with error {}", err);
             ctx.fire_read_exception(Box::new(err));
         }
         handle_outgoing(ctx, &mut self.transmits, self.server_states.local_addr());

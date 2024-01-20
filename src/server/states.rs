@@ -57,7 +57,6 @@ impl ServerStates {
         endpoint_id: EndpointId,
         mut offer: RTCSessionDescription,
     ) -> Result<RTCSessionDescription> {
-        offer.unmarshal()?;
         let parsed = offer.unmarshal()?;
         let remote_conn_cred = ConnectionCredentials::from_sdp(&parsed)?;
         offer.parsed = Some(parsed);

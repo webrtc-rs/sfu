@@ -3,7 +3,7 @@ use crate::messages::{
     DataChannelMessageType, MessageEvent, TaggedMessageEvent,
 };
 use data::message::{message_channel_ack::*, message_channel_open::*, message_type::*, *};
-use log::debug;
+use log::{debug, error};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use shared::error::{Error, Result};
 use shared::marshal::*;
@@ -44,7 +44,8 @@ impl InboundHandler for DataChannelInbound {
                             message.stream_id,
                             message.data_message_type);
 
-                            let _ = DataChannelOpen::unmarshal(&mut buf)?;
+                            let open = DataChannelOpen::unmarshal(&mut buf)?;
+                            debug!("recv DataChannelOpen {:?}", open);
 
                             let payload = Message::DataChannelAck(DataChannelAck {}).marshal()?;
                             Ok((
@@ -102,7 +103,10 @@ impl InboundHandler for DataChannelInbound {
                         });
                     }
                 }
-                Err(err) => ctx.fire_read_exception(Box::new(err)),
+                Err(err) => {
+                    error!("try_read with error {}", err);
+                    ctx.fire_read_exception(Box::new(err))
+                }
             };
         } else {
             // Bypass
@@ -144,10 +148,6 @@ impl OutboundHandler for DataChannelOutbound {
             debug!("bypass DataChannel write {:?}", msg.transport.peer_addr);
             ctx.fire_write(msg);
         }
-    }
-
-    fn close(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>) {
-        ctx.fire_close();
     }
 }
 
