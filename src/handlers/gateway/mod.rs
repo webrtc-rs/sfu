@@ -173,12 +173,24 @@ impl GatewayInbound {
         let request_sdp_str = String::from_utf8(message.payload.to_vec())?;
         info!("handle_dtls_message: request_sdp {}", request_sdp_str);
 
-        let mut request_sdp = serde_json::from_str::<RTCSessionDescription>(&request_sdp_str)
+        let request_sdp = serde_json::from_str::<RTCSessionDescription>(&request_sdp_str)
             .map_err(|err| Error::Other(err.to_string()))?;
-        request_sdp.parsed = Some(request_sdp.unmarshal()?);
+
+        let four_tuple = (&transport_context).into();
+        let (session_id, endpoint_id) = {
+            let endpoint = self
+                .server_states
+                .find_endpoint(&four_tuple)
+                .ok_or(Error::ErrClientTransportNotSet)?;
+            let session = endpoint.session().upgrade().ok_or(Error::SessionEof)?;
+            (session.session_id(), endpoint.endpoint_id())
+        };
 
         let response_sdp = match request_sdp.sdp_type {
-            RTCSdpType::Offer => self.handle_offer_sdp(request_sdp)?,
+            RTCSdpType::Offer => {
+                self.server_states
+                    .accept_offer(session_id, endpoint_id, request_sdp)?
+            }
             RTCSdpType::Answer => self.handle_answer_sdp(request_sdp)?,
             _ => {
                 return Err(Error::Other(format!(
@@ -198,10 +210,6 @@ impl GatewayInbound {
             transport: transport_context,
             message: MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)),
         })
-    }
-
-    fn handle_offer_sdp(&mut self, offer: RTCSessionDescription) -> Result<RTCSessionDescription> {
-        Ok(offer)
     }
 
     fn handle_answer_sdp(
@@ -307,8 +315,8 @@ impl GatewayInbound {
 
         let endpoint_id = candidate.endpoint_id();
         let endpoint = session.get_endpoint(&endpoint_id);
+        let four_tuple = transport_context.into();
         let transport = if let Some(endpoint) = &endpoint {
-            let four_tuple = transport_context.into();
             endpoint.get_transport(&four_tuple)
         } else {
             is_new_endpoint = true;
@@ -321,6 +329,10 @@ impl GatewayInbound {
 
         let (is_new_endpoint, endpoint, transport) =
             session.add_endpoint(candidate, transport_context)?;
+
+        self.server_states
+            .add_endpoint(four_tuple, Rc::clone(&endpoint));
+
         Ok((is_new_endpoint, Some(endpoint), Some(transport)))
     }
 }

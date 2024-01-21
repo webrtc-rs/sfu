@@ -83,7 +83,11 @@ impl Session {
         self.endpoints.borrow().get(endpoint_id).cloned()
     }
 
-    pub(crate) fn create_pending_answer(
+    pub(crate) fn has_endpoint(&self, endpoint_id: &EndpointId) -> bool {
+        self.endpoints.borrow().contains_key(endpoint_id)
+    }
+
+    pub(crate) fn create_answer(
         &self,
         _endpoint_id: EndpointId,
         remote_description: &RTCSessionDescription,
