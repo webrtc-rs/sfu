@@ -136,7 +136,7 @@ pub struct RTCRtpHeaderExtensionParameters {
 pub struct RTCRtpCodecParameters {
     pub capability: RTCRtpCodecCapability,
     pub payload_type: PayloadType,
-    pub stats_id: String,
+    //pub stats_id: String,
 }
 
 /// RTPParameters is a list of negotiated codecs and header extensions

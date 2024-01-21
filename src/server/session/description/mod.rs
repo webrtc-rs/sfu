@@ -9,7 +9,7 @@ pub(crate) mod sdp_type;
 use crate::server::certificate::RTCDtlsFingerprint;
 use crate::server::endpoint::candidate::RTCIceParameters;
 use crate::server::session::description::rtp_codec::{
-    RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpParameters,
+    RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpHeaderExtensionParameters,
 };
 use crate::server::session::description::rtp_transceiver::{
     PayloadType, RTCPFeedback, RTCRtpTransceiver,
@@ -271,7 +271,7 @@ pub(crate) fn add_transceiver_sdp(
             .with_property_attribute(ATTR_KEY_RTCPMUX.to_owned())
             .with_property_attribute(ATTR_KEY_RTCPRSIZE.to_owned());
 
-    let codecs = &transceiver.get_codecs();
+    let codecs = transceiver.get_codecs();
     for codec in codecs {
         let name = codec
             .capability
@@ -340,10 +340,10 @@ pub(crate) fn add_transceiver_sdp(
         return Ok((d, false));
     }
 
-    let parameters = RTCRtpParameters::default(); //TODO: media_engine.get_rtp_parameters_by_kind(t.kind, t.direction());
-    for rtp_extension in &parameters.header_extensions {
+    let header_extensions = transceiver.get_header_extensions();
+    for rtp_extension in header_extensions {
         let ext_url = Url::parse(rtp_extension.uri.as_str())?;
-        media = media.with_extmap(sdp::extmap::ExtMap {
+        media = media.with_extmap(ExtMap {
             value: rtp_extension.id,
             uri: Some(ext_url),
             ..Default::default()
@@ -754,7 +754,7 @@ pub(crate) fn codecs_from_media_description(
                 rtcp_feedbacks: feedback,
             },
             payload_type,
-            stats_id: String::new(),
+            //stats_id: String::new(),
         })
     }
 
@@ -763,8 +763,8 @@ pub(crate) fn codecs_from_media_description(
 
 pub(crate) fn rtp_extensions_from_media_description(
     m: &MediaDescription,
-) -> Result<HashMap<String, isize>> {
-    let mut out = HashMap::new();
+) -> Result<Vec<RTCRtpHeaderExtensionParameters>> {
+    let mut out = vec![];
 
     for a in &m.attributes {
         if a.key == ATTR_KEY_EXT_MAP {
@@ -774,7 +774,10 @@ pub(crate) fn rtp_extensions_from_media_description(
                 ExtMap::unmarshal(&mut reader).map_err(|err| Error::Other(format!("{}", err)))?;
 
             if let Some(uri) = e.uri {
-                out.insert(uri.to_string(), e.value);
+                out.push(RTCRtpHeaderExtensionParameters {
+                    uri: uri.to_string(),
+                    id: e.value,
+                });
             }
         }
     }

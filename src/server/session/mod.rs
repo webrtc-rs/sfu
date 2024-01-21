@@ -1,4 +1,3 @@
-use log::debug;
 use retty::transport::TransportContext;
 use sdp::description::session::Origin;
 use sdp::util::ConnectionRole;
@@ -14,14 +13,15 @@ use crate::server::config::SessionConfig;
 use crate::server::endpoint::candidate::{Candidate, DTLSRole, RTCIceParameters};
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
-use crate::server::session::description::rtp_codec::RTPCodecType;
+use crate::server::session::description::rtp_codec::{RTCRtpParameters, RTPCodecType};
 use crate::server::session::description::rtp_sender::RTCRtpSender;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::{
     codecs_from_media_description, get_mid_value, get_peer_direction, get_rids, populate_sdp,
-    update_sdp_origin, MediaSection, RTCSessionDescription, MEDIA_SECTION_APPLICATION,
+    rtp_extensions_from_media_description, update_sdp_origin, MediaSection, RTCSessionDescription,
+    MEDIA_SECTION_APPLICATION,
 };
 use crate::types::{EndpointId, Mid, SessionId};
 
@@ -145,7 +145,13 @@ impl Session {
 
                     let sender = RTCRtpSender::new();
                     let codecs = codecs_from_media_description(media)?;
-                    let transceiver = RTCRtpTransceiver::new(sender, local_direction, codecs, kind);
+                    let header_extensions = rtp_extensions_from_media_description(media)?;
+                    let rtp_params = RTCRtpParameters {
+                        header_extensions,
+                        codecs,
+                    };
+                    let transceiver =
+                        RTCRtpTransceiver::new(sender, local_direction, rtp_params, kind);
                     local_transceivers.insert(mid_value.to_string(), transceiver);
                 }
             }

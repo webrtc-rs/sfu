@@ -1,4 +1,6 @@
-use crate::server::session::description::rtp_codec::{RTCRtpCodecParameters, RTPCodecType};
+use crate::server::session::description::rtp_codec::{
+    RTCRtpCodecParameters, RTCRtpHeaderExtensionParameters, RTCRtpParameters, RTPCodecType,
+};
 use crate::server::session::description::rtp_sender::RTCRtpSender;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use log::{debug, trace};
@@ -55,7 +57,7 @@ pub struct RTCRtpTransceiver {
     //pub(crate) receiver: RTCRtpReceiver,
     pub(crate) direction: RTCRtpTransceiverDirection,
     current_direction: RTCRtpTransceiverDirection,
-    codecs: Vec<RTCRtpCodecParameters>, // User provided codecs via set_codec_preferences
+    rtp_params: RTCRtpParameters,
     pub(crate) stopped: bool,
     pub(crate) kind: RTPCodecType,
     //media_engine: Arc<MediaEngine>,
@@ -67,14 +69,14 @@ impl RTCRtpTransceiver {
     pub(crate) fn new(
         sender: RTCRtpSender,
         direction: RTCRtpTransceiverDirection,
-        codecs: Vec<RTCRtpCodecParameters>,
+        rtp_params: RTCRtpParameters,
         kind: RTPCodecType,
     ) -> Self {
         Self {
             sender,
             direction,
             current_direction: RTCRtpTransceiverDirection::Unspecified,
-            codecs,
+            rtp_params,
             stopped: false,
             kind,
         }
@@ -143,8 +145,11 @@ impl RTCRtpTransceiver {
         Ok(())
     }
 
-    pub(crate) fn get_codecs(&self) -> Vec<RTCRtpCodecParameters> {
-        //TODO:
-        self.codecs.clone()
+    pub(crate) fn get_codecs(&self) -> &Vec<RTCRtpCodecParameters> {
+        &self.rtp_params.codecs
+    }
+
+    pub(crate) fn get_header_extensions(&self) -> &Vec<RTCRtpHeaderExtensionParameters> {
+        &self.rtp_params.header_extensions
     }
 }
