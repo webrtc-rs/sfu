@@ -55,7 +55,7 @@ pub struct RTCRtpTransceiver {
     //pub(crate) receiver: RTCRtpReceiver,
     pub(crate) direction: RTCRtpTransceiverDirection,
     current_direction: RTCRtpTransceiverDirection,
-    pub(crate) codecs: Vec<RTCRtpCodecParameters>, // User provided codecs via set_codec_preferences
+    codecs: Vec<RTCRtpCodecParameters>, // User provided codecs via set_codec_preferences
     pub(crate) stopped: bool,
     pub(crate) kind: RTPCodecType,
     //media_engine: Arc<MediaEngine>,
@@ -141,5 +141,10 @@ impl RTCRtpTransceiver {
         self.sender.set_paused(pause_sender);
 
         Ok(())
+    }
+
+    pub(crate) fn get_codecs(&self) -> Vec<RTCRtpCodecParameters> {
+        //TODO:
+        self.codecs.clone()
     }
 }

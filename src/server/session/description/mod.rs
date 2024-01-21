@@ -293,7 +293,7 @@ pub(crate) fn add_transceiver_sdp(
             .with_property_attribute(ATTR_KEY_RTCPMUX.to_owned())
             .with_property_attribute(ATTR_KEY_RTCPRSIZE.to_owned());
 
-    let codecs = &transceiver.codecs;
+    let codecs = &transceiver.get_codecs();
     for codec in codecs {
         let name = codec
             .capability
