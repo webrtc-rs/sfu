@@ -1,6 +1,7 @@
 pub mod data;
 pub mod demuxer;
 pub mod dtls;
+pub mod exception;
 pub mod gateway;
 pub mod rtcp;
 pub mod rtp;

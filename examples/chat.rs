@@ -10,6 +10,7 @@ use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
 use sfu::handlers::data::DataChannelHandler;
 use sfu::handlers::demuxer::DemuxerHandler;
 use sfu::handlers::dtls::DtlsHandler;
+use sfu::handlers::exception::ExceptionHandler;
 use sfu::handlers::gateway::GatewayHandler;
 use sfu::handlers::sctp::SctpHandler;
 use sfu::handlers::stun::StunHandler;
@@ -147,21 +148,25 @@ fn main() -> anyhow::Result<()> {
 
                         let async_transport_handler = AsyncTransport::new(writer);
                         let demuxer_handler = DemuxerHandler::new();
+                        let write_exception_handler = ExceptionHandler::new();
                         let stun_handler = StunHandler::new();
                         let dtls_handler = DtlsHandler::new(Rc::clone(&server_states_moved), dtls_handshake_config_moved.clone());
                         let sctp_handler = SctpHandler::new(Rc::clone(&server_states_moved), sctp_endpoint_config_moved.clone());
                         let data_channel_handler = DataChannelHandler::new();
                         //TODO: add DTLS and RTP handlers                        
                         let gateway_handler = GatewayHandler::new(Rc::clone(&server_states_moved));
+                        let read_exception_handler = ExceptionHandler::new();
 
                         pipeline.add_back(async_transport_handler);
                         pipeline.add_back(demuxer_handler);
+                        pipeline.add_back(write_exception_handler);
                         pipeline.add_back(stun_handler);
                         pipeline.add_back(dtls_handler);
                         pipeline.add_back(sctp_handler);
                         pipeline.add_back(data_channel_handler);
                         //TODO: add DTLS and RTP handlers
                         pipeline.add_back(gateway_handler);
+                        pipeline.add_back(read_exception_handler);
 
                         pipeline.finalize()
                     },
