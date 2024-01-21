@@ -12,6 +12,7 @@ use crate::server::session::description::rtp_codec::RTCRtpParameters;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
+use crate::types::Mid;
 use sdp::description::common::{Address, ConnectionInformation};
 use sdp::description::media::{MediaName, RangedPort};
 use sdp::description::session::{
@@ -134,9 +135,8 @@ pub(crate) fn get_rids(media: &MediaDescription) -> HashMap<String, String> {
 }
 
 #[derive(Default)]
-pub(crate) struct MediaSection<'a> {
-    pub(crate) id: String,
-    pub(crate) transceiver: Option<&'a RTCRtpTransceiver>,
+pub(crate) struct MediaSection {
+    pub(crate) mid: Mid,
     pub(crate) data: bool,
     pub(crate) rid_map: HashMap<String, String>,
     pub(crate) offered_direction: Option<RTCRtpTransceiverDirection>,
@@ -271,10 +271,11 @@ pub(crate) fn add_transceiver_sdp(
     dtls_fingerprints: &[RTCDtlsFingerprint],
     ice_params: &RTCIceParameters,
     candidate: &SocketAddr,
-    media_section: &MediaSection<'_>,
+    media_section: &MediaSection,
+    transceiver: Option<&RTCRtpTransceiver>,
     params: AddTransceiverSdpParams,
 ) -> Result<(SessionDescription, bool)> {
-    if media_section.transceiver.is_none() {
+    if transceiver.is_none() {
         return Err(Error::Other("ErrSDPZeroTransceivers".to_string()));
     }
     let (should_add_candidates, mid_value, dtls_role, ice_gathering_state) = (
@@ -285,7 +286,7 @@ pub(crate) fn add_transceiver_sdp(
     );
 
     // Use the first transceiver to generate the section attributes
-    let t = &media_section.transceiver.as_ref().unwrap();
+    let t = &transceiver.as_ref().unwrap();
     let mut media = MediaDescription::new_jsep_media_description(t.kind.to_string(), vec![])
         .with_value_attribute(ATTR_KEY_CONNECTION_SETUP.to_owned(), dtls_role.to_string())
         .with_value_attribute(ATTR_KEY_MID.to_owned(), mid_value.clone())
@@ -483,13 +484,15 @@ pub(crate) fn add_transceiver_sdp(
 }
 
 /// populate_sdp serializes a PeerConnections state into an SDP
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn populate_sdp(
     mut d: SessionDescription,
     dtls_fingerprints: &[RTCDtlsFingerprint],
     candidate: &SocketAddr,
     ice_params: &RTCIceParameters,
     connection_role: ConnectionRole,
-    media_sections: &[MediaSection<'_>],
+    media_sections: &[MediaSection],
+    transceivers: &HashMap<Mid, RTCRtpTransceiver>,
     media_description_fingerprint: bool,
 ) -> Result<SessionDescription> {
     let media_dtls_fingerprints = if media_description_fingerprint {
@@ -506,7 +509,7 @@ pub(crate) fn populate_sdp(
     };
 
     for (i, m) in media_sections.iter().enumerate() {
-        if m.data && m.transceiver.is_some() {
+        if m.data && transceivers.get(&m.mid).is_some() {
             return Err(Error::Other(
                 "ErrSDPMediaSectionMediaDataChanInvalid".to_string(),
             ));
@@ -517,7 +520,7 @@ pub(crate) fn populate_sdp(
         let should_add_id = if m.data {
             let params = AddDataMediaSectionParams {
                 should_add_candidates,
-                mid_value: m.id.clone(),
+                mid_value: m.mid.clone(),
                 ice_params: ice_params.clone(),
                 dtls_role: connection_role,
                 ice_gathering_state: RTCIceGatheringState::Complete,
@@ -527,7 +530,7 @@ pub(crate) fn populate_sdp(
         } else {
             let params = AddTransceiverSdpParams {
                 should_add_candidates,
-                mid_value: m.id.clone(),
+                mid_value: m.mid.clone(),
                 dtls_role: connection_role,
                 ice_gathering_state: RTCIceGatheringState::Complete,
                 offered_direction: m.offered_direction,
@@ -538,6 +541,7 @@ pub(crate) fn populate_sdp(
                 ice_params,
                 candidate,
                 m,
+                transceivers.get(&m.mid),
                 params,
             )?;
             d = d1;
@@ -545,7 +549,7 @@ pub(crate) fn populate_sdp(
         };
 
         if should_add_id {
-            append_bundle(&m.id, &mut bundle_value, &mut bundle_count);
+            append_bundle(&m.mid, &mut bundle_value, &mut bundle_count);
         }
     }
 

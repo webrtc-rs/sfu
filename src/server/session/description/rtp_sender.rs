@@ -1,6 +1,5 @@
 use crate::server::session::description::rtp_codec::RTPCodecType;
 use crate::server::session::description::rtp_transceiver::{PayloadType, SSRC};
-use std::cell::RefCell;
 
 #[derive(Debug, Clone)]
 pub(crate) struct TrackLocal {
@@ -25,7 +24,7 @@ pub struct RTCRtpSender {
 
     /// a transceiver sender since we can just check the
     /// transceiver negotiation status
-    pub(crate) negotiated: RefCell<bool>,
+    pub(crate) negotiated: bool,
 
     //pub(crate) media_engine: Arc<MediaEngine>,
     //pub(crate) interceptor: Arc<dyn Interceptor + Send + Sync>,
@@ -43,12 +42,10 @@ pub struct RTCRtpSender {
 
 impl RTCRtpSender {
     pub(crate) fn is_negotiated(&self) -> bool {
-        let negotiated = self.negotiated.borrow();
-        *negotiated
+        self.negotiated
     }
 
-    pub(crate) fn set_negotiated(&self) {
-        let mut negotiated = self.negotiated.borrow_mut();
-        *negotiated = true;
+    pub(crate) fn set_negotiated(&mut self) {
+        self.negotiated = true;
     }
 }

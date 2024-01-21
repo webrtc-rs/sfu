@@ -21,13 +21,14 @@ use crate::server::session::description::{
     get_mid_value, get_peer_direction, get_rids, populate_sdp, update_sdp_origin, MediaSection,
     RTCSessionDescription, MEDIA_SECTION_APPLICATION,
 };
-use crate::types::{EndpointId, SessionId};
+use crate::types::{EndpointId, Mid, SessionId};
 
 #[derive(Debug)]
 pub(crate) struct Session {
     session_config: SessionConfig,
     session_id: SessionId,
     endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
+    transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
 }
 
 impl Session {
@@ -36,6 +37,7 @@ impl Session {
             session_config,
             session_id,
             endpoints: RefCell::new(HashMap::new()),
+            transceivers: RefCell::new(HashMap::new()),
         }
     }
 
@@ -89,16 +91,15 @@ impl Session {
 
     pub(crate) fn create_answer(
         &self,
-        _endpoint_id: EndpointId,
+        endpoint_id: EndpointId,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
     ) -> Result<RTCSessionDescription> {
         let use_identity = false; //TODO: self.config.idp_login_url.is_some();
-        let local_transceivers = vec![]; //TODO: self.get_transceivers();
         let mut d = self.generate_matched_sdp(
+            endpoint_id,
             remote_description,
             local_ice_params,
-            &local_transceivers,
             use_identity,
             false, /*includeUnmatched */
             DTLSRole::Server.to_connection_role(),
@@ -122,85 +123,88 @@ impl Session {
     /// this is used everytime we have a remote_description
     pub(crate) fn generate_matched_sdp(
         &self,
+        _endpoint_id: EndpointId,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
-        local_transceivers: &[RTCRtpTransceiver],
         use_identity: bool,
         include_unmatched: bool,
         connection_role: ConnectionRole,
     ) -> Result<SessionDescription> {
         let d = SessionDescription::new_jsep_session_description(use_identity);
 
-        let mut media_sections = vec![];
-        let mut already_have_application_media_section = false;
-        let mut matched = HashSet::new();
-        if let Some(parsed) = remote_description.parsed.as_ref() {
-            for media in &parsed.media_descriptions {
-                if let Some(mid_value) = get_mid_value(media) {
-                    if mid_value.is_empty() {
-                        return Err(Error::Other(
-                            "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
-                        ));
-                    }
+        let media_sections = {
+            let mut local_transceivers = self.transceivers.borrow_mut();
 
-                    if media.media_name.media == MEDIA_SECTION_APPLICATION {
-                        media_sections.push(MediaSection {
-                            id: mid_value.to_owned(),
-                            data: true,
-                            ..Default::default()
-                        });
-                        already_have_application_media_section = true;
-                        continue;
-                    }
+            let mut media_sections = vec![];
+            let mut already_have_application_media_section = false;
+            let mut matched = HashSet::new();
+            if let Some(parsed) = remote_description.parsed.as_ref() {
+                for media in &parsed.media_descriptions {
+                    if let Some(mid_value) = get_mid_value(media) {
+                        if mid_value.is_empty() {
+                            return Err(Error::Other(
+                                "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
+                            ));
+                        }
 
-                    let kind = RTPCodecType::from(media.media_name.media.as_str());
-                    let direction = get_peer_direction(media);
-                    if kind == RTPCodecType::Unspecified
-                        || direction == RTCRtpTransceiverDirection::Unspecified
-                    {
-                        continue;
-                    }
+                        if media.media_name.media == MEDIA_SECTION_APPLICATION {
+                            media_sections.push(MediaSection {
+                                mid: mid_value.to_owned(),
+                                data: true,
+                                ..Default::default()
+                            });
+                            already_have_application_media_section = true;
+                            continue;
+                        }
 
-                    if let Some(t) = local_transceivers.iter().find(|t| &t.mid == mid_value) {
-                        t.sender.set_negotiated();
-                        matched.insert(t.mid.clone());
+                        let kind = RTPCodecType::from(media.media_name.media.as_str());
+                        let direction = get_peer_direction(media);
+                        if kind == RTPCodecType::Unspecified
+                            || direction == RTCRtpTransceiverDirection::Unspecified
+                        {
+                            continue;
+                        }
 
-                        #[allow(clippy::unnecessary_lazy_evaluations)]
-                        media_sections.push(MediaSection {
-                            id: mid_value.to_owned(),
-                            transceiver: Some(t),
-                            rid_map: get_rids(media),
-                            offered_direction: (!include_unmatched).then(|| direction),
-                            ..Default::default()
-                        });
-                    } else {
-                        return Err(Error::Other("ErrPeerConnTransceiverMidNil".to_string()));
+                        if let Some(t) = local_transceivers.get_mut(mid_value) {
+                            t.sender.set_negotiated();
+                            matched.insert(t.mid.clone());
+
+                            media_sections.push(MediaSection {
+                                mid: mid_value.to_owned(),
+                                rid_map: get_rids(media),
+                                offered_direction: (!include_unmatched).then_some(direction),
+                                ..Default::default()
+                            });
+                        } else {
+                            return Err(Error::Other("ErrPeerConnTransceiverMidNil".to_string()));
+                        }
                     }
                 }
             }
-        }
 
-        // If we are offering also include unmatched local transceivers
-        if include_unmatched {
-            for t in local_transceivers.iter() {
-                if !matched.contains(&t.mid) {
-                    t.sender.set_negotiated();
+            // If we are offering also include unmatched local transceivers
+            if include_unmatched {
+                for (mid, t) in local_transceivers.iter_mut() {
+                    if !matched.contains(mid) {
+                        t.sender.set_negotiated();
+                        media_sections.push(MediaSection {
+                            mid: t.mid.clone(),
+                            ..Default::default()
+                        });
+                    }
+                }
+
+                if !already_have_application_media_section {
                     media_sections.push(MediaSection {
-                        id: t.mid.clone(),
-                        transceiver: Some(t),
+                        mid: format!("{}", media_sections.len()),
+                        data: true,
                         ..Default::default()
                     });
                 }
             }
 
-            if !already_have_application_media_section {
-                media_sections.push(MediaSection {
-                    id: format!("{}", media_sections.len()),
-                    data: true,
-                    ..Default::default()
-                });
-            }
-        }
+            media_sections
+        };
 
         let dtls_fingerprints =
             if let Some(cert) = self.session_config.server_config.certificates.first() {
@@ -216,6 +220,7 @@ impl Session {
             local_ice_params,
             connection_role,
             &media_sections,
+            &self.transceivers.borrow(),
             true,
         )
     }
