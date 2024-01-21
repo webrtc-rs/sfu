@@ -160,7 +160,8 @@ pub(crate) fn add_candidate_to_media_descriptions(
         };
 
     m = append_candidate_if_new(candidate, 1, m); // 1: RTP
-    m = append_candidate_if_new(candidate, 2, m); // 2: RTCP
+
+    //TODO: m = append_candidate_if_new(candidate, 2, m); // 2: RTCP
 
     if ice_gathering_state != RTCIceGatheringState::Complete {
         return Ok(m);

@@ -59,12 +59,20 @@ Status: <span id="ice_status">Waiting</span>
         });
         const answer = JSON.parse(json);
         console.log('received answer', answer.sdp.split('\r\n'));
-        rtc.setRemoteDescription(answer);
+        try {
+            rtc.setRemoteDescription(answer);
+        } catch (error) {
+            console.log('rtc.setRemoteDescription(answer) with error: ', error);
+        }
     }
     async function handleOffer(json) {
         const offer = JSON.parse(json);
         console.log('handle offer', offer.sdp.split('\r\n'));
-        rtc.setRemoteDescription(offer);
+        try {
+            rtc.setRemoteDescription(offer);
+        } catch (error) {
+            console.log('rtc.setRemoteDescription(offer) with error: ', error);
+        }
         const answer = await rtc.createAnswer();
         console.log('offer response', answer.sdp.split('\r\n'));
         rtc.setLocalDescription(answer);
