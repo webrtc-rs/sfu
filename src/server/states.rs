@@ -58,23 +58,33 @@ impl ServerStates {
         &self,
         session_id: SessionId,
         endpoint_id: EndpointId,
+        four_tuple: Option<FourTuple>,
         mut offer: RTCSessionDescription,
     ) -> Result<RTCSessionDescription> {
         let parsed = offer.unmarshal()?;
         let remote_conn_cred = ConnectionCredentials::from_sdp(&parsed)?;
         offer.parsed = Some(parsed);
 
-        let local_conn_cred = ConnectionCredentials::new(
-            &self.server_config.certificates,
-            remote_conn_cred.dtls_params.role,
-        );
-
         let session = self.create_or_get_session(session_id);
         let endpoint = session.get_endpoint(&endpoint_id);
 
-        if let Some(endpoint) = endpoint.as_ref() {
+        let local_conn_cred = if let Some(endpoint) = endpoint.as_ref() {
             session.set_remote_description(endpoint, &offer)?;
-        }
+            let four_tuple = four_tuple.ok_or(Error::Other("missing FourTuple".to_string()))?;
+            let transport = endpoint
+                .get_transport(&four_tuple)
+                .ok_or(Error::Other(format!(
+                    "can't find transport for endpoint id {} with {:?}",
+                    endpoint_id, four_tuple
+                )))?;
+            transport.candidate().local_connection_credentials().clone()
+        } else {
+            ConnectionCredentials::new(
+                &self.server_config.certificates,
+                remote_conn_cred.dtls_params.role,
+            )
+        };
+
         let answer = session.create_answer(&endpoint, &offer, &local_conn_cred.ice_params)?;
 
         if endpoint.is_none() {

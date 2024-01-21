@@ -187,10 +187,12 @@ impl GatewayInbound {
         };
 
         let response_sdp = match request_sdp.sdp_type {
-            RTCSdpType::Offer => {
-                self.server_states
-                    .accept_offer(session_id, endpoint_id, request_sdp)?
-            }
+            RTCSdpType::Offer => self.server_states.accept_offer(
+                session_id,
+                endpoint_id,
+                Some((&transport_context).into()),
+                request_sdp,
+            )?,
             RTCSdpType::Answer => self.handle_answer_sdp(request_sdp)?,
             _ => {
                 return Err(Error::Other(format!(

@@ -140,25 +140,27 @@ pub enum RTCIceGatheringState {
     Complete,
 }
 
+fn append_candidate_if_new(
+    c: &SocketAddr,
+    component: u16,
+    m: MediaDescription,
+) -> MediaDescription {
+    let marshaled = format!("1 {} UDP 1 {} {} typ host", component, c.ip(), c.port());
+    for a in &m.attributes {
+        if let Some(value) = &a.value {
+            if &marshaled == value {
+                return m;
+            }
+        }
+    }
+    m.with_value_attribute("candidate".to_owned(), marshaled)
+}
+
 pub(crate) fn add_candidate_to_media_descriptions(
     candidate: &SocketAddr,
     mut m: MediaDescription,
     ice_gathering_state: RTCIceGatheringState,
 ) -> Result<MediaDescription> {
-    let append_candidate_if_new =
-        |c: &SocketAddr, component: u16, m: MediaDescription| -> MediaDescription {
-            let marshaled = format!("1 {} UDP 1 {} {} typ host", component, c.ip(), c.port());
-            for a in &m.attributes {
-                if let Some(value) = &a.value {
-                    if &marshaled == value {
-                        return m;
-                    }
-                }
-            }
-
-            m.with_value_attribute("candidate".to_owned(), marshaled)
-        };
-
     m = append_candidate_if_new(candidate, 1, m); // 1: RTP
 
     //TODO: m = append_candidate_if_new(candidate, 2, m); // 2: RTCP
