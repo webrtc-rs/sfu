@@ -82,7 +82,7 @@ pub struct RTCRtpCodecCapability {
     pub clock_rate: u32,
     pub channels: u16,
     pub sdp_fmtp_line: String,
-    pub rtcp_feedback: Vec<RTCPFeedback>,
+    pub rtcp_feedbacks: Vec<RTCPFeedback>,
 }
 
 impl RTCRtpCodecCapability {

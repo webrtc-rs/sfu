@@ -20,8 +20,8 @@ use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::{
-    get_mid_value, get_peer_direction, get_rids, populate_sdp, update_sdp_origin, MediaSection,
-    RTCSessionDescription, MEDIA_SECTION_APPLICATION,
+    codecs_from_media_description, get_mid_value, get_peer_direction, get_rids, populate_sdp,
+    update_sdp_origin, MediaSection, RTCSessionDescription, MEDIA_SECTION_APPLICATION,
 };
 use crate::types::{EndpointId, Mid, SessionId};
 
@@ -144,9 +144,9 @@ impl Session {
                     };
 
                     let sender = RTCRtpSender::new();
-                    let transceiver = RTCRtpTransceiver::new(sender, local_direction, vec![], kind);
+                    let codecs = codecs_from_media_description(media)?;
+                    let transceiver = RTCRtpTransceiver::new(sender, local_direction, codecs, kind);
                     local_transceivers.insert(mid_value.to_string(), transceiver);
-                    debug!("local_transceivers {:?}", local_transceivers.keys());
                 }
             }
         } else {

@@ -8,23 +8,28 @@ pub(crate) mod sdp_type;
 
 use crate::server::certificate::RTCDtlsFingerprint;
 use crate::server::endpoint::candidate::RTCIceParameters;
-use crate::server::session::description::rtp_codec::RTCRtpParameters;
-use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
+use crate::server::session::description::rtp_codec::{
+    RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpParameters,
+};
+use crate::server::session::description::rtp_transceiver::{
+    PayloadType, RTCPFeedback, RTCRtpTransceiver,
+};
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::types::Mid;
 use sdp::description::common::{Address, ConnectionInformation};
 use sdp::description::media::{MediaName, RangedPort};
 use sdp::description::session::{
-    Origin, ATTR_KEY_CONNECTION_SETUP, ATTR_KEY_GROUP, ATTR_KEY_ICELITE, ATTR_KEY_MID,
-    ATTR_KEY_RTCPMUX, ATTR_KEY_RTCPRSIZE,
+    Origin, ATTR_KEY_CONNECTION_SETUP, ATTR_KEY_EXT_MAP, ATTR_KEY_GROUP, ATTR_KEY_ICELITE,
+    ATTR_KEY_MID, ATTR_KEY_RTCPMUX, ATTR_KEY_RTCPRSIZE,
 };
+use sdp::extmap::ExtMap;
 use sdp::util::ConnectionRole;
 use sdp::{MediaDescription, SessionDescription};
 use serde::{Deserialize, Serialize};
 use shared::error::{Error, Result};
 use std::collections::HashMap;
-use std::io::Cursor;
+use std::io::{BufReader, Cursor};
 use std::net::SocketAddr;
 use url::Url;
 
@@ -102,25 +107,6 @@ impl RTCSessionDescription {
 
 pub(crate) const MEDIA_SECTION_APPLICATION: &str = "application";
 
-pub(crate) fn get_mid_value(media: &MediaDescription) -> Option<&String> {
-    for attr in &media.attributes {
-        if attr.key == "mid" {
-            return attr.value.as_ref();
-        }
-    }
-    None
-}
-
-pub(crate) fn get_peer_direction(media: &MediaDescription) -> RTCRtpTransceiverDirection {
-    for a in &media.attributes {
-        let direction = RTCRtpTransceiverDirection::from(a.key.as_str());
-        if direction != RTCRtpTransceiverDirection::Unspecified {
-            return direction;
-        }
-    }
-    RTCRtpTransceiverDirection::Unspecified
-}
-
 pub(crate) fn get_rids(media: &MediaDescription) -> HashMap<String, String> {
     let mut rids = HashMap::new();
     for attr in &media.attributes {
@@ -132,14 +118,6 @@ pub(crate) fn get_rids(media: &MediaDescription) -> HashMap<String, String> {
         }
     }
     rids
-}
-
-#[derive(Default)]
-pub(crate) struct MediaSection {
-    pub(crate) mid: Mid,
-    pub(crate) data: bool,
-    pub(crate) rid_map: HashMap<String, String>,
-    pub(crate) offered_direction: Option<RTCRtpTransceiverDirection>,
 }
 
 /// ICEGatheringState describes the state of the candidate gathering process.
@@ -309,7 +287,7 @@ pub(crate) fn add_transceiver_sdp(
             codec.capability.sdp_fmtp_line.clone(),
         );
 
-        for feedback in &codec.capability.rtcp_feedback {
+        for feedback in &codec.capability.rtcp_feedbacks {
             media = media.with_value_attribute(
                 "rtcp-fb".to_owned(),
                 format!(
@@ -479,6 +457,14 @@ pub(crate) fn add_transceiver_sdp(
     Ok((d.with_media(media), true))
 }
 
+#[derive(Default)]
+pub(crate) struct MediaSection {
+    pub(crate) mid: Mid,
+    pub(crate) data: bool,
+    pub(crate) rid_map: HashMap<String, String>,
+    pub(crate) offered_direction: Option<RTCRtpTransceiverDirection>,
+}
+
 /// populate_sdp serializes a PeerConnections state into an SDP
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn populate_sdp(
@@ -565,6 +551,235 @@ pub(crate) fn populate_sdp(
     d = d.with_property_attribute(ATTR_KEY_ICELITE.to_owned());
 
     Ok(d.with_value_attribute(ATTR_KEY_GROUP.to_owned(), bundle_value))
+}
+
+pub(crate) fn get_mid_value(media: &MediaDescription) -> Option<&String> {
+    for attr in &media.attributes {
+        if attr.key == "mid" {
+            return attr.value.as_ref();
+        }
+    }
+    None
+}
+
+pub(crate) fn get_peer_direction(media: &MediaDescription) -> RTCRtpTransceiverDirection {
+    for a in &media.attributes {
+        let direction = RTCRtpTransceiverDirection::from(a.key.as_str());
+        if direction != RTCRtpTransceiverDirection::Unspecified {
+            return direction;
+        }
+    }
+    RTCRtpTransceiverDirection::Unspecified
+}
+
+pub(crate) fn extract_fingerprint(desc: &SessionDescription) -> Result<(String, String)> {
+    let mut fingerprints = vec![];
+
+    if let Some(fingerprint) = desc.attribute("fingerprint") {
+        fingerprints.push(fingerprint.clone());
+    }
+
+    for m in &desc.media_descriptions {
+        if let Some(fingerprint) = m.attribute("fingerprint").and_then(|o| o) {
+            fingerprints.push(fingerprint.to_owned());
+        }
+    }
+
+    if fingerprints.is_empty() {
+        return Err(Error::Other(
+            "ErrSessionDescriptionNoFingerprint".to_string(),
+        ));
+    }
+
+    for m in 1..fingerprints.len() {
+        if fingerprints[m] != fingerprints[0] {
+            return Err(Error::Other(
+                "ErrSessionDescriptionConflictingFingerprints".to_string(),
+            ));
+        }
+    }
+
+    let parts: Vec<&str> = fingerprints[0].split(' ').collect();
+    if parts.len() != 2 {
+        return Err(Error::Other(
+            "ErrSessionDescriptionInvalidFingerprint".to_string(),
+        ));
+    }
+
+    Ok((parts[1].to_owned(), parts[0].to_owned()))
+}
+
+/*
+pub(crate) fn extract_ice_details(
+    desc: &SessionDescription,
+) -> Result<(String, String, Vec<RTCIceCandidate>)> {
+    let mut candidates = vec![];
+    let mut remote_pwds = vec![];
+    let mut remote_ufrags = vec![];
+
+    if let Some(ufrag) = desc.attribute("ice-ufrag") {
+        remote_ufrags.push(ufrag.clone());
+    }
+    if let Some(pwd) = desc.attribute("ice-pwd") {
+        remote_pwds.push(pwd.clone());
+    }
+
+    for m in &desc.media_descriptions {
+        if let Some(ufrag) = m.attribute("ice-ufrag").and_then(|o| o) {
+            remote_ufrags.push(ufrag.to_owned());
+        }
+        if let Some(pwd) = m.attribute("ice-pwd").and_then(|o| o) {
+            remote_pwds.push(pwd.to_owned());
+        }
+
+        for a in &m.attributes {
+            if a.is_ice_candidate() {
+                if let Some(value) = &a.value {
+                    let c: Arc<dyn Candidate + Send + Sync> = Arc::new(unmarshal_candidate(value)?);
+                    let candidate = RTCIceCandidate::from(&c);
+                    candidates.push(candidate);
+                }
+            }
+        }
+    }
+
+    if remote_ufrags.is_empty() {
+        return Err(Error::ErrSessionDescriptionMissingIceUfrag);
+    } else if remote_pwds.is_empty() {
+        return Err(Error::ErrSessionDescriptionMissingIcePwd);
+    }
+
+    for m in 1..remote_ufrags.len() {
+        if remote_ufrags[m] != remote_ufrags[0] {
+            return Err(Error::ErrSessionDescriptionConflictingIceUfrag);
+        }
+    }
+
+    for m in 1..remote_pwds.len() {
+        if remote_pwds[m] != remote_pwds[0] {
+            return Err(Error::ErrSessionDescriptionConflictingIcePwd);
+        }
+    }
+
+    Ok((remote_ufrags[0].clone(), remote_pwds[0].clone(), candidates))
+}
+*/
+
+pub(crate) fn have_application_media_section(desc: &SessionDescription) -> bool {
+    for m in &desc.media_descriptions {
+        if m.media_name.media == MEDIA_SECTION_APPLICATION {
+            return true;
+        }
+    }
+
+    false
+}
+
+pub(crate) fn get_by_mid<'a>(
+    search_mid: &str,
+    desc: &'a RTCSessionDescription,
+) -> Option<&'a MediaDescription> {
+    if let Some(parsed) = &desc.parsed {
+        for m in &parsed.media_descriptions {
+            if let Some(mid) = m.attribute(ATTR_KEY_MID).flatten() {
+                if mid == search_mid {
+                    return Some(m);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// have_data_channel return MediaDescription with MediaName equal application
+pub(crate) fn have_data_channel(desc: &RTCSessionDescription) -> Option<&MediaDescription> {
+    if let Some(parsed) = &desc.parsed {
+        for d in &parsed.media_descriptions {
+            if d.media_name.media == MEDIA_SECTION_APPLICATION {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn codecs_from_media_description(
+    m: &MediaDescription,
+) -> Result<Vec<RTCRtpCodecParameters>> {
+    let s = SessionDescription {
+        media_descriptions: vec![m.clone()],
+        ..Default::default()
+    };
+
+    let mut out = vec![];
+    for payload_str in &m.media_name.formats {
+        let payload_type: PayloadType = payload_str.parse::<u8>()?;
+        let codec = match s.get_codec_for_payload_type(payload_type) {
+            Ok(codec) => codec,
+            Err(err) => {
+                if payload_type == 0 {
+                    continue;
+                }
+                return Err(Error::Other(format!("{}", err)));
+            }
+        };
+
+        let channels = codec.encoding_parameters.parse::<u16>().unwrap_or(0);
+
+        let mut feedback = vec![];
+        for raw in &codec.rtcp_feedback {
+            let split: Vec<&str> = raw.split(' ').collect();
+
+            let entry = if split.len() == 2 {
+                RTCPFeedback {
+                    typ: split[0].to_string(),
+                    parameter: split[1].to_string(),
+                }
+            } else {
+                RTCPFeedback {
+                    typ: split[0].to_string(),
+                    parameter: String::new(),
+                }
+            };
+
+            feedback.push(entry);
+        }
+
+        out.push(RTCRtpCodecParameters {
+            capability: RTCRtpCodecCapability {
+                mime_type: m.media_name.media.clone() + "/" + codec.name.as_str(),
+                clock_rate: codec.clock_rate,
+                channels,
+                sdp_fmtp_line: codec.fmtp.clone(),
+                rtcp_feedbacks: feedback,
+            },
+            payload_type,
+            stats_id: String::new(),
+        })
+    }
+
+    Ok(out)
+}
+
+pub(crate) fn rtp_extensions_from_media_description(
+    m: &MediaDescription,
+) -> Result<HashMap<String, isize>> {
+    let mut out = HashMap::new();
+
+    for a in &m.attributes {
+        if a.key == ATTR_KEY_EXT_MAP {
+            let a_str = a.to_string();
+            let mut reader = BufReader::new(a_str.as_bytes());
+            let e =
+                ExtMap::unmarshal(&mut reader).map_err(|err| Error::Other(format!("{}", err)))?;
+
+            if let Some(uri) = e.uri {
+                out.insert(uri.to_string(), e.value);
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 /// update_sdp_origin saves sdp.Origin in PeerConnection when creating 1st local SDP;
