@@ -1,7 +1,8 @@
 use crate::server::session::description::rtp_codec::{RTCRtpCodecParameters, RTPCodecType};
-use crate::server::session::description::rtp_receiver::RTCRtpReceiver;
 use crate::server::session::description::rtp_sender::RTCRtpSender;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
+use log::{debug, trace};
+use shared::error::Result;
 
 /// SSRC represents a synchronization source
 /// A synchronization source is a randomly chosen
@@ -49,17 +50,96 @@ pub struct RTCPFeedback {
 /// RTPTransceiver represents a combination of an RTPSender and an RTPReceiver that share a common mid.
 #[derive(Debug, Clone)]
 pub struct RTCRtpTransceiver {
-    pub(crate) mid: String,
+    //pub(crate) mid: String,
     pub(crate) sender: RTCRtpSender,
-    pub(crate) receiver: RTCRtpReceiver,
+    //pub(crate) receiver: RTCRtpReceiver,
     pub(crate) direction: RTCRtpTransceiverDirection,
-    pub(crate) current_direction: RTCRtpTransceiverDirection,
-
+    current_direction: RTCRtpTransceiverDirection,
     pub(crate) codecs: Vec<RTCRtpCodecParameters>, // User provided codecs via set_codec_preferences
-
     pub(crate) stopped: bool,
     pub(crate) kind: RTPCodecType,
     //media_engine: Arc<MediaEngine>,
 
     //trigger_negotiation_needed: Mutex<TriggerNegotiationNeededFnOption>,
+}
+
+impl RTCRtpTransceiver {
+    pub(crate) fn new(
+        sender: RTCRtpSender,
+        direction: RTCRtpTransceiverDirection,
+        codecs: Vec<RTCRtpCodecParameters>,
+        kind: RTPCodecType,
+    ) -> Self {
+        Self {
+            sender,
+            direction,
+            current_direction: RTCRtpTransceiverDirection::Unspecified,
+            codecs,
+            stopped: false,
+            kind,
+        }
+    }
+
+    /// current_direction returns the RTPTransceiver's current direction as negotiated.
+    ///
+    /// If this transceiver has never been negotiated or if it's stopped this returns [`RTCRtpTransceiverDirection::Unspecified`].
+    pub fn current_direction(&self) -> RTCRtpTransceiverDirection {
+        if self.stopped {
+            return RTCRtpTransceiverDirection::Unspecified;
+        }
+
+        self.current_direction
+    }
+
+    pub(crate) fn set_current_direction(&mut self, d: RTCRtpTransceiverDirection) {
+        let previous = self.current_direction;
+        self.current_direction = d;
+        if d != previous {
+            debug!(
+                "Changing current direction of transceiver from {} to {}",
+                previous, d,
+            );
+        }
+    }
+
+    /// Perform any subsequent actions after altering the transceiver's direction.
+    ///
+    /// After changing the transceiver's direction this method should be called to perform any
+    /// side-effects that results from the new direction, such as pausing/resuming the RTP receiver.
+    pub(crate) fn process_new_current_direction(
+        &mut self,
+        previous_direction: RTCRtpTransceiverDirection,
+    ) -> Result<()> {
+        if self.stopped {
+            return Ok(());
+        }
+
+        let current_direction = self.current_direction();
+        if previous_direction != current_direction {
+            trace!(
+                "Processing transceiver direction change from {} to {}",
+                previous_direction,
+                current_direction
+            );
+        } else {
+            // no change.
+            return Ok(());
+        }
+
+        /*{
+            let receiver = self.receiver.lock().await;
+            let pause_receiver = !current_direction.has_recv();
+
+            if pause_receiver {
+                receiver.pause().await?;
+            } else {
+                receiver.resume().await?;
+            }
+        }*/
+
+        let pause_sender = !current_direction.has_send();
+        self.sender.set_paused(pause_sender);
+
+        Ok(())
+    }
 }

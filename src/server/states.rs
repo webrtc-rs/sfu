@@ -70,9 +70,14 @@ impl ServerStates {
         );
 
         let session = self.create_or_get_session(session_id);
-        let answer = session.create_answer(endpoint_id, &offer, &local_conn_cred.ice_params)?;
+        let endpoint = session.get_endpoint(&endpoint_id);
 
-        if !session.has_endpoint(&endpoint_id) {
+        if let Some(endpoint) = endpoint.as_ref() {
+            session.set_remote_description(endpoint, &offer)?;
+        }
+        let answer = session.create_answer(&endpoint, &offer, &local_conn_cred.ice_params)?;
+
+        if endpoint.is_none() {
             self.add_candidate(Rc::new(Candidate::new(
                 session.session_id(),
                 endpoint_id,

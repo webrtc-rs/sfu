@@ -1,3 +1,4 @@
+use log::debug;
 use retty::transport::TransportContext;
 use sdp::description::session::Origin;
 use sdp::util::ConnectionRole;
@@ -14,6 +15,7 @@ use crate::server::endpoint::candidate::{Candidate, DTLSRole, RTCIceParameters};
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
 use crate::server::session::description::rtp_codec::RTPCodecType;
+use crate::server::session::description::rtp_sender::RTCRtpSender;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
@@ -28,7 +30,6 @@ pub(crate) struct Session {
     session_config: SessionConfig,
     session_id: SessionId,
     endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
-    transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
 }
 
 impl Session {
@@ -37,7 +38,6 @@ impl Session {
             session_config,
             session_id,
             endpoints: RefCell::new(HashMap::new()),
-            transceivers: RefCell::new(HashMap::new()),
         }
     }
 
@@ -77,6 +77,12 @@ impl Session {
                 Rc::clone(candidate),
             ));
             endpoint.add_transport(Rc::clone(&transport));
+
+            {
+                let mut endpoints = self.endpoints.borrow_mut();
+                endpoints.insert(endpoint_id, Rc::clone(&endpoint));
+            }
+
             Ok((false, endpoint, transport))
         }
     }
@@ -89,15 +95,125 @@ impl Session {
         self.endpoints.borrow().contains_key(endpoint_id)
     }
 
+    pub(crate) fn set_remote_description(
+        &self,
+        endpoint: &Rc<Endpoint>,
+        remote_description: &RTCSessionDescription,
+    ) -> Result<()> {
+        let parsed = remote_description
+            .parsed
+            .as_ref()
+            .ok_or(Error::Other("Unparsed remote description".to_string()))?;
+
+        let mut local_transceivers = endpoint.transceivers.borrow_mut();
+        let we_offer = remote_description.sdp_type == RTCSdpType::Answer;
+
+        if !we_offer {
+            // This is an offer from the remove
+            for media in &parsed.media_descriptions {
+                let mid_value = match get_mid_value(media) {
+                    Some(m) => {
+                        if m.is_empty() {
+                            return Err(Error::Other(
+                                "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
+                            ));
+                        } else {
+                            m
+                        }
+                    }
+                    None => continue,
+                };
+
+                if media.media_name.media == MEDIA_SECTION_APPLICATION {
+                    continue;
+                }
+
+                let kind = RTPCodecType::from(media.media_name.media.as_str());
+                let direction = get_peer_direction(media);
+                if kind == RTPCodecType::Unspecified
+                    || direction == RTCRtpTransceiverDirection::Unspecified
+                {
+                    continue;
+                }
+
+                if !local_transceivers.contains_key(mid_value) {
+                    let local_direction = if direction == RTCRtpTransceiverDirection::Recvonly {
+                        RTCRtpTransceiverDirection::Sendonly
+                    } else {
+                        RTCRtpTransceiverDirection::Recvonly
+                    };
+
+                    let sender = RTCRtpSender::new();
+                    let transceiver = RTCRtpTransceiver::new(sender, local_direction, vec![], kind);
+                    local_transceivers.insert(mid_value.to_string(), transceiver);
+                    debug!("local_transceivers {:?}", local_transceivers.keys());
+                }
+            }
+        } else {
+            // WebRTC Spec 1.0 https://www.w3.org/TR/webrtc/
+            // 4.5.9.2
+            // This is an answer from the remote.
+            for media in &parsed.media_descriptions {
+                let mid_value = match get_mid_value(media) {
+                    Some(m) => {
+                        if m.is_empty() {
+                            return Err(Error::Other(
+                                "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
+                            ));
+                        } else {
+                            m
+                        }
+                    }
+                    None => continue,
+                };
+
+                if media.media_name.media == MEDIA_SECTION_APPLICATION {
+                    continue;
+                }
+                let kind = RTPCodecType::from(media.media_name.media.as_str());
+                let direction = get_peer_direction(media);
+                if kind == RTPCodecType::Unspecified
+                    || direction == RTCRtpTransceiverDirection::Unspecified
+                {
+                    continue;
+                }
+
+                if let Some(t) = local_transceivers.get_mut(mid_value) {
+                    let previous_direction = t.current_direction();
+
+                    // 4.5.9.2.9
+                    // Let direction be an RTCRtpTransceiverDirection value representing the direction
+                    // from the media description, but with the send and receive directions reversed to
+                    // represent this peer's point of view. If the media description is rejected,
+                    // set direction to "inactive".
+                    let reversed_direction = direction.reverse();
+
+                    // 4.5.9.2.13.2
+                    // Set transceiver.[[CurrentDirection]] and transceiver.[[Direction]]s to direction.
+                    t.set_current_direction(reversed_direction);
+                    // TODO: According to the specification we should set
+                    // transceiver.[[Direction]] here, however libWebrtc doesn't do this.
+                    // NOTE: After raising this it seems like the specification might
+                    // change to remove the setting of transceiver.[[Direction]].
+                    // See https://github.com/w3c/webrtc-pc/issues/2751#issuecomment-1185901962
+                    // t.set_direction_internal(reversed_direction);
+                    t.process_new_current_direction(previous_direction)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn create_answer(
         &self,
-        endpoint_id: EndpointId,
+        endpoint: &Option<Rc<Endpoint>>,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
     ) -> Result<RTCSessionDescription> {
         let use_identity = false; //TODO: self.config.idp_login_url.is_some();
         let mut d = self.generate_matched_sdp(
-            endpoint_id,
+            endpoint,
             remote_description,
             local_ice_params,
             use_identity,
@@ -123,7 +239,7 @@ impl Session {
     /// this is used everytime we have a remote_description
     pub(crate) fn generate_matched_sdp(
         &self,
-        _endpoint_id: EndpointId,
+        endpoint: &Option<Rc<Endpoint>>,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
         use_identity: bool,
@@ -131,13 +247,18 @@ impl Session {
         connection_role: ConnectionRole,
     ) -> Result<SessionDescription> {
         let d = SessionDescription::new_jsep_session_description(use_identity);
+        let empty_transceivers = RefCell::new(HashMap::new());
 
         let media_sections = {
-            let mut local_transceivers = self.transceivers.borrow_mut();
+            let mut local_transceivers = if let Some(endpoint) = endpoint.as_ref() {
+                endpoint.transceivers.borrow_mut()
+            } else {
+                empty_transceivers.borrow_mut()
+            };
 
             let mut media_sections = vec![];
             let mut already_have_application_media_section = false;
-            let mut matched = HashSet::new();
+            let mut matched: HashSet<Mid> = HashSet::new();
             if let Some(parsed) = remote_description.parsed.as_ref() {
                 for media in &parsed.media_descriptions {
                     if let Some(mid_value) = get_mid_value(media) {
@@ -167,7 +288,7 @@ impl Session {
 
                         if let Some(t) = local_transceivers.get_mut(mid_value) {
                             t.sender.set_negotiated();
-                            matched.insert(t.mid.clone());
+                            matched.insert(mid_value.to_string());
 
                             media_sections.push(MediaSection {
                                 mid: mid_value.to_owned(),
@@ -185,10 +306,10 @@ impl Session {
             // If we are offering also include unmatched local transceivers
             if include_unmatched {
                 for (mid, t) in local_transceivers.iter_mut() {
-                    if !matched.contains(mid) {
+                    if !matched.contains::<Mid>(mid) {
                         t.sender.set_negotiated();
                         media_sections.push(MediaSection {
-                            mid: t.mid.clone(),
+                            mid: mid.clone(),
                             ..Default::default()
                         });
                     }
@@ -213,6 +334,12 @@ impl Session {
                 return Err(Error::Other("ErrNonCertificate".to_string()));
             };
 
+        let local_transceiver = if let Some(endpoint) = endpoint.as_ref() {
+            endpoint.transceivers.borrow()
+        } else {
+            empty_transceivers.borrow()
+        };
+
         populate_sdp(
             d,
             &dtls_fingerprints,
@@ -220,7 +347,7 @@ impl Session {
             local_ice_params,
             connection_role,
             &media_sections,
-            &self.transceivers.borrow(),
+            &local_transceiver,
             true,
         )
     }

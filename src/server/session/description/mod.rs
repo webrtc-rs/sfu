@@ -272,12 +272,9 @@ pub(crate) fn add_transceiver_sdp(
     ice_params: &RTCIceParameters,
     candidate: &SocketAddr,
     media_section: &MediaSection,
-    transceiver: Option<&RTCRtpTransceiver>,
+    transceiver: &RTCRtpTransceiver,
     params: AddTransceiverSdpParams,
 ) -> Result<(SessionDescription, bool)> {
-    if transceiver.is_none() {
-        return Err(Error::Other("ErrSDPZeroTransceivers".to_string()));
-    }
     let (should_add_candidates, mid_value, dtls_role, ice_gathering_state) = (
         params.should_add_candidates,
         params.mid_value,
@@ -285,19 +282,18 @@ pub(crate) fn add_transceiver_sdp(
         params.ice_gathering_state,
     );
 
-    // Use the first transceiver to generate the section attributes
-    let t = &transceiver.as_ref().unwrap();
-    let mut media = MediaDescription::new_jsep_media_description(t.kind.to_string(), vec![])
-        .with_value_attribute(ATTR_KEY_CONNECTION_SETUP.to_owned(), dtls_role.to_string())
-        .with_value_attribute(ATTR_KEY_MID.to_owned(), mid_value.clone())
-        .with_ice_credentials(
-            ice_params.username_fragment.clone(),
-            ice_params.password.clone(),
-        )
-        .with_property_attribute(ATTR_KEY_RTCPMUX.to_owned())
-        .with_property_attribute(ATTR_KEY_RTCPRSIZE.to_owned());
+    let mut media =
+        MediaDescription::new_jsep_media_description(transceiver.kind.to_string(), vec![])
+            .with_value_attribute(ATTR_KEY_CONNECTION_SETUP.to_owned(), dtls_role.to_string())
+            .with_value_attribute(ATTR_KEY_MID.to_owned(), mid_value.clone())
+            .with_ice_credentials(
+                ice_params.username_fragment.clone(),
+                ice_params.password.clone(),
+            )
+            .with_property_attribute(ATTR_KEY_RTCPMUX.to_owned())
+            .with_property_attribute(ATTR_KEY_RTCPRSIZE.to_owned());
 
-    let codecs = &t.codecs;
+    let codecs = &transceiver.codecs;
     for codec in codecs {
         let name = codec
             .capability
@@ -325,14 +321,14 @@ pub(crate) fn add_transceiver_sdp(
     }
     if codecs.is_empty() {
         // If we are sender and we have no codecs throw an error early
-        if t.sender.track.is_some() {
+        if transceiver.sender.track.is_some() {
             return Err(Error::Other("ErrSenderWithNoCodecs".to_string()));
         }
 
         // Explicitly reject track if we don't have the codec
         d = d.with_media(MediaDescription {
             media_name: sdp::description::media::MediaName {
-                media: t.kind.to_string(),
+                media: transceiver.kind.to_string(),
                 port: RangedPort {
                     value: 0,
                     range: None,
@@ -391,7 +387,7 @@ pub(crate) fn add_transceiver_sdp(
         );
     }
 
-    let sender = &t.sender;
+    let sender = &transceiver.sender;
     if let Some(track) = &sender.track {
         media = media.with_media_source(
             sender.ssrc,
@@ -432,7 +428,7 @@ pub(crate) fn add_transceiver_sdp(
     let direction = match params.offered_direction {
         Some(offered_direction) => {
             use RTCRtpTransceiverDirection::*;
-            let transceiver_direction = t.direction;
+            let transceiver_direction = transceiver.direction;
 
             match offered_direction {
                 Sendonly | Recvonly => {
@@ -449,7 +445,7 @@ pub(crate) fn add_transceiver_sdp(
                 // media or session level, in which case the stream is sendrecv by
                 // default), the corresponding stream in the answer MAY be marked as
                 // sendonly, recvonly, sendrecv, or inactive
-                Sendrecv | Unspecified => t.direction,
+                Sendrecv | Unspecified => transceiver.direction,
                 // If an offered media
                 // stream is listed as inactive, it MUST be marked as inactive in the
                 // answer.
@@ -464,7 +460,7 @@ pub(crate) fn add_transceiver_sdp(
             //
             //    When creating offers, the transceiver direction is directly reflected
             //    in the output, even for re-offers.
-            t.direction
+            transceiver.direction
         }
     };
     media = media.with_property_attribute(direction.to_string());
@@ -541,7 +537,9 @@ pub(crate) fn populate_sdp(
                 ice_params,
                 candidate,
                 m,
-                transceivers.get(&m.mid),
+                transceivers
+                    .get(&m.mid)
+                    .ok_or(Error::Other("ErrSDPZeroTransceivers".to_string()))?,
                 params,
             )?;
             d = d1;

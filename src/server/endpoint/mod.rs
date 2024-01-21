@@ -2,8 +2,9 @@ pub mod candidate;
 pub mod transport;
 
 use crate::server::endpoint::transport::Transport;
+use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::Session;
-use crate::types::{EndpointId, FourTuple};
+use crate::types::{EndpointId, FourTuple, Mid};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -13,6 +14,7 @@ pub(crate) struct Endpoint {
     session: Weak<Session>,
     endpoint_id: EndpointId,
     transports: RefCell<HashMap<FourTuple, Rc<Transport>>>,
+    pub(crate) transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
 }
 
 impl Endpoint {
@@ -21,6 +23,7 @@ impl Endpoint {
             session,
             endpoint_id,
             transports: RefCell::new(HashMap::new()),
+            transceivers: RefCell::new(HashMap::new()),
         }
     }
 
