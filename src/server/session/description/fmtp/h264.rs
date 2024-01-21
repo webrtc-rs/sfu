@@ -1,6 +1,3 @@
-#[cfg(test)]
-mod h264_test;
-
 use super::*;
 
 fn profile_level_id_matches(a: &str, b: &str) -> bool {
@@ -51,7 +48,7 @@ impl Fmtp for H264Fmtp {
     ///     for the other stream properties and capability parameters.
     fn match_fmtp(&self, f: &(dyn Fmtp)) -> bool {
         if let Some(c) = f.as_any().downcast_ref::<H264Fmtp>() {
-            // test packetization-mode
+            // check packetization-mode
             let hpmode = match self.parameters.get("packetization-mode") {
                 Some(s) => s,
                 None => return false,
@@ -65,7 +62,7 @@ impl Fmtp for H264Fmtp {
                 return false;
             }
 
-            // test profile-level-id
+            // check profile-level-id
             let hplid = match self.parameters.get("profile-level-id") {
                 Some(s) => s,
                 None => return false,

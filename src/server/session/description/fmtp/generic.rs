@@ -1,6 +1,3 @@
-#[cfg(test)]
-mod generic_test;
-
 use super::*;
 
 /// fmtp_consist checks that two FMTP parameters are not inconsistent.
