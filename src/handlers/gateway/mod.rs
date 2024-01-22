@@ -1,5 +1,6 @@
 use crate::messages::{
-    ApplicationMessage, DTLSMessageEvent, MessageEvent, STUNMessageEvent, TaggedMessageEvent,
+    ApplicationMessage, DTLSMessageEvent, MessageEvent, RTPMessageEvent, STUNMessageEvent,
+    TaggedMessageEvent,
 };
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::{candidate::Candidate, Endpoint};
@@ -51,13 +52,27 @@ impl InboundHandler for GatewayInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        let try_read = || -> Result<Option<TaggedMessageEvent>> {
+        let try_read = || -> Result<Option<Vec<TaggedMessageEvent>>> {
             match msg.message {
-                MessageEvent::STUN(STUNMessageEvent::STUN(message)) => Ok(Some(
-                    self.handle_stun_message(msg.now, msg.transport, message)?,
+                MessageEvent::STUN(STUNMessageEvent::STUN(message)) => {
+                    Ok(Some(vec![self.handle_stun_message(
+                        msg.now,
+                        msg.transport,
+                        message,
+                    )?]))
+                }
+                MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)) => {
+                    Ok(Some(vec![self.handle_dtls_message(
+                        msg.now,
+                        msg.transport,
+                        message,
+                    )?]))
+                }
+                MessageEvent::RTP(RTPMessageEvent::RTP(message)) => Ok(Some(
+                    self.handle_rtp_message(msg.now, msg.transport, message)?,
                 )),
-                MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)) => Ok(Some(
-                    self.handle_dtls_message(msg.now, msg.transport, message)?,
+                MessageEvent::RTP(RTPMessageEvent::RTCP(message)) => Ok(Some(
+                    self.handle_rtcp_message(msg.now, msg.transport, message)?,
                 )),
                 _ => {
                     warn!(
@@ -70,9 +85,11 @@ impl InboundHandler for GatewayInbound {
         };
 
         match try_read() {
-            Ok(message) => {
-                if let Some(message) = message {
-                    ctx.fire_write(message);
+            Ok(messages) => {
+                if let Some(messages) = messages {
+                    for message in messages {
+                        ctx.fire_write(message);
+                    }
                 }
             }
             Err(err) => {
@@ -193,10 +210,10 @@ impl GatewayInbound {
                 Some((&transport_context).into()),
                 request_sdp,
             )?,
-            RTCSdpType::Answer => self.handle_answer_sdp(request_sdp)?,
+            //TODO: RTCSdpType::Answer => self.handle_answer_sdp(request_sdp)?,
             _ => {
                 return Err(Error::Other(format!(
-                    "Unsupport SDP type {}",
+                    "Unsupported SDP type {}",
                     request_sdp.sdp_type
                 )))
             }
@@ -214,11 +231,24 @@ impl GatewayInbound {
         })
     }
 
-    fn handle_answer_sdp(
+    fn handle_rtp_message(
         &mut self,
-        answer: RTCSessionDescription,
-    ) -> Result<RTCSessionDescription> {
-        Ok(answer)
+        _now: Instant,
+        _transport_context: TransportContext,
+        mut _rtp_packet: rtp::packet::Packet,
+    ) -> Result<Vec<TaggedMessageEvent>> {
+        //TODO: Selective Forwarding RTP Packets
+        Ok(vec![])
+    }
+
+    fn handle_rtcp_message(
+        &mut self,
+        _now: Instant,
+        _transport_context: TransportContext,
+        mut _rtcp_packets: Vec<Box<dyn rtcp::packet::Packet>>,
+    ) -> Result<Vec<TaggedMessageEvent>> {
+        //TODO: Selective Forwarding RTCP Packets
+        Ok(vec![])
     }
 
     fn check_stun_message(
