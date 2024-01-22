@@ -9,10 +9,11 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Endpoint {
     session: Weak<Session>,
     endpoint_id: EndpointId,
+
     transports: RefCell<HashMap<FourTuple, Rc<Transport>>>,
     pub(crate) transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
 }

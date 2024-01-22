@@ -6,7 +6,6 @@ use crate::server::session::Session;
 use crate::types::{EndpointId, FourTuple, SessionId, UserName};
 use sctp::{Association, AssociationHandle};
 use shared::error::{Error, Result};
-use srtp::context::Context;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -23,8 +22,6 @@ pub struct ServerStates {
     candidates: RefCell<HashMap<UserName, Rc<Candidate>>>,
     endpoints: RefCell<HashMap<FourTuple, Rc<Endpoint>>>,
 
-    local_srtp_contexts: RefCell<HashMap<SocketAddr, Context>>,
-    remote_srtp_contexts: RefCell<HashMap<SocketAddr, Context>>,
     sctp_associations: RefCell<HashMap<AssociationHandle, Association>>,
 }
 
@@ -47,8 +44,6 @@ impl ServerStates {
             candidates: RefCell::new(HashMap::new()),
             endpoints: RefCell::new(HashMap::new()),
 
-            local_srtp_contexts: RefCell::new(HashMap::new()),
-            remote_srtp_contexts: RefCell::new(HashMap::new()),
             sctp_associations: RefCell::new(HashMap::new()),
         })
     }
@@ -108,14 +103,6 @@ impl ServerStates {
 
     pub(crate) fn local_addr(&self) -> SocketAddr {
         self.local_addr
-    }
-
-    pub(crate) fn local_srtp_contexts(&self) -> &RefCell<HashMap<SocketAddr, Context>> {
-        &self.local_srtp_contexts
-    }
-
-    pub(crate) fn remote_srtp_contexts(&self) -> &RefCell<HashMap<SocketAddr, Context>> {
-        &self.remote_srtp_contexts
     }
 
     pub(crate) fn sctp_associations(&self) -> &RefCell<HashMap<AssociationHandle, Association>> {

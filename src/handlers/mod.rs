@@ -6,4 +6,5 @@ pub mod gateway;
 pub mod rtcp;
 pub mod rtp;
 pub mod sctp;
+pub mod srtp;
 pub mod stun;

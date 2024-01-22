@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use crate::messages::{DTLSMessageEvent, MessageEvent, TaggedMessageEvent};
 use crate::server::states::ServerStates;
+use crate::types::FourTuple;
 use dtls::endpoint::EndpointEvent;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use dtls::state::State;
@@ -80,7 +81,7 @@ impl InboundHandler for DtlsInbound {
                                     dtls_endpoint.get_connection_state(msg.transport.peer_addr)
                                 {
                                     if let Err(err) =
-                                        self.update_srtp_contexts(state, msg.transport.peer_addr)
+                                        self.update_srtp_contexts(state, (&msg.transport).into())
                                     {
                                         error!("try_read with error {}", err);
                                         ctx.fire_read_exception(Box::new(err));
@@ -239,7 +240,7 @@ pub fn default_srtp_protection_profiles() -> Vec<SrtpProtectionProfile> {
 impl DtlsInbound {
     const DEFAULT_SESSION_SRTP_REPLAY_PROTECTION_WINDOW: usize = 64;
     const DEFAULT_SESSION_SRTCP_REPLAY_PROTECTION_WINDOW: usize = 64;
-    fn update_srtp_contexts(&self, state: &State, peer_addr: SocketAddr) -> Result<()> {
+    fn update_srtp_contexts(&self, state: &State, four_tuple: FourTuple) -> Result<()> {
         let profile = match state.srtp_protection_profile() {
             SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80 => {
                 ProtectionProfile::Aes128CmHmacSha1_80
@@ -290,12 +291,24 @@ impl DtlsInbound {
             },
         )?;
 
-        let (mut local_srtp_contexts, mut remote_srtp_contexts) = (
-            self.server_states.local_srtp_contexts().borrow_mut(),
-            self.server_states.remote_srtp_contexts().borrow_mut(),
-        );
-        local_srtp_contexts.insert(peer_addr, local_context);
-        remote_srtp_contexts.insert(peer_addr, remote_context);
+        if let Some(endpoint) = self.server_states.find_endpoint(&four_tuple) {
+            if let Some(transport) = endpoint.get_transport(&four_tuple) {
+                let (mut local_srtp_context, mut remote_srtp_context) = (
+                    transport.local_srtp_context().borrow_mut(),
+                    transport.remote_srtp_context().borrow_mut(),
+                );
+                *local_srtp_context = Some(local_context);
+                *remote_srtp_context = Some(remote_context);
+            } else {
+                warn!(
+                    "can't find transport with {:?} for endpoint {}",
+                    four_tuple,
+                    endpoint.endpoint_id()
+                );
+            }
+        } else {
+            warn!("can't find endpoint with {:?}", four_tuple);
+        }
 
         Ok(())
     }

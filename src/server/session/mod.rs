@@ -25,7 +25,6 @@ use crate::server::session::description::{
 };
 use crate::types::{EndpointId, Mid, SessionId};
 
-#[derive(Debug)]
 pub(crate) struct Session {
     session_config: SessionConfig,
     session_id: SessionId,
