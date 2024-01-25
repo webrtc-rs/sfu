@@ -98,7 +98,7 @@ impl Session {
             .as_ref()
             .ok_or(Error::Other("Unparsed remote description".to_string()))?;
 
-        let mut local_transceivers = endpoint.transceivers.borrow_mut();
+        let mut local_transceivers = endpoint.transceivers().borrow_mut();
         let we_offer = remote_description.sdp_type == RTCSdpType::Answer;
 
         if !we_offer {
@@ -250,7 +250,7 @@ impl Session {
 
         let media_sections = {
             let mut local_transceivers = if let Some(endpoint) = endpoint.as_ref() {
-                endpoint.transceivers.borrow_mut()
+                endpoint.transceivers().borrow_mut()
             } else {
                 empty_transceivers.borrow_mut()
             };
@@ -334,7 +334,7 @@ impl Session {
             };
 
         let local_transceiver = if let Some(endpoint) = endpoint.as_ref() {
-            endpoint.transceivers.borrow()
+            endpoint.transceivers().borrow()
         } else {
             empty_transceivers.borrow()
         };

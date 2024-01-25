@@ -14,8 +14,7 @@ pub(crate) struct Endpoint {
     session: Weak<Session>,
     endpoint_id: EndpointId,
     transports: RefCell<HashMap<FourTuple, Transport>>,
-
-    pub(crate) transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
+    transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
 }
 
 impl Endpoint {
@@ -41,6 +40,11 @@ impl Endpoint {
         transports.insert(*transport.four_tuple(), transport);
     }
 
+    pub(crate) fn remove_transport(&self, four_tuple: &FourTuple) {
+        let mut transports = self.transports.borrow_mut();
+        transports.remove(four_tuple);
+    }
+
     pub(crate) fn has_transport(&self, four_tuple: &FourTuple) -> bool {
         let transports = self.transports.borrow();
         transports.contains_key(four_tuple)
@@ -48,5 +52,9 @@ impl Endpoint {
 
     pub(crate) fn transports(&self) -> &RefCell<HashMap<FourTuple, Transport>> {
         &self.transports
+    }
+
+    pub(crate) fn transceivers(&self) -> &RefCell<HashMap<Mid, RTCRtpTransceiver>> {
+        &self.transceivers
     }
 }
