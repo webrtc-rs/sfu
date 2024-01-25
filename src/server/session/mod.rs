@@ -88,6 +88,10 @@ impl Session {
         self.endpoints.borrow().contains_key(endpoint_id)
     }
 
+    pub(crate) fn endpoints(&self) -> &RefCell<HashMap<EndpointId, Rc<Endpoint>>> {
+        &self.endpoints
+    }
+
     pub(crate) fn set_remote_description(
         &self,
         endpoint: &Rc<Endpoint>,
