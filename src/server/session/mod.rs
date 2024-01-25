@@ -52,37 +52,31 @@ impl Session {
         self: &Rc<Self>,
         candidate: &Rc<Candidate>,
         transport_context: &TransportContext,
-    ) -> Result<(bool, Rc<Endpoint>, Rc<Transport>)> {
+    ) -> Result<(bool, Rc<Endpoint>)> {
         let endpoint_id = candidate.endpoint_id();
         let endpoint = self.get_endpoint(&endpoint_id);
         let four_tuple = transport_context.into();
         if let Some(endpoint) = endpoint {
-            if let Some(transport) = endpoint.get_transport(&four_tuple) {
-                Ok((true, endpoint, transport))
+            if endpoint.has_transport(&four_tuple) {
+                Ok((true, endpoint))
             } else {
-                let transport = Rc::new(Transport::new(
-                    four_tuple,
-                    Rc::downgrade(&endpoint),
-                    Rc::clone(candidate),
-                ));
-                endpoint.add_transport(Rc::clone(&transport));
-                Ok((true, endpoint, transport))
+                let transport =
+                    Transport::new(four_tuple, Rc::downgrade(&endpoint), Rc::clone(candidate));
+                endpoint.add_transport(transport);
+                Ok((true, endpoint))
             }
         } else {
             let endpoint = Rc::new(Endpoint::new(Rc::downgrade(self), endpoint_id));
-            let transport = Rc::new(Transport::new(
-                four_tuple,
-                Rc::downgrade(&endpoint),
-                Rc::clone(candidate),
-            ));
-            endpoint.add_transport(Rc::clone(&transport));
+            let transport =
+                Transport::new(four_tuple, Rc::downgrade(&endpoint), Rc::clone(candidate));
+            endpoint.add_transport(transport);
 
             {
                 let mut endpoints = self.endpoints.borrow_mut();
                 endpoints.insert(endpoint_id, Rc::clone(&endpoint));
             }
 
-            Ok((false, endpoint, transport))
+            Ok((false, endpoint))
         }
     }
 

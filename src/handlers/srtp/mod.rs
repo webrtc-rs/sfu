@@ -47,17 +47,15 @@ impl InboundHandler for SrtpInbound {
                             "can't find endpoint with four_tuple {:?}",
                             four_tuple
                         )))?;
-                let transport =
-                    endpoint
-                        .get_transport(&four_tuple)
-                        .ok_or(Error::Other(format!(
-                            "can't find transport with four_tuple {:?} for endpoint id {}",
-                            four_tuple,
-                            endpoint.endpoint_id(),
-                        )))?;
+                let mut transports = endpoint.transports().borrow_mut();
+                let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
+                    "can't find transport with four_tuple {:?} for endpoint id {}",
+                    four_tuple,
+                    endpoint.endpoint_id(),
+                )))?;
 
                 if is_rtcp(&rtp_message) {
-                    let mut remote_context = transport.remote_srtp_context().borrow_mut();
+                    let mut remote_context = transport.remote_srtp_context();
                     if let Some(context) = remote_context.as_mut() {
                         context.decrypt_rtcp(&rtp_message)
                     } else {
@@ -67,7 +65,7 @@ impl InboundHandler for SrtpInbound {
                         )))
                     }
                 } else {
-                    let mut remote_context = transport.remote_srtp_context().borrow_mut();
+                    let mut remote_context = transport.remote_srtp_context();
                     if let Some(context) = remote_context.as_mut() {
                         context.decrypt_rtp(&rtp_message)
                     } else {
@@ -112,17 +110,15 @@ impl OutboundHandler for SrtpOutbound {
                             "can't find endpoint with four_tuple {:?}",
                             four_tuple
                         )))?;
-                let transport =
-                    endpoint
-                        .get_transport(&four_tuple)
-                        .ok_or(Error::Other(format!(
-                            "can't find transport with four_tuple {:?} for endpoint id {}",
-                            four_tuple,
-                            endpoint.endpoint_id(),
-                        )))?;
+                let mut transports = endpoint.transports().borrow_mut();
+                let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
+                    "can't find transport with four_tuple {:?} for endpoint id {}",
+                    four_tuple,
+                    endpoint.endpoint_id(),
+                )))?;
 
                 if is_rtcp(&rtp_message) {
-                    let mut local_context = transport.local_srtp_context().borrow_mut();
+                    let mut local_context = transport.local_srtp_context();
                     if let Some(context) = local_context.as_mut() {
                         context.encrypt_rtcp(&rtp_message)
                     } else {
@@ -132,7 +128,7 @@ impl OutboundHandler for SrtpOutbound {
                         )))
                     }
                 } else {
-                    let mut local_context = transport.local_srtp_context().borrow_mut();
+                    let mut local_context = transport.local_srtp_context();
                     if let Some(context) = local_context.as_mut() {
                         context.encrypt_rtp(&rtp_message)
                     } else {

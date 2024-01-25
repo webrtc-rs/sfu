@@ -2,7 +2,6 @@ use crate::server::endpoint::candidate::Candidate;
 use crate::server::endpoint::Endpoint;
 use crate::types::FourTuple;
 use srtp::context::Context;
-use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 pub struct Transport {
@@ -13,8 +12,8 @@ pub struct Transport {
     candidate: Rc<Candidate>,
 
     // SRTP
-    local_srtp_context: RefCell<Option<Context>>,
-    remote_srtp_context: RefCell<Option<Context>>,
+    local_srtp_context: Option<Context>,
+    remote_srtp_context: Option<Context>,
 }
 
 impl Transport {
@@ -29,8 +28,8 @@ impl Transport {
 
             candidate,
 
-            local_srtp_context: RefCell::new(None),
-            remote_srtp_context: RefCell::new(None),
+            local_srtp_context: None,
+            remote_srtp_context: None,
         }
     }
 
@@ -46,11 +45,19 @@ impl Transport {
         &self.candidate
     }
 
-    pub(crate) fn local_srtp_context(&self) -> &RefCell<Option<Context>> {
-        &self.local_srtp_context
+    pub(crate) fn local_srtp_context(&mut self) -> Option<&mut Context> {
+        self.local_srtp_context.as_mut()
     }
 
-    pub(crate) fn remote_srtp_context(&self) -> &RefCell<Option<Context>> {
-        &self.remote_srtp_context
+    pub(crate) fn remote_srtp_context(&mut self) -> Option<&mut Context> {
+        self.remote_srtp_context.as_mut()
+    }
+
+    pub(crate) fn set_local_srtp_context(&mut self, local_srtp_context: Context) {
+        self.local_srtp_context = Some(local_srtp_context);
+    }
+
+    pub(crate) fn set_remote_srtp_context(&mut self, remote_srtp_context: Context) {
+        self.remote_srtp_context = Some(remote_srtp_context);
     }
 }

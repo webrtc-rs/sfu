@@ -2,7 +2,6 @@ use crate::messages::{
     ApplicationMessage, DTLSMessageEvent, MessageEvent, RTPMessageEvent, STUNMessageEvent,
     TaggedMessageEvent,
 };
-use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::{candidate::Candidate, Endpoint};
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::RTCSessionDescription;
@@ -336,7 +335,7 @@ impl GatewayInbound {
         request: &stun::message::Message,
         candidate: &Rc<Candidate>,
         transport_context: &TransportContext,
-    ) -> Result<(bool, Option<Rc<Endpoint>>, Option<Rc<Transport>>)> {
+    ) -> Result<(bool, Option<Rc<Endpoint>>)> {
         let mut is_new_endpoint = false;
 
         let session_id = candidate.session_id();
@@ -348,23 +347,22 @@ impl GatewayInbound {
         let endpoint_id = candidate.endpoint_id();
         let endpoint = session.get_endpoint(&endpoint_id);
         let four_tuple = transport_context.into();
-        let transport = if let Some(endpoint) = &endpoint {
-            endpoint.get_transport(&four_tuple)
+        let has_transport = if let Some(endpoint) = &endpoint {
+            endpoint.has_transport(&four_tuple)
         } else {
             is_new_endpoint = true;
-            None
+            false
         };
 
-        if !request.contains(ATTR_USE_CANDIDATE) || transport.is_some() {
-            return Ok((is_new_endpoint, endpoint, transport));
+        if !request.contains(ATTR_USE_CANDIDATE) || has_transport {
+            return Ok((is_new_endpoint, endpoint));
         }
 
-        let (is_new_endpoint, endpoint, transport) =
-            session.add_endpoint(candidate, transport_context)?;
+        let (is_new_endpoint, endpoint) = session.add_endpoint(candidate, transport_context)?;
 
         self.server_states
             .add_endpoint(four_tuple, Rc::clone(&endpoint));
 
-        Ok((is_new_endpoint, Some(endpoint), Some(transport)))
+        Ok((is_new_endpoint, Some(endpoint)))
     }
 }

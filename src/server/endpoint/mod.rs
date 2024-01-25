@@ -7,14 +7,14 @@ use crate::server::session::Session;
 use crate::types::{EndpointId, FourTuple, Mid};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
+use std::rc::Weak;
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub(crate) struct Endpoint {
     session: Weak<Session>,
     endpoint_id: EndpointId,
+    transports: RefCell<HashMap<FourTuple, Transport>>,
 
-    transports: RefCell<HashMap<FourTuple, Rc<Transport>>>,
     pub(crate) transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
 }
 
@@ -36,12 +36,17 @@ impl Endpoint {
         self.endpoint_id
     }
 
-    pub(crate) fn add_transport(&self, transport: Rc<Transport>) {
+    pub(crate) fn add_transport(&self, transport: Transport) {
         let mut transports = self.transports.borrow_mut();
         transports.insert(*transport.four_tuple(), transport);
     }
 
-    pub(crate) fn get_transport(&self, four_tuple: &FourTuple) -> Option<Rc<Transport>> {
-        self.transports.borrow().get(four_tuple).cloned()
+    pub(crate) fn has_transport(&self, four_tuple: &FourTuple) -> bool {
+        let transports = self.transports.borrow();
+        transports.contains_key(four_tuple)
+    }
+
+    pub(crate) fn transports(&self) -> &RefCell<HashMap<FourTuple, Transport>> {
+        &self.transports
     }
 }

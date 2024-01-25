@@ -292,13 +292,10 @@ impl DtlsInbound {
         )?;
 
         if let Some(endpoint) = self.server_states.find_endpoint(&four_tuple) {
-            if let Some(transport) = endpoint.get_transport(&four_tuple) {
-                let (mut local_srtp_context, mut remote_srtp_context) = (
-                    transport.local_srtp_context().borrow_mut(),
-                    transport.remote_srtp_context().borrow_mut(),
-                );
-                *local_srtp_context = Some(local_context);
-                *remote_srtp_context = Some(remote_context);
+            let mut transports = endpoint.transports().borrow_mut();
+            if let Some(transport) = transports.get_mut(&four_tuple) {
+                transport.set_local_srtp_context(local_context);
+                transport.set_remote_srtp_context(remote_context);
             } else {
                 warn!(
                     "can't find transport with {:?} for endpoint {}",
