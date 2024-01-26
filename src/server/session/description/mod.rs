@@ -247,7 +247,7 @@ pub(crate) struct AddTransceiverSdpParams {
 }
 
 pub(crate) fn add_transceiver_sdp(
-    mut d: SessionDescription,
+    d: SessionDescription,
     dtls_fingerprints: &[RTCDtlsFingerprint],
     ice_params: &RTCIceParameters,
     candidate: &SocketAddr,
@@ -277,6 +277,17 @@ pub(crate) fn add_transceiver_sdp(
             .with_property_attribute(ATTR_KEY_RTCPMUX.to_owned())
             .with_property_attribute(ATTR_KEY_RTCPRSIZE.to_owned());
 
+    for fingerprint in dtls_fingerprints {
+        media = media.with_fingerprint(
+            fingerprint.algorithm.to_owned(),
+            fingerprint.value.to_uppercase(),
+        );
+    }
+
+    if should_add_candidates {
+        media = add_candidate_to_media_descriptions(candidate, media, ice_gathering_state)?;
+    }
+
     let codecs = &transceiver.rtp_params.codecs;
     for codec in codecs {
         let name = codec
@@ -303,48 +314,6 @@ pub(crate) fn add_transceiver_sdp(
             );
         }
     }
-    if codecs.is_empty() {
-        // If we are sender and we have no codecs throw an error early
-        /*TODO:if transceiver.sender.track.is_some() {
-            return Err(Error::Other("ErrSenderWithNoCodecs".to_string()));
-        }*/
-
-        // Explicitly reject track if we don't have the codec
-        d = d.with_media(MediaDescription {
-            media_name: sdp::description::media::MediaName {
-                media: transceiver.kind.to_string(),
-                port: RangedPort {
-                    value: 0,
-                    range: None,
-                },
-                protos: vec![
-                    "UDP".to_owned(),
-                    "TLS".to_owned(),
-                    "RTP".to_owned(),
-                    "SAVPF".to_owned(),
-                ],
-                formats: vec!["0".to_owned()],
-            },
-            media_title: None,
-            // We need to include connection information even if we're rejecting a track, otherwise Firefox will fail to
-            // parse the SDP with an error like:
-            // SIPCC Failed to parse SDP: SDP Parse Error on line 50:  c= connection line not specified for every media level, validation failed.
-            // In addition this makes our SDP compliant with RFC 4566 Section 5.7: https://datatracker.ietf.org/doc/html/rfc4566#section-5.7
-            connection_information: Some(ConnectionInformation {
-                network_type: "IN".to_owned(),
-                address_type: "IP4".to_owned(),
-                address: Some(Address {
-                    address: "0.0.0.0".to_owned(),
-                    ttl: None,
-                    range: None,
-                }),
-            }),
-            bandwidth: vec![],
-            encryption_key: None,
-            attributes: vec![],
-        });
-        return Ok((d, false));
-    }
 
     let header_extensions = &transceiver.rtp_params.header_extensions;
     for rtp_extension in header_extensions {
@@ -370,44 +339,6 @@ pub(crate) fn add_transceiver_sdp(
             "recv ".to_owned() + recv_rids.join(";").as_str(),
         );
     }
-
-    /*TODO: let sender = &transceiver.sender;
-    if let Some(track) = &sender.track {
-        media = media.with_media_source(
-            sender.ssrc,
-            track.stream_id.to_owned(), /* cname */
-            track.stream_id.to_owned(), /* streamLabel */
-            track.id.to_owned(),
-        );
-
-        // Send msid based on the configured track if we haven't already
-        // sent on this sender. If we have sent we must keep the msid line consistent, this
-        // is handled below.
-        if sender.initial_track_id.is_none() {
-            for stream_id in &sender.associated_media_stream_ids {
-                media = media.with_property_attribute(format!("msid:{} {}", stream_id, track.id));
-            }
-
-            //TODO: sender.initial_track_id = Some(track.id.to_string());
-        }
-    }
-
-    if let Some(track_id) = &sender.initial_track_id {
-        // After we have include an msid attribute in an offer it must stay the same for
-        // all subsequent offer even if the track or transceiver direction changes.
-        //
-        // [RFC 8829 Section 5.2.2](https://datatracker.ietf.org/doc/html/rfc8829#section-5.2.2)
-        //
-        // For RtpTransceivers that are not stopped, the "a=msid" line or
-        // lines MUST stay the same if they are present in the current
-        // description, regardless of changes to the transceiver's direction
-        // or track.  If no "a=msid" line is present in the current
-        // description, "a=msid" line(s) MUST be generated according to the
-        // same rules as for an initial offer.
-        for stream_id in &sender.associated_media_stream_ids {
-            media = media.with_property_attribute(format!("msid:{stream_id} {track_id}"));
-        }
-    }*/
 
     let direction = match params.offered_direction {
         Some(offered_direction) => {
@@ -453,15 +384,37 @@ pub(crate) fn add_transceiver_sdp(
     };
     media = media.with_property_attribute(direction.to_string());
 
-    for fingerprint in dtls_fingerprints {
-        media = media.with_fingerprint(
-            fingerprint.algorithm.to_owned(),
-            fingerprint.value.to_uppercase(),
-        );
-    }
+    if direction == RTCRtpTransceiverDirection::Sendonly {
+        if let (Some(cname), Some(msid)) = (transceiver.cname.as_ref(), transceiver.msid.as_ref()) {
+            media =
+                media.with_property_attribute(format!("msid:{} {}", msid.stream_id, msid.track_id));
 
-    if should_add_candidates {
-        media = add_candidate_to_media_descriptions(candidate, media, ice_gathering_state)?;
+            for ssrc_group in &transceiver.ssrc_groups {
+                media = media.with_property_attribute(format!(
+                    "ssrc-group:{} {}",
+                    ssrc_group.name,
+                    ssrc_group
+                        .ssrcs
+                        .iter()
+                        .map(|ssrc| ssrc.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+
+            for ssrc in &transceiver.ssrcs {
+                media = media.with_media_source(
+                    *ssrc,
+                    cname.clone(),
+                    msid.stream_id.clone(),
+                    msid.track_id.clone(),
+                );
+            }
+        } else {
+            return Err(Error::Other(
+                "Sendonly transceiver doesn't have cname and msid set".to_string(),
+            ));
+        }
     }
 
     Ok((d.with_media(media), true))

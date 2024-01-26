@@ -133,10 +133,8 @@ impl Session {
                 continue;
             }
 
-            let cname = get_cname(media).unwrap_or_default();
-            let msid = get_msid(media).ok_or(Error::Other(
-                "ErrPeerConnRemoteDescriptionWithoutMsidValue".to_string(),
-            ))?;
+            let cname = get_cname(media);
+            let msid = get_msid(media);
             let (ssrc_groups, ssrcs) = get_ssrc_groups(media)?;
             let codecs = codecs_from_media_description(media)?;
             let header_extensions = rtp_extensions_from_media_description(media)?;
