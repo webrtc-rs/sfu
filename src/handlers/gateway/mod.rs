@@ -290,12 +290,15 @@ impl GatewayInbound {
 
                 Ok(messages)
             }
-            /*RTCSdpType::Answer => self.server_states.accept_answer(
-                session_id,
-                endpoint_id,
-                Some(four_tuple),
-                request_sdp,
-            )?,*/
+            RTCSdpType::Answer => {
+                self.server_states.accept_answer(
+                    session_id,
+                    endpoint_id,
+                    four_tuple,
+                    request_sdp,
+                )?;
+                Ok(vec![])
+            }
             _ => Err(Error::Other(format!(
                 "Unsupported SDP type {}",
                 request_sdp.sdp_type
@@ -503,6 +506,7 @@ impl GatewayInbound {
         Ok((is_new_endpoint, Some(endpoint)))
     }
 
+    //TODO: only create offer message when SDP renegotiation is needed
     fn create_offer_message_event(
         &mut self,
         now: Instant,

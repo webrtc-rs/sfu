@@ -106,115 +106,60 @@ impl Session {
             .ok_or(Error::Other("Unparsed remote description".to_string()))?;
 
         let mut local_transceivers = endpoint.transceivers().borrow_mut();
-        let we_offer = remote_description.sdp_type == RTCSdpType::Answer;
 
-        if !we_offer {
-            // This is an offer from the remove
-            for media in &parsed.media_descriptions {
-                let mid_value = match get_mid_value(media) {
-                    Some(m) => {
-                        if m.is_empty() {
-                            return Err(Error::Other(
-                                "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
-                            ));
-                        } else {
-                            m
-                        }
+        for media in &parsed.media_descriptions {
+            let mid_value = match get_mid_value(media) {
+                Some(m) => {
+                    if m.is_empty() {
+                        return Err(Error::Other(
+                            "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
+                        ));
+                    } else {
+                        m
                     }
-                    None => continue,
-                };
-
-                if media.media_name.media == MEDIA_SECTION_APPLICATION {
-                    continue;
                 }
+                None => continue,
+            };
 
-                let kind = RTPCodecType::from(media.media_name.media.as_str());
-                let direction = get_peer_direction(media);
-                if kind == RTPCodecType::Unspecified
-                    || direction == RTCRtpTransceiverDirection::Unspecified
-                {
-                    continue;
-                }
-
-                let cname = get_cname(media).unwrap_or_default();
-                let msid = get_msid(media).ok_or(Error::Other(
-                    "ErrPeerConnRemoteDescriptionWithoutMsidValue".to_string(),
-                ))?;
-                let (ssrc_groups, ssrcs) = get_ssrc_groups(media)?;
-                let codecs = codecs_from_media_description(media)?;
-                let header_extensions = rtp_extensions_from_media_description(media)?;
-                let rtp_params = RTCRtpParameters {
-                    header_extensions,
-                    codecs,
-                };
-
-                let transceiver = Rc::new(RTCRtpTransceiver {
-                    mid: mid_value.to_string(),
-                    kind,
-                    direction,
-                    cname,
-                    msid,
-                    rtp_params,
-                    ssrcs,
-                    ssrc_groups,
-                });
-
-                if let Some(local_transceiver) = local_transceivers.get_mut(mid_value) {
-                    *local_transceiver = transceiver;
-                } else {
-                    local_transceivers.insert(mid_value.to_string(), transceiver);
-                }
+            if media.media_name.media == MEDIA_SECTION_APPLICATION {
+                continue;
             }
-        } else {
-            // WebRTC Spec 1.0 https://www.w3.org/TR/webrtc/
-            // 4.5.9.2
-            // This is an answer from the remote.
-            for media in &parsed.media_descriptions {
-                let _mid_value = match get_mid_value(media) {
-                    Some(m) => {
-                        if m.is_empty() {
-                            return Err(Error::Other(
-                                "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
-                            ));
-                        } else {
-                            m
-                        }
-                    }
-                    None => continue,
-                };
 
-                if media.media_name.media == MEDIA_SECTION_APPLICATION {
-                    continue;
-                }
-                let kind = RTPCodecType::from(media.media_name.media.as_str());
-                let direction = get_peer_direction(media);
-                if kind == RTPCodecType::Unspecified
-                    || direction == RTCRtpTransceiverDirection::Unspecified
-                {
-                    continue;
-                }
+            let kind = RTPCodecType::from(media.media_name.media.as_str());
+            let direction = get_peer_direction(media);
+            if kind == RTPCodecType::Unspecified
+                || direction == RTCRtpTransceiverDirection::Unspecified
+            {
+                continue;
+            }
 
-                /*TODO: if let Some(t) = local_transceivers.get_mut(mid_value) {
-                    let previous_direction = t.current_direction();
+            let cname = get_cname(media).unwrap_or_default();
+            let msid = get_msid(media).ok_or(Error::Other(
+                "ErrPeerConnRemoteDescriptionWithoutMsidValue".to_string(),
+            ))?;
+            let (ssrc_groups, ssrcs) = get_ssrc_groups(media)?;
+            let codecs = codecs_from_media_description(media)?;
+            let header_extensions = rtp_extensions_from_media_description(media)?;
+            let rtp_params = RTCRtpParameters {
+                header_extensions,
+                codecs,
+            };
 
-                    // 4.5.9.2.9
-                    // Let direction be an RTCRtpTransceiverDirection value representing the direction
-                    // from the media description, but with the send and receive directions reversed to
-                    // represent this peer's point of view. If the media description is rejected,
-                    // set direction to "inactive".
-                    let reversed_direction = direction.reverse();
+            let transceiver = Rc::new(RTCRtpTransceiver {
+                mid: mid_value.to_string(),
+                kind,
+                direction,
+                cname,
+                msid,
+                rtp_params,
+                ssrcs,
+                ssrc_groups,
+            });
 
-                    // 4.5.9.2.13.2
-                    // Set transceiver.[[CurrentDirection]] and transceiver.[[Direction]]s to direction.
-                    t.set_current_direction(reversed_direction);
-                    // TODO: According to the specification we should set
-                    // transceiver.[[Direction]] here, however libWebrtc doesn't do this.
-                    // NOTE: After raising this it seems like the specification might
-                    // change to remove the setting of transceiver.[[Direction]].
-                    // See https://github.com/w3c/webrtc-pc/issues/2751#issuecomment-1185901962
-                    // t.set_direction_internal(reversed_direction);
-                    t.process_new_current_direction(previous_direction)?;
-                }*/
+            if let Some(local_transceiver) = local_transceivers.get_mut(mid_value) {
+                *local_transceiver = transceiver;
+            } else {
+                local_transceivers.insert(mid_value.to_string(), transceiver);
             }
         }
 

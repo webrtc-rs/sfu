@@ -97,6 +97,24 @@ impl ServerStates {
         Ok(answer)
     }
 
+    pub(crate) fn accept_answer(
+        &self,
+        session_id: SessionId,
+        endpoint_id: EndpointId,
+        _four_tuple: FourTuple,
+        mut answer: RTCSessionDescription,
+    ) -> Result<()> {
+        let parsed = answer.unmarshal()?;
+        answer.parsed = Some(parsed);
+
+        let session = self.create_or_get_session(session_id);
+        if let Some(endpoint) = session.get_endpoint(&endpoint_id) {
+            session.set_remote_description(&endpoint, &answer)?;
+        };
+
+        Ok(())
+    }
+
     pub(crate) fn server_config(&self) -> &Arc<ServerConfig> {
         &self.server_config
     }
