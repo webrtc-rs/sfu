@@ -1,7 +1,5 @@
 pub(crate) mod fmtp;
 pub(crate) mod rtp_codec;
-pub(crate) mod rtp_receiver;
-pub(crate) mod rtp_sender;
 pub(crate) mod rtp_transceiver;
 pub(crate) mod rtp_transceiver_direction;
 pub(crate) mod sdp_type;
@@ -12,7 +10,7 @@ use crate::server::session::description::rtp_codec::{
     RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpHeaderExtensionParameters,
 };
 use crate::server::session::description::rtp_transceiver::{
-    PayloadType, RTCPFeedback, RTCRtpTransceiver,
+    MediaStreamId, PayloadType, RTCPFeedback, RTCRtpTransceiver, SsrcGroup, SSRC,
 };
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
@@ -28,7 +26,7 @@ use sdp::util::ConnectionRole;
 use sdp::{MediaDescription, SessionDescription};
 use serde::{Deserialize, Serialize};
 use shared::error::{Error, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Cursor};
 use std::net::SocketAddr;
 use url::Url;
@@ -274,7 +272,7 @@ pub(crate) fn add_transceiver_sdp(
             .with_property_attribute(ATTR_KEY_RTCPMUX.to_owned())
             .with_property_attribute(ATTR_KEY_RTCPRSIZE.to_owned());
 
-    let codecs = transceiver.get_codecs();
+    let codecs = &transceiver.rtp_params.codecs;
     for codec in codecs {
         let name = codec
             .capability
@@ -302,9 +300,9 @@ pub(crate) fn add_transceiver_sdp(
     }
     if codecs.is_empty() {
         // If we are sender and we have no codecs throw an error early
-        if transceiver.sender.track.is_some() {
+        /*TODO:if transceiver.sender.track.is_some() {
             return Err(Error::Other("ErrSenderWithNoCodecs".to_string()));
-        }
+        }*/
 
         // Explicitly reject track if we don't have the codec
         d = d.with_media(MediaDescription {
@@ -343,7 +341,7 @@ pub(crate) fn add_transceiver_sdp(
         return Ok((d, false));
     }
 
-    let header_extensions = transceiver.get_header_extensions();
+    let header_extensions = &transceiver.rtp_params.header_extensions;
     for rtp_extension in header_extensions {
         let ext_url = Url::parse(rtp_extension.uri.as_str())?;
         media = media.with_extmap(ExtMap {
@@ -368,7 +366,7 @@ pub(crate) fn add_transceiver_sdp(
         );
     }
 
-    let sender = &transceiver.sender;
+    /*TODO: let sender = &transceiver.sender;
     if let Some(track) = &sender.track {
         media = media.with_media_source(
             sender.ssrc,
@@ -404,12 +402,16 @@ pub(crate) fn add_transceiver_sdp(
         for stream_id in &sender.associated_media_stream_ids {
             media = media.with_property_attribute(format!("msid:{stream_id} {track_id}"));
         }
-    }
+    }*/
 
     let direction = match params.offered_direction {
         Some(offered_direction) => {
             use RTCRtpTransceiverDirection::*;
-            let transceiver_direction = transceiver.direction;
+            let local_direction = if transceiver.direction == Recvonly {
+                Sendonly
+            } else {
+                Recvonly
+            };
 
             match offered_direction {
                 Sendonly | Recvonly => {
@@ -419,14 +421,14 @@ pub(crate) fn add_transceiver_sdp(
                     // If a media stream is
                     // listed as recvonly in the offer, the answer MUST be marked as
                     // sendonly or inactive in the answer.
-                    offered_direction.reverse().intersect(transceiver_direction)
+                    offered_direction.reverse().intersect(local_direction)
                 }
                 // If an offered media stream is
                 // listed as sendrecv (or if there is no direction attribute at the
                 // media or session level, in which case the stream is sendrecv by
                 // default), the corresponding stream in the answer MAY be marked as
                 // sendonly, recvonly, sendrecv, or inactive
-                Sendrecv | Unspecified => transceiver.direction,
+                Sendrecv | Unspecified => local_direction,
                 // If an offered media
                 // stream is listed as inactive, it MUST be marked as inactive in the
                 // answer.
@@ -573,6 +575,81 @@ pub(crate) fn get_peer_direction(media: &MediaDescription) -> RTCRtpTransceiverD
         }
     }
     RTCRtpTransceiverDirection::Unspecified
+}
+
+pub(crate) fn get_cname(media: &MediaDescription) -> Option<String> {
+    for a in &media.attributes {
+        if a.key == "ssrc" {
+            if let Some(value) = a.value.as_ref() {
+                if value.contains("cname") {
+                    let fields: Vec<&str> = value.split(':').collect();
+                    if let Some(cname) = fields.last() {
+                        return Some(cname.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn get_msid(media: &MediaDescription) -> Option<MediaStreamId> {
+    for a in &media.attributes {
+        if a.key == "msid" {
+            if let Some(value) = a.value.as_ref() {
+                let fields: Vec<&str> = value.split_whitespace().collect();
+                if fields.len() == 2 {
+                    return Some(MediaStreamId {
+                        stream_id: fields[0].to_string(),
+                        track_id: fields[1].to_string(),
+                    });
+                }
+            }
+        } else if a.key == "ssrc" {
+            if let Some(value) = a.value.as_ref() {
+                if value.contains("msid") {
+                    let fields_msid: Vec<&str> = value.split(':').collect();
+                    if let Some(msid) = fields_msid.last() {
+                        let fields: Vec<&str> = msid.split_whitespace().collect();
+                        if fields.len() == 2 {
+                            return Some(MediaStreamId {
+                                stream_id: fields[0].to_string(),
+                                track_id: fields[1].to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn get_ssrc_groups(media: &MediaDescription) -> Result<(Vec<SsrcGroup>, HashSet<SSRC>)> {
+    let mut ssrc_groups = vec![];
+    let mut ssrc_set = HashSet::new();
+
+    for a in &media.attributes {
+        if a.key == "ssrc-group" {
+            if let Some(value) = a.value.as_ref() {
+                let fields: Vec<&str> = value.split_whitespace().collect();
+                if fields.len() >= 3 {
+                    let mut ssrcs = vec![];
+                    for field in fields.iter().skip(1) {
+                        let ssrc = field.parse::<u32>()?;
+                        ssrcs.push(ssrc);
+                        ssrc_set.insert(ssrc);
+                    }
+                    ssrc_groups.push(SsrcGroup {
+                        name: fields[0].to_string(),
+                        ssrcs,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok((ssrc_groups, ssrc_set))
 }
 
 pub(crate) fn extract_fingerprint(desc: &SessionDescription) -> Result<(String, String)> {

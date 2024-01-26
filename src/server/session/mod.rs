@@ -14,14 +14,13 @@ use crate::server::endpoint::candidate::{Candidate, DTLSRole, RTCIceParameters};
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
 use crate::server::session::description::rtp_codec::{RTCRtpParameters, RTPCodecType};
-use crate::server::session::description::rtp_sender::RTCRtpSender;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::{
-    codecs_from_media_description, get_mid_value, get_peer_direction, get_rids, populate_sdp,
-    rtp_extensions_from_media_description, update_sdp_origin, MediaSection, RTCSessionDescription,
-    MEDIA_SECTION_APPLICATION,
+    codecs_from_media_description, get_cname, get_mid_value, get_msid, get_peer_direction,
+    get_rids, get_ssrc_groups, populate_sdp, rtp_extensions_from_media_description,
+    update_sdp_origin, MediaSection, RTCSessionDescription, MEDIA_SECTION_APPLICATION,
 };
 use crate::types::{EndpointId, Mid, SessionId};
 
@@ -133,22 +132,32 @@ impl Session {
                     continue;
                 }
 
-                if !local_transceivers.contains_key(mid_value) {
-                    let local_direction = if direction == RTCRtpTransceiverDirection::Recvonly {
-                        RTCRtpTransceiverDirection::Sendonly
-                    } else {
-                        RTCRtpTransceiverDirection::Recvonly
-                    };
+                let cname = get_cname(media).unwrap_or_default();
+                let msid = get_msid(media).ok_or(Error::Other(
+                    "ErrPeerConnRemoteDescriptionWithoutMsidValue".to_string(),
+                ))?;
+                let (ssrc_groups, ssrcs) = get_ssrc_groups(media)?;
+                let codecs = codecs_from_media_description(media)?;
+                let header_extensions = rtp_extensions_from_media_description(media)?;
+                let rtp_params = RTCRtpParameters {
+                    header_extensions,
+                    codecs,
+                };
 
-                    let sender = RTCRtpSender::new();
-                    let codecs = codecs_from_media_description(media)?;
-                    let header_extensions = rtp_extensions_from_media_description(media)?;
-                    let rtp_params = RTCRtpParameters {
-                        header_extensions,
-                        codecs,
-                    };
-                    let transceiver =
-                        RTCRtpTransceiver::new(sender, local_direction, rtp_params, kind);
+                let transceiver = RTCRtpTransceiver {
+                    mid: mid_value.to_string(),
+                    kind,
+                    direction,
+                    cname,
+                    msid,
+                    rtp_params,
+                    ssrcs,
+                    ssrc_groups,
+                };
+
+                if let Some(local_transceiver) = local_transceivers.get_mut(mid_value) {
+                    *local_transceiver = transceiver;
+                } else {
                     local_transceivers.insert(mid_value.to_string(), transceiver);
                 }
             }
@@ -157,7 +166,7 @@ impl Session {
             // 4.5.9.2
             // This is an answer from the remote.
             for media in &parsed.media_descriptions {
-                let mid_value = match get_mid_value(media) {
+                let _mid_value = match get_mid_value(media) {
                     Some(m) => {
                         if m.is_empty() {
                             return Err(Error::Other(
@@ -181,7 +190,7 @@ impl Session {
                     continue;
                 }
 
-                if let Some(t) = local_transceivers.get_mut(mid_value) {
+                /*TODO: if let Some(t) = local_transceivers.get_mut(mid_value) {
                     let previous_direction = t.current_direction();
 
                     // 4.5.9.2.9
@@ -201,7 +210,7 @@ impl Session {
                     // See https://github.com/w3c/webrtc-pc/issues/2751#issuecomment-1185901962
                     // t.set_direction_internal(reversed_direction);
                     t.process_new_current_direction(previous_direction)?;
-                }
+                }*/
             }
         }
 
@@ -289,8 +298,7 @@ impl Session {
                             continue;
                         }
 
-                        if let Some(t) = local_transceivers.get_mut(mid_value) {
-                            t.sender.set_negotiated();
+                        if let Some(_t) = local_transceivers.get_mut(mid_value) {
                             matched.insert(mid_value.to_string());
 
                             media_sections.push(MediaSection {
@@ -308,9 +316,8 @@ impl Session {
 
             // If we are offering also include unmatched local transceivers
             if include_unmatched {
-                for (mid, t) in local_transceivers.iter_mut() {
+                for (mid, _t) in local_transceivers.iter_mut() {
                     if !matched.contains::<Mid>(mid) {
-                        t.sender.set_negotiated();
                         media_sections.push(MediaSection {
                             mid: mid.clone(),
                             ..Default::default()
