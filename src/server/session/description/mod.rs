@@ -29,6 +29,7 @@ use shared::error::{Error, Result};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Cursor};
 use std::net::SocketAddr;
+use std::rc::Rc;
 use url::Url;
 
 pub(crate) const UNSPECIFIED_STR: &str = "Unspecified";
@@ -251,9 +252,12 @@ pub(crate) fn add_transceiver_sdp(
     ice_params: &RTCIceParameters,
     candidate: &SocketAddr,
     media_section: &MediaSection,
-    transceiver: &RTCRtpTransceiver,
     params: AddTransceiverSdpParams,
 ) -> Result<(SessionDescription, bool)> {
+    if media_section.transceiver.is_none() {
+        return Err(Error::Other("ErrSDPZeroTransceivers".to_string()));
+    }
+
     let (should_add_candidates, mid_value, dtls_role, ice_gathering_state) = (
         params.should_add_candidates,
         params.mid_value,
@@ -261,6 +265,7 @@ pub(crate) fn add_transceiver_sdp(
         params.ice_gathering_state,
     );
 
+    let transceiver = media_section.transceiver.as_ref().unwrap();
     let mut media =
         MediaDescription::new_jsep_media_description(transceiver.kind.to_string(), vec![])
             .with_value_attribute(ATTR_KEY_CONNECTION_SETUP.to_owned(), dtls_role.to_string())
@@ -465,6 +470,7 @@ pub(crate) fn add_transceiver_sdp(
 #[derive(Default)]
 pub(crate) struct MediaSection {
     pub(crate) mid: Mid,
+    pub(crate) transceiver: Option<Rc<RTCRtpTransceiver>>,
     pub(crate) data: bool,
     pub(crate) rid_map: HashMap<String, String>,
     pub(crate) offered_direction: Option<RTCRtpTransceiverDirection>,
@@ -479,7 +485,6 @@ pub(crate) fn populate_sdp(
     ice_params: &RTCIceParameters,
     connection_role: ConnectionRole,
     media_sections: &[MediaSection],
-    transceivers: &HashMap<Mid, RTCRtpTransceiver>,
     media_description_fingerprint: bool,
 ) -> Result<SessionDescription> {
     let media_dtls_fingerprints = if media_description_fingerprint {
@@ -496,7 +501,7 @@ pub(crate) fn populate_sdp(
     };
 
     for (i, m) in media_sections.iter().enumerate() {
-        if m.data && transceivers.get(&m.mid).is_some() {
+        if m.data && m.transceiver.is_some() {
             return Err(Error::Other(
                 "ErrSDPMediaSectionMediaDataChanInvalid".to_string(),
             ));
@@ -528,9 +533,6 @@ pub(crate) fn populate_sdp(
                 ice_params,
                 candidate,
                 m,
-                transceivers
-                    .get(&m.mid)
-                    .ok_or(Error::Other("ErrSDPZeroTransceivers".to_string()))?,
                 params,
             )?;
             d = d1;

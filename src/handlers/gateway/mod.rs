@@ -202,12 +202,51 @@ impl GatewayInbound {
 
     fn handle_datachannel_open(
         &mut self,
-        _now: Instant,
-        _transport_context: TransportContext,
-        _association_handle: usize,
-        _stream_id: u16,
+        now: Instant,
+        transport_context: TransportContext,
+        association_handle: usize,
+        stream_id: u16,
     ) -> Result<Vec<TaggedMessageEvent>> {
-        Ok(vec![])
+        let four_tuple = (&transport_context).into();
+        let endpoint = self
+            .server_states
+            .find_endpoint(&four_tuple)
+            .ok_or(Error::ErrClientTransportNotSet)?;
+        let session = endpoint.session().upgrade().ok_or(Error::SessionEof)?;
+
+        let remote_description = endpoint
+            .remote_description()
+            .ok_or(Error::Other("remote_description is not set".to_string()))?;
+
+        let local_conn_cred = {
+            let transports = endpoint.transports().borrow();
+            let transport = transports.get(&four_tuple).ok_or(Error::Other(format!(
+                "can't find transport for endpoint id {} with {:?}",
+                endpoint.endpoint_id(),
+                four_tuple
+            )))?;
+            transport.candidate().local_connection_credentials().clone()
+        };
+
+        let offer = session.create_offer(
+            &Some(endpoint),
+            &remote_description,
+            &local_conn_cred.ice_params,
+        )?;
+
+        let offer_str =
+            serde_json::to_string(&offer).map_err(|err| Error::Other(err.to_string()))?;
+        info!("handle_datachannel_open: offer_str {}", offer_str);
+
+        Ok(vec![TaggedMessageEvent {
+            now,
+            transport: transport_context,
+            message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(ApplicationMessage {
+                association_handle,
+                stream_id,
+                data_channel_event: DataChannelEvent::Message(BytesMut::from(offer_str.as_str())),
+            })),
+        }])
     }
 
     fn handle_datachannel_close(
@@ -217,6 +256,7 @@ impl GatewayInbound {
         _association_handle: usize,
         _stream_id: u16,
     ) -> Result<Vec<TaggedMessageEvent>> {
+        //TODO: handle datachannel close event!
         Ok(vec![])
     }
 
@@ -248,7 +288,7 @@ impl GatewayInbound {
             RTCSdpType::Offer => self.server_states.accept_offer(
                 session_id,
                 endpoint_id,
-                Some((&transport_context).into()),
+                Some(four_tuple),
                 request_sdp,
             )?,
             //TODO: RTCSdpType::Answer => self.handle_answer_sdp(request_sdp)?,

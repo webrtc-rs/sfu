@@ -3,18 +3,23 @@ pub mod transport;
 
 use crate::server::endpoint::transport::Transport;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
+use crate::server::session::description::RTCSessionDescription;
 use crate::server::session::Session;
 use crate::types::{EndpointId, FourTuple, Mid};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 
 #[derive(Default)]
 pub(crate) struct Endpoint {
     session: Weak<Session>,
     endpoint_id: EndpointId,
+
+    remote_description: RefCell<Option<RTCSessionDescription>>,
+    local_description: RefCell<Option<RTCSessionDescription>>,
+
     transports: RefCell<HashMap<FourTuple, Transport>>,
-    transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
+    transceivers: RefCell<HashMap<Mid, Rc<RTCRtpTransceiver>>>,
 }
 
 impl Endpoint {
@@ -22,6 +27,10 @@ impl Endpoint {
         Self {
             session,
             endpoint_id,
+
+            remote_description: RefCell::new(None),
+            local_description: RefCell::new(None),
+
             transports: RefCell::new(HashMap::new()),
             transceivers: RefCell::new(HashMap::new()),
         }
@@ -54,7 +63,27 @@ impl Endpoint {
         &self.transports
     }
 
-    pub(crate) fn transceivers(&self) -> &RefCell<HashMap<Mid, RTCRtpTransceiver>> {
+    pub(crate) fn transceivers(&self) -> &RefCell<HashMap<Mid, Rc<RTCRtpTransceiver>>> {
         &self.transceivers
+    }
+
+    pub(crate) fn remote_description(&self) -> Option<RTCSessionDescription> {
+        let remote_description = self.remote_description.borrow();
+        remote_description.clone()
+    }
+
+    pub(crate) fn local_description(&self) -> Option<RTCSessionDescription> {
+        let local_description = self.local_description.borrow();
+        local_description.clone()
+    }
+
+    pub(crate) fn set_remote_description(&self, description: RTCSessionDescription) {
+        let mut remote_description = self.remote_description.borrow_mut();
+        *remote_description = Some(description);
+    }
+
+    pub(crate) fn set_local_description(&self, description: RTCSessionDescription) {
+        let mut local_description = self.local_description.borrow_mut();
+        *local_description = Some(description);
     }
 }

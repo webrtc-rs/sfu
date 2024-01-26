@@ -10,7 +10,9 @@ use std::rc::Rc;
 pub mod description;
 
 use crate::server::config::SessionConfig;
-use crate::server::endpoint::candidate::{Candidate, DTLSRole, RTCIceParameters};
+use crate::server::endpoint::candidate::{
+    Candidate, DTLSRole, RTCIceParameters, DEFAULT_DTLS_ROLE_OFFER,
+};
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
 use crate::server::session::description::rtp_codec::{RTCRtpParameters, RTPCodecType};
@@ -69,6 +71,8 @@ impl Session {
             let transport =
                 Transport::new(four_tuple, Rc::downgrade(&endpoint), Rc::clone(candidate));
             endpoint.add_transport(transport);
+            endpoint.set_local_description(candidate.local_description().clone());
+            endpoint.set_remote_description(candidate.remote_description().clone());
 
             {
                 let mut endpoints = self.endpoints.borrow_mut();
@@ -144,7 +148,7 @@ impl Session {
                     codecs,
                 };
 
-                let transceiver = RTCRtpTransceiver {
+                let transceiver = Rc::new(RTCRtpTransceiver {
                     mid: mid_value.to_string(),
                     kind,
                     direction,
@@ -153,7 +157,7 @@ impl Session {
                     rtp_params,
                     ssrcs,
                     ssrc_groups,
-                };
+                });
 
                 if let Some(local_transceiver) = local_transceivers.get_mut(mid_value) {
                     *local_transceiver = transceiver;
@@ -217,6 +221,37 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) fn create_offer(
+        &self,
+        endpoint: &Option<Rc<Endpoint>>,
+        remote_description: &RTCSessionDescription,
+        local_ice_params: &RTCIceParameters,
+    ) -> Result<RTCSessionDescription> {
+        let use_identity = false; //TODO: self.config.idp_login_url.is_some();
+
+        let mut d = self.generate_matched_sdp(
+            endpoint,
+            remote_description,
+            local_ice_params,
+            use_identity,
+            true, /*includeUnmatched */
+            DEFAULT_DTLS_ROLE_OFFER.to_connection_role(),
+        )?;
+
+        let mut sdp_origin = Origin::default();
+        update_sdp_origin(&mut sdp_origin, &mut d);
+
+        let sdp = d.marshal();
+
+        let offer = RTCSessionDescription {
+            sdp_type: RTCSdpType::Offer,
+            sdp,
+            parsed: Some(d),
+        };
+
+        Ok(offer)
+    }
+
     pub(crate) fn create_answer(
         &self,
         endpoint: &Option<Rc<Endpoint>>,
@@ -262,10 +297,10 @@ impl Session {
         let empty_transceivers = RefCell::new(HashMap::new());
 
         let media_sections = {
-            let mut local_transceivers = if let Some(endpoint) = endpoint.as_ref() {
-                endpoint.transceivers().borrow_mut()
+            let local_transceivers = if let Some(endpoint) = endpoint.as_ref() {
+                endpoint.transceivers().borrow()
             } else {
-                empty_transceivers.borrow_mut()
+                empty_transceivers.borrow()
             };
 
             let mut media_sections = vec![];
@@ -298,11 +333,12 @@ impl Session {
                             continue;
                         }
 
-                        if let Some(_t) = local_transceivers.get_mut(mid_value) {
+                        if let Some(t) = local_transceivers.get(mid_value) {
                             matched.insert(mid_value.to_string());
 
                             media_sections.push(MediaSection {
                                 mid: mid_value.to_owned(),
+                                transceiver: Some(t.clone()),
                                 rid_map: get_rids(media),
                                 offered_direction: (!include_unmatched).then_some(direction),
                                 ..Default::default()
@@ -316,10 +352,11 @@ impl Session {
 
             // If we are offering also include unmatched local transceivers
             if include_unmatched {
-                for (mid, _t) in local_transceivers.iter_mut() {
+                for (mid, t) in local_transceivers.iter() {
                     if !matched.contains::<Mid>(mid) {
                         media_sections.push(MediaSection {
                             mid: mid.clone(),
+                            transceiver: Some(t.clone()),
                             ..Default::default()
                         });
                     }
@@ -331,6 +368,27 @@ impl Session {
                         data: true,
                         ..Default::default()
                     });
+                }
+
+                // we are offering also include other endpoints' local transceivers
+                if let Some(endpoint) = endpoint.as_ref() {
+                    let endpoints = self.endpoints.borrow();
+                    for (&other_endpoint_id, other_endpoint) in &*endpoints {
+                        if other_endpoint_id != endpoint.endpoint_id() {
+                            let other_transceivers = other_endpoint.transceivers().borrow();
+                            for (other_mid, other_transceiver) in other_transceivers.iter() {
+                                if other_transceiver.direction
+                                    == RTCRtpTransceiverDirection::Sendonly
+                                {
+                                    media_sections.push(MediaSection {
+                                        mid: other_mid.to_owned(),
+                                        transceiver: Some(other_transceiver.clone()),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -344,12 +402,6 @@ impl Session {
                 return Err(Error::Other("ErrNonCertificate".to_string()));
             };
 
-        let local_transceiver = if let Some(endpoint) = endpoint.as_ref() {
-            endpoint.transceivers().borrow()
-        } else {
-            empty_transceivers.borrow()
-        };
-
         populate_sdp(
             d,
             &dtls_fingerprints,
@@ -357,7 +409,6 @@ impl Session {
             local_ice_params,
             connection_role,
             &media_sections,
-            &local_transceiver,
             true,
         )
     }
