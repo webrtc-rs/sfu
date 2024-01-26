@@ -23,6 +23,13 @@ pub(crate) enum DataChannelMessageParams {
     },
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum DataChannelEvent {
+    Open,
+    Message(BytesMut),
+    Close,
+}
+
 #[derive(Debug)]
 pub struct DataChannelMessage {
     pub(crate) association_handle: usize,
@@ -36,7 +43,7 @@ pub struct DataChannelMessage {
 pub struct ApplicationMessage {
     pub(crate) association_handle: usize,
     pub(crate) stream_id: u16,
-    pub(crate) payload: BytesMut,
+    pub(crate) data_channel_event: DataChannelEvent,
 }
 
 #[derive(Debug)]
@@ -49,7 +56,7 @@ pub enum STUNMessageEvent {
 pub enum DTLSMessageEvent {
     RAW(BytesMut),
     SCTP(DataChannelMessage),
-    APPLICATION(ApplicationMessage),
+    DATACHANNEL(ApplicationMessage),
 }
 
 #[derive(Debug)]

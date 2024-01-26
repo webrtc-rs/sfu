@@ -1,9 +1,9 @@
 use crate::messages::{
-    ApplicationMessage, DTLSMessageEvent, DataChannelMessage, DataChannelMessageParams,
-    DataChannelMessageType, MessageEvent, TaggedMessageEvent,
+    ApplicationMessage, DTLSMessageEvent, DataChannelEvent, DataChannelMessage,
+    DataChannelMessageParams, DataChannelMessageType, MessageEvent, TaggedMessageEvent,
 };
 use data::message::{message_channel_ack::*, message_channel_open::*, message_type::*, *};
-use log::{debug, error};
+use log::{debug, error, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use shared::error::Result;
 use shared::marshal::*;
@@ -49,7 +49,11 @@ impl InboundHandler for DataChannelInbound {
 
                             let payload = Message::DataChannelAck(DataChannelAck {}).marshal()?;
                             Ok((
-                                None,
+                                Some(ApplicationMessage {
+                                    association_handle: message.association_handle,
+                                    stream_id: message.stream_id,
+                                    data_channel_event: DataChannelEvent::Open,
+                                }),
                                 Some(DataChannelMessage {
                                     association_handle: message.association_handle,
                                     stream_id: message.stream_id,
@@ -71,7 +75,7 @@ impl InboundHandler for DataChannelInbound {
                             Some(ApplicationMessage {
                                 association_handle: message.association_handle,
                                 stream_id: message.stream_id,
-                                payload: message.payload,
+                                data_channel_event: DataChannelEvent::Message(message.payload),
                             }),
                             None,
                         ))
@@ -80,16 +84,7 @@ impl InboundHandler for DataChannelInbound {
 
             match try_read() {
                 Ok((inbound_message, outbound_message)) => {
-                    if let Some(application_message) = inbound_message {
-                        debug!("recv application message {:?}", msg.transport.peer_addr);
-                        ctx.fire_read(TaggedMessageEvent {
-                            now: msg.now,
-                            transport: msg.transport,
-                            message: MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(
-                                application_message,
-                            )),
-                        })
-                    }
+                    // first outbound message
                     if let Some(data_channel_message) = outbound_message {
                         debug!("send DataChannelAck message {:?}", msg.transport.peer_addr);
                         ctx.fire_write(TaggedMessageEvent {
@@ -99,6 +94,18 @@ impl InboundHandler for DataChannelInbound {
                                 data_channel_message,
                             )),
                         });
+                    }
+
+                    // then inbound message
+                    if let Some(application_message) = inbound_message {
+                        debug!("recv application message {:?}", msg.transport.peer_addr);
+                        ctx.fire_read(TaggedMessageEvent {
+                            now: msg.now,
+                            transport: msg.transport,
+                            message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(
+                                application_message,
+                            )),
+                        })
                     }
                 }
                 Err(err) => {
@@ -119,28 +126,35 @@ impl OutboundHandler for DataChannelOutbound {
     type Wout = Self::Win;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        if let MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)) = msg.message {
+        if let MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(message)) = msg.message {
             debug!(
                 "send application message {:?} with {:?}",
                 msg.transport.peer_addr, message
             );
 
-            ctx.fire_write(TaggedMessageEvent {
-                now: msg.now,
-                transport: msg.transport,
-                message: MessageEvent::DTLS(DTLSMessageEvent::SCTP(DataChannelMessage {
-                    association_handle: message.association_handle,
-                    stream_id: message.stream_id,
-                    data_message_type: DataChannelMessageType::Text,
-                    params: DataChannelMessageParams::Outbound {
-                        ordered: true,
-                        reliable: true,
-                        max_rtx_count: 0,
-                        max_rtx_millis: 0,
-                    },
-                    payload: message.payload,
-                })),
-            });
+            if let DataChannelEvent::Message(payload) = message.data_channel_event {
+                ctx.fire_write(TaggedMessageEvent {
+                    now: msg.now,
+                    transport: msg.transport,
+                    message: MessageEvent::DTLS(DTLSMessageEvent::SCTP(DataChannelMessage {
+                        association_handle: message.association_handle,
+                        stream_id: message.stream_id,
+                        data_message_type: DataChannelMessageType::Text,
+                        params: DataChannelMessageParams::Outbound {
+                            ordered: true,
+                            reliable: true,
+                            max_rtx_count: 0,
+                            max_rtx_millis: 0,
+                        },
+                        payload,
+                    })),
+                });
+            } else {
+                warn!(
+                    "drop unsupported DATACHANNEL message {:?} to {}",
+                    message, msg.transport.peer_addr
+                );
+            }
         } else {
             // Bypass
             debug!("bypass DataChannel write {:?}", msg.transport.peer_addr);

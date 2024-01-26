@@ -1,6 +1,6 @@
 use crate::messages::{
-    ApplicationMessage, DTLSMessageEvent, MessageEvent, RTPMessageEvent, STUNMessageEvent,
-    TaggedMessageEvent,
+    ApplicationMessage, DTLSMessageEvent, DataChannelEvent, MessageEvent, RTPMessageEvent,
+    STUNMessageEvent, TaggedMessageEvent,
 };
 use crate::server::endpoint::{candidate::Candidate, Endpoint};
 use crate::server::session::description::sdp_type::RTCSdpType;
@@ -52,44 +52,34 @@ impl InboundHandler for GatewayInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        let try_read = || -> Result<Option<Vec<TaggedMessageEvent>>> {
+        let try_read = || -> Result<Vec<TaggedMessageEvent>> {
             match msg.message {
                 MessageEvent::STUN(STUNMessageEvent::STUN(message)) => {
-                    Ok(Some(vec![self.handle_stun_message(
-                        msg.now,
-                        msg.transport,
-                        message,
-                    )?]))
+                    self.handle_stun_message(msg.now, msg.transport, message)
                 }
-                MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)) => {
-                    Ok(Some(vec![self.handle_dtls_message(
-                        msg.now,
-                        msg.transport,
-                        message,
-                    )?]))
+                MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(message)) => {
+                    self.handle_dtls_message(msg.now, msg.transport, message)
                 }
-                MessageEvent::RTP(RTPMessageEvent::RTP(message)) => Ok(Some(
-                    self.handle_rtp_message(msg.now, msg.transport, message)?,
-                )),
-                MessageEvent::RTP(RTPMessageEvent::RTCP(message)) => Ok(Some(
-                    self.handle_rtcp_message(msg.now, msg.transport, message)?,
-                )),
+                MessageEvent::RTP(RTPMessageEvent::RTP(message)) => {
+                    self.handle_rtp_message(msg.now, msg.transport, message)
+                }
+                MessageEvent::RTP(RTPMessageEvent::RTCP(message)) => {
+                    self.handle_rtcp_message(msg.now, msg.transport, message)
+                }
                 _ => {
                     warn!(
                         "drop unsupported message {:?} from {}",
                         msg.message, msg.transport.peer_addr
                     );
-                    Ok(None)
+                    Ok(vec![])
                 }
             }
         };
 
         match try_read() {
             Ok(messages) => {
-                if let Some(messages) = messages {
-                    for message in messages {
-                        ctx.fire_write(message);
-                    }
+                for message in messages {
+                    ctx.fire_write(message);
                 }
             }
             Err(err) => {
@@ -138,7 +128,7 @@ impl GatewayInbound {
         now: Instant,
         transport_context: TransportContext,
         mut request: stun::message::Message,
-    ) -> Result<TaggedMessageEvent> {
+    ) -> Result<Vec<TaggedMessageEvent>> {
         let candidate = match self.check_stun_message(&mut request)? {
             Some(candidate) => candidate,
             None => {
@@ -174,20 +164,71 @@ impl GatewayInbound {
             transport_context.peer_addr.port()
         );
 
-        Ok(TaggedMessageEvent {
+        Ok(vec![TaggedMessageEvent {
             now,
             transport: transport_context,
             message: MessageEvent::STUN(STUNMessageEvent::STUN(response)),
-        })
+        }])
     }
 
     fn handle_dtls_message(
         &mut self,
         now: Instant,
         transport_context: TransportContext,
-        mut message: ApplicationMessage,
-    ) -> Result<TaggedMessageEvent> {
-        let request_sdp_str = String::from_utf8(message.payload.to_vec())?;
+        message: ApplicationMessage,
+    ) -> Result<Vec<TaggedMessageEvent>> {
+        match message.data_channel_event {
+            DataChannelEvent::Open => self.handle_datachannel_open(
+                now,
+                transport_context,
+                message.association_handle,
+                message.stream_id,
+            ),
+            DataChannelEvent::Message(payload) => self.handle_datachannel_message(
+                now,
+                transport_context,
+                message.association_handle,
+                message.stream_id,
+                payload,
+            ),
+            DataChannelEvent::Close => self.handle_datachannel_close(
+                now,
+                transport_context,
+                message.association_handle,
+                message.stream_id,
+            ),
+        }
+    }
+
+    fn handle_datachannel_open(
+        &mut self,
+        _now: Instant,
+        _transport_context: TransportContext,
+        _association_handle: usize,
+        _stream_id: u16,
+    ) -> Result<Vec<TaggedMessageEvent>> {
+        Ok(vec![])
+    }
+
+    fn handle_datachannel_close(
+        &mut self,
+        _now: Instant,
+        _transport_context: TransportContext,
+        _association_handle: usize,
+        _stream_id: u16,
+    ) -> Result<Vec<TaggedMessageEvent>> {
+        Ok(vec![])
+    }
+
+    fn handle_datachannel_message(
+        &mut self,
+        now: Instant,
+        transport_context: TransportContext,
+        association_handle: usize,
+        stream_id: u16,
+        payload: BytesMut,
+    ) -> Result<Vec<TaggedMessageEvent>> {
+        let request_sdp_str = String::from_utf8(payload.to_vec())?;
         info!("handle_dtls_message: request_sdp {}", request_sdp_str);
 
         let request_sdp = serde_json::from_str::<RTCSessionDescription>(&request_sdp_str)
@@ -222,13 +263,18 @@ impl GatewayInbound {
         let response_sdp_str =
             serde_json::to_string(&response_sdp).map_err(|err| Error::Other(err.to_string()))?;
         info!("handle_dtls_message: response_sdp {}", response_sdp_str);
-        message.payload = BytesMut::from(response_sdp_str.as_str());
 
-        Ok(TaggedMessageEvent {
+        Ok(vec![TaggedMessageEvent {
             now,
             transport: transport_context,
-            message: MessageEvent::DTLS(DTLSMessageEvent::APPLICATION(message)),
-        })
+            message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(ApplicationMessage {
+                association_handle,
+                stream_id,
+                data_channel_event: DataChannelEvent::Message(BytesMut::from(
+                    response_sdp_str.as_str(),
+                )),
+            })),
+        }])
     }
 
     fn handle_rtp_message(
@@ -363,7 +409,7 @@ impl GatewayInbound {
         now: Instant,
         transport_context: TransportContext,
         transaction_id: TransactionId,
-    ) -> Result<TaggedMessageEvent> {
+    ) -> Result<Vec<TaggedMessageEvent>> {
         let mut response = stun::message::Message::new();
         response.build(&[
             Box::new(BINDING_SUCCESS),
@@ -379,11 +425,11 @@ impl GatewayInbound {
             response.typ
         );
 
-        Ok(TaggedMessageEvent {
+        Ok(vec![TaggedMessageEvent {
             now,
             transport: transport_context,
             message: MessageEvent::STUN(STUNMessageEvent::STUN(response)),
-        })
+        }])
     }
 
     fn add_endpoint(
