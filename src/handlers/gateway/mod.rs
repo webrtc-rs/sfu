@@ -219,12 +219,13 @@ impl GatewayInbound {
             .ok_or(Error::Other("remote_description is not set".to_string()))?;
 
         let local_conn_cred = {
-            let transports = endpoint.transports().borrow();
-            let transport = transports.get(&four_tuple).ok_or(Error::Other(format!(
+            let mut transports = endpoint.transports().borrow_mut();
+            let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
                 "can't find transport for endpoint id {} with {:?}",
                 endpoint.endpoint_id(),
                 four_tuple
             )))?;
+            transport.set_association_handle_and_stream_id(association_handle, stream_id);
             transport.candidate().local_connection_credentials().clone()
         };
 
@@ -284,37 +285,47 @@ impl GatewayInbound {
             (session.session_id(), endpoint.endpoint_id())
         };
 
-        let response_sdp = match request_sdp.sdp_type {
-            RTCSdpType::Offer => self.server_states.accept_offer(
+        match request_sdp.sdp_type {
+            RTCSdpType::Offer => {
+                let answer = self.server_states.accept_offer(
+                    session_id,
+                    endpoint_id,
+                    Some(four_tuple),
+                    request_sdp,
+                )?;
+                let answer_str =
+                    serde_json::to_string(&answer).map_err(|err| Error::Other(err.to_string()))?;
+                info!("handle_dtls_message: answer_str {}", answer_str);
+
+                let messages = vec![TaggedMessageEvent {
+                    now,
+                    transport: transport_context,
+                    message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(
+                        ApplicationMessage {
+                            association_handle,
+                            stream_id,
+                            data_channel_event: DataChannelEvent::Message(BytesMut::from(
+                                answer_str.as_str(),
+                            )),
+                        },
+                    )),
+                }];
+
+                //TODO: trigger other endpoints' create_offer()...
+
+                Ok(messages)
+            }
+            /*RTCSdpType::Answer => self.server_states.accept_answer(
                 session_id,
                 endpoint_id,
                 Some(four_tuple),
                 request_sdp,
-            )?,
-            //TODO: RTCSdpType::Answer => self.handle_answer_sdp(request_sdp)?,
-            _ => {
-                return Err(Error::Other(format!(
-                    "Unsupported SDP type {}",
-                    request_sdp.sdp_type
-                )))
-            }
-        };
-
-        let response_sdp_str =
-            serde_json::to_string(&response_sdp).map_err(|err| Error::Other(err.to_string()))?;
-        info!("handle_dtls_message: response_sdp {}", response_sdp_str);
-
-        Ok(vec![TaggedMessageEvent {
-            now,
-            transport: transport_context,
-            message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(ApplicationMessage {
-                association_handle,
-                stream_id,
-                data_channel_event: DataChannelEvent::Message(BytesMut::from(
-                    response_sdp_str.as_str(),
-                )),
-            })),
-        }])
+            )?,*/
+            _ => Err(Error::Other(format!(
+                "Unsupported SDP type {}",
+                request_sdp.sdp_type
+            ))),
+        }
     }
 
     fn handle_rtp_message(

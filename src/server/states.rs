@@ -65,6 +65,7 @@ impl ServerStates {
 
         let local_conn_cred = if let Some(endpoint) = endpoint.as_ref() {
             session.set_remote_description(endpoint, &offer)?;
+
             let four_tuple = four_tuple.ok_or(Error::Other("missing FourTuple".to_string()))?;
             let transports = endpoint.transports().borrow();
             let transport = transports.get(&four_tuple).ok_or(Error::Other(format!(
