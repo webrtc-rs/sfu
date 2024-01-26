@@ -7,11 +7,10 @@ use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::RTCSessionDescription;
 use crate::server::states::ServerStates;
 use bytes::BytesMut;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;
 use shared::error::{Error, Result};
-use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Instant;
 use stun::attributes::{
@@ -207,47 +206,12 @@ impl GatewayInbound {
         association_handle: usize,
         stream_id: u16,
     ) -> Result<Vec<TaggedMessageEvent>> {
-        let four_tuple = (&transport_context).into();
-        let endpoint = self
-            .server_states
-            .find_endpoint(&four_tuple)
-            .ok_or(Error::ErrClientTransportNotSet)?;
-        let session = endpoint.session().upgrade().ok_or(Error::SessionEof)?;
-
-        let remote_description = endpoint
-            .remote_description()
-            .ok_or(Error::Other("remote_description is not set".to_string()))?;
-
-        let local_conn_cred = {
-            let mut transports = endpoint.transports().borrow_mut();
-            let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
-                "can't find transport for endpoint id {} with {:?}",
-                endpoint.endpoint_id(),
-                four_tuple
-            )))?;
-            transport.set_association_handle_and_stream_id(association_handle, stream_id);
-            transport.candidate().local_connection_credentials().clone()
-        };
-
-        let offer = session.create_offer(
-            &Some(endpoint),
-            &remote_description,
-            &local_conn_cred.ice_params,
-        )?;
-
-        let offer_str =
-            serde_json::to_string(&offer).map_err(|err| Error::Other(err.to_string()))?;
-        info!("handle_datachannel_open: offer_str {}", offer_str);
-
-        Ok(vec![TaggedMessageEvent {
+        Ok(vec![self.create_offer_message_event(
             now,
-            transport: transport_context,
-            message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(ApplicationMessage {
-                association_handle,
-                stream_id,
-                data_channel_event: DataChannelEvent::Message(BytesMut::from(offer_str.as_str())),
-            })),
-        }])
+            transport_context,
+            association_handle,
+            stream_id,
+        )?])
     }
 
     fn handle_datachannel_close(
@@ -297,7 +261,10 @@ impl GatewayInbound {
                     serde_json::to_string(&answer).map_err(|err| Error::Other(err.to_string()))?;
                 info!("handle_dtls_message: answer_str {}", answer_str);
 
-                let messages = vec![TaggedMessageEvent {
+                let peers = self.get_other_transport_contexts(&transport_context)?;
+                let mut messages = Vec::with_capacity(peers.len() + 1);
+
+                messages.push(TaggedMessageEvent {
                     now,
                     transport: transport_context,
                     message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(
@@ -309,9 +276,17 @@ impl GatewayInbound {
                             )),
                         },
                     )),
-                }];
+                });
 
-                //TODO: trigger other endpoints' create_offer()...
+                // trigger other endpoints' create_offer()
+                for (other_transport_context, association_handle, stream_id) in peers {
+                    messages.push(self.create_offer_message_event(
+                        now,
+                        other_transport_context,
+                        association_handle,
+                        stream_id,
+                    )?);
+                }
 
                 Ok(messages)
             }
@@ -335,17 +310,13 @@ impl GatewayInbound {
         rtp_packet: rtp::packet::Packet,
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: Selective Forwarding RTP Packets
-        let peer_addrs = self.get_other_peer_addrs(&transport_context)?;
+        let peers = self.get_other_transport_contexts(&transport_context)?;
 
-        let mut outgoing_messages = Vec::with_capacity(peer_addrs.len());
-        for peer_addr in peer_addrs {
+        let mut outgoing_messages = Vec::with_capacity(peers.len());
+        for (transport, _, _) in peers {
             outgoing_messages.push(TaggedMessageEvent {
                 now,
-                transport: TransportContext {
-                    local_addr: transport_context.local_addr,
-                    peer_addr,
-                    ecn: transport_context.ecn,
-                },
+                transport,
                 message: MessageEvent::RTP(RTPMessageEvent::RTP(rtp_packet.clone())),
             });
         }
@@ -360,17 +331,13 @@ impl GatewayInbound {
         rtcp_packets: Vec<Box<dyn rtcp::packet::Packet>>,
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: Selective Forwarding RTCP Packets
-        let peer_addrs = self.get_other_peer_addrs(&transport_context)?;
+        let peers = self.get_other_transport_contexts(&transport_context)?;
 
-        let mut outgoing_messages = Vec::with_capacity(peer_addrs.len());
-        for peer_addr in peer_addrs {
+        let mut outgoing_messages = Vec::with_capacity(peers.len());
+        for (transport, _, _) in peers {
             outgoing_messages.push(TaggedMessageEvent {
                 now,
-                transport: TransportContext {
-                    local_addr: transport_context.local_addr,
-                    peer_addr,
-                    ecn: transport_context.ecn,
-                },
+                transport,
                 message: MessageEvent::RTP(RTPMessageEvent::RTCP(rtcp_packets.clone())),
             });
         }
@@ -429,10 +396,10 @@ impl GatewayInbound {
         }
     }
 
-    fn get_other_peer_addrs(
+    fn get_other_transport_contexts(
         &self,
         transport_context: &TransportContext,
-    ) -> Result<Vec<SocketAddr>> {
+    ) -> Result<Vec<(TransportContext, usize, u16)>> {
         let four_tuple = transport_context.into();
         let endpoint = self
             .server_states
@@ -441,18 +408,35 @@ impl GatewayInbound {
         let session = endpoint.session().upgrade().ok_or(Error::SessionEof)?;
         let endpoint_id = endpoint.endpoint_id();
 
-        let mut peer_addrs = vec![];
+        let mut peers = vec![];
         let endpoints = session.endpoints().borrow();
         for (&other_endpoint_id, other_endpoint) in &*endpoints {
             if other_endpoint_id != endpoint_id {
                 let transports = other_endpoint.transports().borrow();
-                let four_tuples = transports.keys();
-                for other_four_tuple in four_tuples {
-                    peer_addrs.push(other_four_tuple.peer_addr);
+                for (other_four_tuple, other_transport) in transports.iter() {
+                    if let (Some(association_handle), Some(stream_id)) =
+                        other_transport.association_handle_and_stream_id()
+                    {
+                        peers.push((
+                            TransportContext {
+                                local_addr: other_four_tuple.local_addr,
+                                peer_addr: other_four_tuple.peer_addr,
+                                ecn: transport_context.ecn,
+                            },
+                            association_handle,
+                            stream_id,
+                        ));
+                    } else {
+                        trace!(
+                            "session id {}/endpoint id {}'s data channel is not ready",
+                            session.session_id(),
+                            endpoint_id
+                        );
+                    }
                 }
             }
         }
-        Ok(peer_addrs)
+        Ok(peers)
     }
 
     fn send_server_reflective_address(
@@ -517,5 +501,55 @@ impl GatewayInbound {
             .add_endpoint(four_tuple, Rc::clone(&endpoint));
 
         Ok((is_new_endpoint, Some(endpoint)))
+    }
+
+    fn create_offer_message_event(
+        &mut self,
+        now: Instant,
+        transport_context: TransportContext,
+        association_handle: usize,
+        stream_id: u16,
+    ) -> Result<TaggedMessageEvent> {
+        let four_tuple = (&transport_context).into();
+        let endpoint = self
+            .server_states
+            .find_endpoint(&four_tuple)
+            .ok_or(Error::ErrClientTransportNotSet)?;
+        let session = endpoint.session().upgrade().ok_or(Error::SessionEof)?;
+
+        let remote_description = endpoint
+            .remote_description()
+            .ok_or(Error::Other("remote_description is not set".to_string()))?;
+
+        let local_conn_cred = {
+            let mut transports = endpoint.transports().borrow_mut();
+            let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
+                "can't find transport for endpoint id {} with {:?}",
+                endpoint.endpoint_id(),
+                four_tuple
+            )))?;
+            transport.set_association_handle_and_stream_id(association_handle, stream_id);
+            transport.candidate().local_connection_credentials().clone()
+        };
+
+        let offer = session.create_offer(
+            &Some(endpoint),
+            &remote_description,
+            &local_conn_cred.ice_params,
+        )?;
+
+        let offer_str =
+            serde_json::to_string(&offer).map_err(|err| Error::Other(err.to_string()))?;
+        info!("create_offer_message_event: offer_str {}", offer_str);
+
+        Ok(TaggedMessageEvent {
+            now,
+            transport: transport_context,
+            message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(ApplicationMessage {
+                association_handle,
+                stream_id,
+                data_channel_event: DataChannelEvent::Message(BytesMut::from(offer_str.as_str())),
+            })),
+        })
     }
 }
