@@ -105,7 +105,10 @@ impl Session {
             .as_ref()
             .ok_or(Error::Other("Unparsed remote description".to_string()))?;
 
-        let mut transceivers = endpoint.transceivers().borrow_mut();
+        let (mut mids, mut transceivers) = (
+            endpoint.mids().borrow_mut(),
+            endpoint.transceivers().borrow_mut(),
+        );
         let we_offer = remote_description.sdp_type == RTCSdpType::Answer;
 
         for media in &parsed.media_descriptions {
@@ -173,6 +176,7 @@ impl Session {
                         kind,
                     };
 
+                    mids.push(mid_value.to_string());
                     transceivers.insert(mid_value.to_string(), transceiver);
 
                     // add it to other endpoints' transceivers as send only
@@ -182,7 +186,10 @@ impl Session {
                         if other_endpoint_id != endpoint.endpoint_id() {
                             let other_mid_value =
                                 format!("{}-{}", endpoint.endpoint_id(), mid_value);
-                            let mut other_transceivers = other_endpoint.transceivers().borrow_mut();
+                            let (mut other_mids, mut other_transceivers) = (
+                                other_endpoint.mids().borrow_mut(),
+                                other_endpoint.transceivers().borrow_mut(),
+                            );
                             if let Some(other_transceiver) =
                                 other_transceivers.get_mut(&other_mid_value)
                             {
@@ -197,6 +204,7 @@ impl Session {
                                     kind,
                                 };
 
+                                other_mids.push(other_mid_value.clone());
                                 other_transceivers.insert(other_mid_value, other_transceiver);
                             }
                         }
@@ -348,13 +356,13 @@ impl Session {
         connection_role: ConnectionRole,
     ) -> Result<SessionDescription> {
         let d = SessionDescription::new_jsep_session_description(use_identity);
-        let empty_transceivers = RefCell::new(HashMap::new());
+        let (empty_mids, empty_transceivers) = (RefCell::new(vec![]), RefCell::new(HashMap::new()));
 
         let media_sections = {
-            let transceivers = if let Some(endpoint) = endpoint.as_ref() {
-                endpoint.transceivers().borrow()
+            let (mids, transceivers) = if let Some(endpoint) = endpoint.as_ref() {
+                (endpoint.mids().borrow(), endpoint.transceivers().borrow())
             } else {
-                empty_transceivers.borrow()
+                (empty_mids.borrow(), empty_transceivers.borrow())
             };
 
             let mut media_sections = vec![];
@@ -387,15 +395,14 @@ impl Session {
                             continue;
                         }
 
-                        if let Some(_t) = transceivers.get(mid_value) {
-                            matched.insert(mid_value.to_string());
-
+                        if transceivers.contains_key(mid_value) {
                             media_sections.push(MediaSection {
                                 mid: mid_value.to_owned(),
                                 rid_map: get_rids(media),
                                 offered_direction: (!include_unmatched).then_some(direction),
                                 ..Default::default()
                             });
+                            matched.insert(mid_value.to_string());
                         } else {
                             return Err(Error::Other("ErrPeerConnTransceiverMidNil".to_string()));
                         }
@@ -405,7 +412,7 @@ impl Session {
 
             // If we are offering also include unmatched local transceivers
             if include_unmatched {
-                for (mid, _t) in transceivers.iter() {
+                for mid in mids.iter() {
                     if !matched.contains::<Mid>(mid) {
                         media_sections.push(MediaSection {
                             mid: mid.clone(),

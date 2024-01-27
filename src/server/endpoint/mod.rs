@@ -19,6 +19,8 @@ pub(crate) struct Endpoint {
     local_description: RefCell<Option<RTCSessionDescription>>,
 
     transports: RefCell<HashMap<FourTuple, Transport>>,
+
+    mids: RefCell<Vec<Mid>>,
     transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
 }
 
@@ -32,6 +34,8 @@ impl Endpoint {
             local_description: RefCell::new(None),
 
             transports: RefCell::new(HashMap::new()),
+
+            mids: RefCell::new(vec![]),
             transceivers: RefCell::new(HashMap::new()),
         }
     }
@@ -61,6 +65,10 @@ impl Endpoint {
 
     pub(crate) fn transports(&self) -> &RefCell<HashMap<FourTuple, Transport>> {
         &self.transports
+    }
+
+    pub(crate) fn mids(&self) -> &RefCell<Vec<Mid>> {
+        &self.mids
     }
 
     pub(crate) fn transceivers(&self) -> &RefCell<HashMap<Mid, RTCRtpTransceiver>> {
