@@ -9,6 +9,7 @@ use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::{debug, error, info};
 use sfu::server::session::description::RTCSessionDescription;
 use sfu::server::states::ServerStates;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
@@ -329,7 +330,7 @@ async fn remote_handler(
 }
 
 pub fn handle_signaling_message(
-    server_states: &Rc<ServerStates>,
+    server_states: &Rc<RefCell<ServerStates>>,
     signaling_msg: SignalingMessage,
 ) -> Result<()> {
     match signaling_msg.request {
@@ -409,7 +410,7 @@ pub fn handle_signaling_message(
 }
 
 fn handle_offer_message(
-    server_states: &Rc<ServerStates>,
+    server_states: &Rc<RefCell<ServerStates>>,
     session_id: u64,
     endpoint_id: u64,
     offer: Bytes,
@@ -421,6 +422,7 @@ fn handle_offer_message(
             "handle_offer_message: {}/{}/{}",
             session_id, endpoint_id, offer_str,
         );
+        let mut server_states = server_states.borrow_mut();
 
         let offer_sdp = serde_json::from_str::<RTCSessionDescription>(&offer_str)?;
         let answer = server_states.accept_offer(session_id, endpoint_id, None, offer_sdp)?;
@@ -458,7 +460,7 @@ fn handle_offer_message(
 }
 
 fn handle_answer_message(
-    _server_states: &Rc<ServerStates>,
+    _server_states: &Rc<RefCell<ServerStates>>,
     session_id: u64,
     endpoint_id: u64,
     answer_sdp: Bytes,
@@ -502,7 +504,7 @@ fn handle_answer_message(
 }
 
 fn handle_leave_message(
-    _server_states: &Rc<ServerStates>,
+    _server_states: &Rc<RefCell<ServerStates>>,
     session_id: u64,
     endpoint_id: u64,
     response_tx: Sender<SignalingProtocolMessage>,

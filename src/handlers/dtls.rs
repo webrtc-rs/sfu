@@ -18,11 +18,12 @@ use srtp::option::{srtcp_replay_protection, srtp_replay_protection};
 use srtp::protection_profile::ProtectionProfile;
 
 struct DtlsInbound {
-    server_states: Rc<ServerStates>,
+    local_addr: SocketAddr,
+    server_states: Rc<RefCell<ServerStates>>,
     dtls_endpoint: Rc<RefCell<dtls::endpoint::Endpoint>>,
 }
 struct DtlsOutbound {
-    server_states: Rc<ServerStates>,
+    local_addr: SocketAddr,
     dtls_endpoint: Rc<RefCell<dtls::endpoint::Endpoint>>,
 }
 pub struct DtlsHandler {
@@ -32,7 +33,8 @@ pub struct DtlsHandler {
 
 impl DtlsHandler {
     pub fn new(
-        server_states: Rc<ServerStates>,
+        local_addr: SocketAddr,
+        server_states: Rc<RefCell<ServerStates>>,
         dtls_handshake_config: dtls::config::HandshakeConfig,
     ) -> Self {
         let dtls_endpoint = Rc::new(RefCell::new(dtls::endpoint::Endpoint::new(Some(
@@ -41,11 +43,12 @@ impl DtlsHandler {
 
         DtlsHandler {
             dtls_inbound: DtlsInbound {
-                server_states: Rc::clone(&server_states),
+                local_addr,
+                server_states,
                 dtls_endpoint: Rc::clone(&dtls_endpoint),
             },
             dtls_outbound: DtlsOutbound {
-                server_states,
+                local_addr,
                 dtls_endpoint,
             },
         }
@@ -131,7 +134,7 @@ impl InboundHandler for DtlsInbound {
             error!("try_timeout with error {}", err);
             ctx.fire_read_exception(Box::new(err));
         }
-        handle_outgoing(ctx, &self.dtls_endpoint, self.server_states.local_addr());
+        handle_outgoing(ctx, &self.dtls_endpoint, self.local_addr);
 
         ctx.fire_handle_timeout(now);
     }
@@ -179,7 +182,7 @@ impl OutboundHandler for DtlsOutbound {
                 let _ = dtls_endpoint.close(remote);
             }
         }
-        handle_outgoing(ctx, &self.dtls_endpoint, self.server_states.local_addr());
+        handle_outgoing(ctx, &self.dtls_endpoint, self.local_addr);
 
         ctx.fire_close();
     }
@@ -291,20 +294,15 @@ impl DtlsInbound {
             },
         )?;
 
-        if let Some(endpoint) = self.server_states.find_endpoint(&four_tuple) {
-            let mut transports = endpoint.transports().borrow_mut();
-            if let Some(transport) = transports.get_mut(&four_tuple) {
+        let mut server_states = self.server_states.borrow_mut();
+        match server_states.get_mut_transport(&four_tuple) {
+            Ok(transport) => {
                 transport.set_local_srtp_context(local_context);
                 transport.set_remote_srtp_context(remote_context);
-            } else {
-                warn!(
-                    "can't find transport with {:?} for endpoint {}",
-                    four_tuple,
-                    endpoint.endpoint_id()
-                );
             }
-        } else {
-            warn!("can't find endpoint with {:?}", four_tuple);
+            Err(err) => {
+                warn!("can't find transport with {:?} due to {}", four_tuple, err);
+            }
         }
 
         Ok(())

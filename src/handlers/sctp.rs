@@ -21,14 +21,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 struct SctpInbound {
-    server_states: Rc<ServerStates>,
+    local_addr: SocketAddr,
+    server_states: Rc<RefCell<ServerStates>>,
     sctp_endpoint: Rc<RefCell<sctp::Endpoint>>,
 
     transmits: VecDeque<Transmit>,
     internal_buffer: Vec<u8>,
 }
 struct SctpOutbound {
-    server_states: Rc<ServerStates>,
+    local_addr: SocketAddr,
+    server_states: Rc<RefCell<ServerStates>>,
     sctp_endpoint: Rc<RefCell<sctp::Endpoint>>,
 
     transmits: VecDeque<Transmit>,
@@ -40,32 +42,31 @@ pub struct SctpHandler {
 
 impl SctpHandler {
     pub fn new(
-        server_states: Rc<ServerStates>,
+        local_addr: SocketAddr,
+        server_states: Rc<RefCell<ServerStates>>,
         sctp_endpoint_config: sctp::EndpointConfig,
     ) -> Self {
+        let sctp_server_config =
+            Arc::clone(&server_states.borrow().server_config().sctp_server_config);
         let sctp_endpoint = Rc::new(RefCell::new(sctp::Endpoint::new(
             sctp_endpoint_config,
-            Some(Arc::clone(
-                &server_states.server_config().sctp_server_config,
-            )),
+            Some(Arc::clone(&sctp_server_config)),
         )));
 
         SctpHandler {
             sctp_inbound: SctpInbound {
+                local_addr,
                 server_states: Rc::clone(&server_states),
                 sctp_endpoint: Rc::clone(&sctp_endpoint),
 
                 transmits: VecDeque::new(),
                 internal_buffer: vec![
                     0u8;
-                    server_states
-                        .server_config()
-                        .sctp_server_config
-                        .transport
-                        .max_message_size() as usize
+                    sctp_server_config.transport.max_message_size() as usize
                 ],
             },
             sctp_outbound: SctpOutbound {
+                local_addr,
                 server_states,
                 sctp_endpoint,
 
@@ -94,13 +95,14 @@ impl InboundHandler for SctpInbound {
                     )
                 };
 
+                let mut server_states = self.server_states.borrow_mut();
+
                 let mut sctp_events: HashMap<AssociationHandle, VecDeque<AssociationEvent>> =
                     HashMap::new();
                 if let Some((ch, event)) = handle_result {
                     match event {
                         DatagramEvent::NewAssociation(conn) => {
-                            let mut sctp_associations =
-                                self.server_states.sctp_associations().borrow_mut();
+                            let sctp_associations = server_states.get_mut_sctp_associations();
                             sctp_associations.insert(ch, conn);
                         }
                         DatagramEvent::AssociationEvent(event) => {
@@ -113,7 +115,7 @@ impl InboundHandler for SctpInbound {
                 {
                     let mut endpoint_events: Vec<(AssociationHandle, EndpointEvent)> = vec![];
 
-                    let mut sctp_associations = self.server_states.sctp_associations().borrow_mut();
+                    let sctp_associations = server_states.get_mut_sctp_associations();
                     for (ch, conn) in sctp_associations.iter_mut() {
                         for (event_ch, conn_events) in sctp_events.iter_mut() {
                             if ch == event_ch {
@@ -190,8 +192,9 @@ impl InboundHandler for SctpInbound {
     fn handle_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, now: Instant) {
         let mut try_timeout = || -> Result<()> {
             let mut endpoint_events: Vec<(AssociationHandle, EndpointEvent)> = vec![];
+            let mut server_states = self.server_states.borrow_mut();
 
-            let mut sctp_associations = self.server_states.sctp_associations().borrow_mut();
+            let sctp_associations = server_states.get_mut_sctp_associations();
             for (ch, conn) in sctp_associations.iter_mut() {
                 conn.handle_timeout(now);
 
@@ -216,14 +219,15 @@ impl InboundHandler for SctpInbound {
             error!("try_timeout with error {}", err);
             ctx.fire_read_exception(Box::new(err));
         }
-        handle_outgoing(ctx, &mut self.transmits, self.server_states.local_addr());
+        handle_outgoing(ctx, &mut self.transmits, self.local_addr);
 
         ctx.fire_handle_timeout(now);
     }
 
     fn poll_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, eto: &mut Instant) {
         {
-            let mut sctp_associations = self.server_states.sctp_associations().borrow_mut();
+            let mut server_states = self.server_states.borrow_mut();
+            let sctp_associations = server_states.get_mut_sctp_associations();
             for (_, conn) in sctp_associations.iter_mut() {
                 if let Some(timeout) = conn.poll_timeout() {
                     if timeout < *eto {
@@ -247,8 +251,9 @@ impl OutboundHandler for SctpOutbound {
                 msg.transport.peer_addr, message
             );
             let mut try_write = || -> Result<()> {
+                let mut server_states = self.server_states.borrow_mut();
                 let max_message_size = {
-                    self.server_states
+                    server_states
                         .server_config()
                         .sctp_server_config
                         .transport
@@ -258,7 +263,7 @@ impl OutboundHandler for SctpOutbound {
                     return Err(Error::ErrOutboundPacketTooLarge);
                 }
 
-                let mut sctp_associations = self.server_states.sctp_associations().borrow_mut();
+                let sctp_associations = server_states.get_mut_sctp_associations();
                 if let Some(conn) =
                     sctp_associations.get_mut(&AssociationHandle(message.association_handle))
                 {
@@ -309,12 +314,13 @@ impl OutboundHandler for SctpOutbound {
 
     fn close(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>) {
         {
-            let mut sctp_associations = self.server_states.sctp_associations().borrow_mut();
+            let mut server_states = self.server_states.borrow_mut();
+            let sctp_associations = server_states.get_mut_sctp_associations();
             for (_, conn) in sctp_associations.iter_mut() {
                 let _ = conn.close();
             }
         }
-        handle_outgoing(ctx, &mut self.transmits, self.server_states.local_addr());
+        handle_outgoing(ctx, &mut self.transmits, self.local_addr);
 
         ctx.fire_close();
     }

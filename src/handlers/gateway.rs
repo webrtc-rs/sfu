@@ -2,7 +2,7 @@ use crate::messages::{
     ApplicationMessage, DTLSMessageEvent, DataChannelEvent, MessageEvent, RTPMessageEvent,
     STUNMessageEvent, TaggedMessageEvent,
 };
-use crate::server::endpoint::{candidate::Candidate, Endpoint};
+use crate::server::endpoint::candidate::Candidate;
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::RTCSessionDescription;
 use crate::server::states::ServerStates;
@@ -11,6 +11,7 @@ use log::{debug, info, trace, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;
 use shared::error::{Error, Result};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 use stun::attributes::{
@@ -24,10 +25,10 @@ use stun::textattrs::TextAttribute;
 use stun::xoraddr::XorMappedAddress;
 
 struct GatewayInbound {
-    server_states: Rc<ServerStates>,
+    server_states: Rc<RefCell<ServerStates>>,
 }
 struct GatewayOutbound {
-    server_states: Rc<ServerStates>,
+    server_states: Rc<RefCell<ServerStates>>,
 }
 
 pub struct GatewayHandler {
@@ -36,7 +37,7 @@ pub struct GatewayHandler {
 }
 
 impl GatewayHandler {
-    pub fn new(server_states: Rc<ServerStates>) -> Self {
+    pub fn new(server_states: Rc<RefCell<ServerStates>>) -> Self {
         GatewayHandler {
             gateway_inbound: GatewayInbound {
                 server_states: Rc::clone(&server_states),
@@ -52,18 +53,39 @@ impl InboundHandler for GatewayInbound {
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
         let try_read = || -> Result<Vec<TaggedMessageEvent>> {
+            let mut server_states = self.server_states.borrow_mut();
             match msg.message {
                 MessageEvent::STUN(STUNMessageEvent::STUN(message)) => {
-                    self.handle_stun_message(msg.now, msg.transport, message)
+                    GatewayInbound::handle_stun_message(
+                        &mut server_states,
+                        msg.now,
+                        msg.transport,
+                        message,
+                    )
                 }
                 MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(message)) => {
-                    self.handle_dtls_message(msg.now, msg.transport, message)
+                    GatewayInbound::handle_dtls_message(
+                        &mut server_states,
+                        msg.now,
+                        msg.transport,
+                        message,
+                    )
                 }
                 MessageEvent::RTP(RTPMessageEvent::RTP(message)) => {
-                    self.handle_rtp_message(msg.now, msg.transport, message)
+                    GatewayInbound::handle_rtp_message(
+                        &mut server_states,
+                        msg.now,
+                        msg.transport,
+                        message,
+                    )
                 }
                 MessageEvent::RTP(RTPMessageEvent::RTCP(message)) => {
-                    self.handle_rtcp_message(msg.now, msg.transport, message)
+                    GatewayInbound::handle_rtcp_message(
+                        &mut server_states,
+                        msg.now,
+                        msg.transport,
+                        message,
+                    )
                 }
                 _ => {
                     warn!(
@@ -123,15 +145,15 @@ impl Handler for GatewayHandler {
 
 impl GatewayInbound {
     fn handle_stun_message(
-        &mut self,
+        server_states: &mut ServerStates,
         now: Instant,
         transport_context: TransportContext,
         mut request: stun::message::Message,
     ) -> Result<Vec<TaggedMessageEvent>> {
-        let candidate = match self.check_stun_message(&mut request)? {
+        let candidate = match GatewayInbound::check_stun_message(server_states, &mut request)? {
             Some(candidate) => candidate,
             None => {
-                return self.send_server_reflective_address(
+                return GatewayInbound::create_server_reflective_address_message_event(
                     now,
                     transport_context,
                     request.transaction_id,
@@ -139,7 +161,7 @@ impl GatewayInbound {
             }
         };
 
-        let _ = self.add_endpoint(&request, &candidate, &transport_context)?;
+        GatewayInbound::add_endpoint(server_states, &request, &candidate, &transport_context)?;
 
         let mut response = stun::message::Message::new();
         response.build(&[
@@ -171,26 +193,29 @@ impl GatewayInbound {
     }
 
     fn handle_dtls_message(
-        &mut self,
+        server_states: &mut ServerStates,
         now: Instant,
         transport_context: TransportContext,
         message: ApplicationMessage,
     ) -> Result<Vec<TaggedMessageEvent>> {
         match message.data_channel_event {
-            DataChannelEvent::Open => self.handle_datachannel_open(
+            DataChannelEvent::Open => GatewayInbound::handle_datachannel_open(
+                server_states,
                 now,
                 transport_context,
                 message.association_handle,
                 message.stream_id,
             ),
-            DataChannelEvent::Message(payload) => self.handle_datachannel_message(
+            DataChannelEvent::Message(payload) => GatewayInbound::handle_datachannel_message(
+                server_states,
                 now,
                 transport_context,
                 message.association_handle,
                 message.stream_id,
                 payload,
             ),
-            DataChannelEvent::Close => self.handle_datachannel_close(
+            DataChannelEvent::Close => GatewayInbound::handle_datachannel_close(
+                server_states,
                 now,
                 transport_context,
                 message.association_handle,
@@ -200,13 +225,14 @@ impl GatewayInbound {
     }
 
     fn handle_datachannel_open(
-        &mut self,
+        server_states: &mut ServerStates,
         now: Instant,
         transport_context: TransportContext,
         association_handle: usize,
         stream_id: u16,
     ) -> Result<Vec<TaggedMessageEvent>> {
-        Ok(vec![self.create_offer_message_event(
+        Ok(vec![GatewayInbound::create_offer_message_event(
+            server_states,
             now,
             transport_context,
             association_handle,
@@ -215,7 +241,7 @@ impl GatewayInbound {
     }
 
     fn handle_datachannel_close(
-        &mut self,
+        _server_states: &mut ServerStates,
         _now: Instant,
         _transport_context: TransportContext,
         _association_handle: usize,
@@ -226,7 +252,7 @@ impl GatewayInbound {
     }
 
     fn handle_datachannel_message(
-        &mut self,
+        server_states: &mut ServerStates,
         now: Instant,
         transport_context: TransportContext,
         association_handle: usize,
@@ -240,18 +266,13 @@ impl GatewayInbound {
             .map_err(|err| Error::Other(err.to_string()))?;
 
         let four_tuple = (&transport_context).into();
-        let (session_id, endpoint_id) = {
-            let endpoint = self
-                .server_states
-                .find_endpoint(&four_tuple)
-                .ok_or(Error::ErrClientTransportNotSet)?;
-            let session = endpoint.session().upgrade().ok_or(Error::SessionEof)?;
-            (session.session_id(), endpoint.endpoint_id())
-        };
+        let (session_id, endpoint_id) = server_states
+            .find_endpoint(&four_tuple)
+            .ok_or(Error::ErrClientTransportNotSet)?;
 
         match request_sdp.sdp_type {
             RTCSdpType::Offer => {
-                let answer = self.server_states.accept_offer(
+                let answer = server_states.accept_offer(
                     session_id,
                     endpoint_id,
                     Some(four_tuple),
@@ -261,7 +282,10 @@ impl GatewayInbound {
                     serde_json::to_string(&answer).map_err(|err| Error::Other(err.to_string()))?;
                 info!("handle_dtls_message: answer_str {}", answer_str);
 
-                let peers = self.get_other_transport_contexts(&transport_context)?;
+                let peers = GatewayInbound::get_other_transport_contexts(
+                    server_states,
+                    &transport_context,
+                )?;
                 let mut messages = Vec::with_capacity(peers.len() + 1);
 
                 messages.push(TaggedMessageEvent {
@@ -280,7 +304,8 @@ impl GatewayInbound {
 
                 // trigger other endpoints' create_offer()
                 for (other_transport_context, association_handle, stream_id) in peers {
-                    messages.push(self.create_offer_message_event(
+                    messages.push(GatewayInbound::create_offer_message_event(
+                        server_states,
                         now,
                         other_transport_context,
                         association_handle,
@@ -291,12 +316,7 @@ impl GatewayInbound {
                 Ok(messages)
             }
             RTCSdpType::Answer => {
-                self.server_states.accept_answer(
-                    session_id,
-                    endpoint_id,
-                    four_tuple,
-                    request_sdp,
-                )?;
+                server_states.accept_answer(session_id, endpoint_id, four_tuple, request_sdp)?;
                 Ok(vec![])
             }
             _ => Err(Error::Other(format!(
@@ -307,13 +327,14 @@ impl GatewayInbound {
     }
 
     fn handle_rtp_message(
-        &mut self,
+        server_states: &mut ServerStates,
         now: Instant,
         transport_context: TransportContext,
         rtp_packet: rtp::packet::Packet,
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: Selective Forwarding RTP Packets
-        let peers = self.get_other_transport_contexts(&transport_context)?;
+        let peers =
+            GatewayInbound::get_other_transport_contexts(server_states, &transport_context)?;
 
         let mut outgoing_messages = Vec::with_capacity(peers.len());
         for (transport, _, _) in peers {
@@ -328,13 +349,14 @@ impl GatewayInbound {
     }
 
     fn handle_rtcp_message(
-        &mut self,
+        server_states: &mut ServerStates,
         now: Instant,
         transport_context: TransportContext,
         rtcp_packets: Vec<Box<dyn rtcp::packet::Packet>>,
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: Selective Forwarding RTCP Packets
-        let peers = self.get_other_transport_contexts(&transport_context)?;
+        let peers =
+            GatewayInbound::get_other_transport_contexts(server_states, &transport_context)?;
 
         let mut outgoing_messages = Vec::with_capacity(peers.len());
         for (transport, _, _) in peers {
@@ -349,7 +371,7 @@ impl GatewayInbound {
     }
 
     fn check_stun_message(
-        &self,
+        server_states: &ServerStates,
         request: &mut stun::message::Message,
     ) -> Result<Option<Rc<Candidate>>> {
         match TextAttribute::get_from_as(request, ATTR_USERNAME) {
@@ -375,11 +397,11 @@ impl GatewayInbound {
                     ));
                 }
 
-                if let Some(candidate) = self.server_states.find_candidate(&username.text) {
+                if let Some(candidate) = server_states.find_candidate(&username.text) {
                     let password = candidate.get_local_parameters().password.clone();
                     let integrity = MessageIntegrity::new_short_term_integrity(password);
                     integrity.check(request)?;
-                    Ok(Some(candidate))
+                    Ok(Some(candidate.clone()))
                 } else {
                     Err(Error::Other("username not found".to_string()))
                 }
@@ -400,22 +422,25 @@ impl GatewayInbound {
     }
 
     fn get_other_transport_contexts(
-        &self,
+        server_states: &mut ServerStates,
         transport_context: &TransportContext,
     ) -> Result<Vec<(TransportContext, usize, u16)>> {
         let four_tuple = transport_context.into();
-        let endpoint = self
-            .server_states
+        let (session_id, endpoint_id) = server_states
             .find_endpoint(&four_tuple)
             .ok_or(Error::ErrClientTransportNotSet)?;
-        let session = endpoint.session().upgrade().ok_or(Error::SessionEof)?;
-        let endpoint_id = endpoint.endpoint_id();
+        let session = server_states
+            .get_session(&session_id)
+            .ok_or(Error::Other(format!(
+                "can't find session id {}",
+                session_id
+            )))?;
 
         let mut peers = vec![];
-        let endpoints = session.endpoints().borrow();
-        for (&other_endpoint_id, other_endpoint) in &*endpoints {
+        let endpoints = session.get_endpoints();
+        for (&other_endpoint_id, other_endpoint) in endpoints.iter() {
             if other_endpoint_id != endpoint_id {
-                let transports = other_endpoint.transports().borrow();
+                let transports = other_endpoint.get_transports();
                 for (other_four_tuple, other_transport) in transports.iter() {
                     if let (Some(association_handle), Some(stream_id)) =
                         other_transport.association_handle_and_stream_id()
@@ -432,7 +457,7 @@ impl GatewayInbound {
                     } else {
                         trace!(
                             "session id {}/endpoint id {}'s data channel is not ready",
-                            session.session_id(),
+                            session_id,
                             endpoint_id
                         );
                     }
@@ -442,8 +467,7 @@ impl GatewayInbound {
         Ok(peers)
     }
 
-    fn send_server_reflective_address(
-        &mut self,
+    fn create_server_reflective_address_message_event(
         now: Instant,
         transport_context: TransportContext,
         transaction_id: TransactionId,
@@ -459,7 +483,7 @@ impl GatewayInbound {
         ])?;
 
         debug!(
-            "send_server_reflective_address response type {} sent",
+            "create_server_reflective_address_message_event response type {} sent",
             response.typ
         );
 
@@ -471,17 +495,16 @@ impl GatewayInbound {
     }
 
     fn add_endpoint(
-        &mut self,
+        server_states: &mut ServerStates,
         request: &stun::message::Message,
         candidate: &Rc<Candidate>,
         transport_context: &TransportContext,
-    ) -> Result<(bool, Option<Rc<Endpoint>>)> {
+    ) -> Result<bool> {
         let mut is_new_endpoint = false;
 
         let session_id = candidate.session_id();
-        let session = self
-            .server_states
-            .get_session(&session_id)
+        let session = server_states
+            .get_mut_session(&session_id)
             .ok_or(Error::Other(format!("session {} not found", session_id)))?;
 
         let endpoint_id = candidate.endpoint_id();
@@ -495,53 +518,63 @@ impl GatewayInbound {
         };
 
         if !request.contains(ATTR_USE_CANDIDATE) || has_transport {
-            return Ok((is_new_endpoint, endpoint));
+            return Ok(is_new_endpoint);
         }
 
-        let (is_new_endpoint, endpoint) = session.add_endpoint(candidate, transport_context)?;
+        let is_new_endpoint = session.add_endpoint(candidate, transport_context)?;
 
-        self.server_states
-            .add_endpoint(four_tuple, Rc::clone(&endpoint));
+        server_states.add_endpoint(four_tuple, session_id, endpoint_id);
 
-        Ok((is_new_endpoint, Some(endpoint)))
+        Ok(is_new_endpoint)
     }
 
     //TODO: only create offer message when SDP renegotiation is needed
     fn create_offer_message_event(
-        &mut self,
+        server_states: &mut ServerStates,
         now: Instant,
         transport_context: TransportContext,
         association_handle: usize,
         stream_id: u16,
     ) -> Result<TaggedMessageEvent> {
         let four_tuple = (&transport_context).into();
-        let endpoint = self
-            .server_states
+        let (session_id, endpoint_id) = server_states
             .find_endpoint(&four_tuple)
             .ok_or(Error::ErrClientTransportNotSet)?;
-        let session = endpoint.session().upgrade().ok_or(Error::SessionEof)?;
+        let session = server_states
+            .get_mut_session(&session_id)
+            .ok_or(Error::Other(format!(
+                "can't find session id {}",
+                session_id
+            )))?;
+
+        let endpoint = session
+            .get_mut_endpoint(&endpoint_id)
+            .ok_or(Error::Other(format!(
+                "can't find endpoint id {}",
+                endpoint_id
+            )))?;
 
         let remote_description = endpoint
             .remote_description()
-            .ok_or(Error::Other("remote_description is not set".to_string()))?;
+            .ok_or(Error::Other("remote_description is not set".to_string()))?
+            .clone();
 
         let local_conn_cred = {
-            let mut transports = endpoint.transports().borrow_mut();
+            let transports = endpoint.get_mut_transports();
             let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
                 "can't find transport for endpoint id {} with {:?}",
-                endpoint.endpoint_id(),
-                four_tuple
+                endpoint_id, four_tuple
             )))?;
             transport.set_association_handle_and_stream_id(association_handle, stream_id);
             transport.candidate().local_connection_credentials().clone()
         };
 
         let offer = session.create_offer(
-            Some(&endpoint),
+            endpoint_id,
             &remote_description,
             &local_conn_cred.ice_params,
         )?;
-        session.set_local_description(&endpoint, &offer)?;
+        session.set_local_description(endpoint_id, &offer)?;
 
         let offer_str =
             serde_json::to_string(&offer).map_err(|err| Error::Other(err.to_string()))?;

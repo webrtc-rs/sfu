@@ -9,7 +9,6 @@ use stun::message::Message;
 struct StunInbound;
 #[derive(Default)]
 struct StunOutbound;
-
 #[derive(Default)]
 pub struct StunHandler {
     stun_inbound: StunInbound,

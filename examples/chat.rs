@@ -20,6 +20,7 @@ use sfu::handlers::stun::StunHandler;
 use sfu::server::certificate::RTCCertificate;
 use sfu::server::config::ServerConfig;
 use sfu::server::states::ServerStates;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -136,8 +137,8 @@ fn main() -> anyhow::Result<()> {
                     .unwrap();
                 let sctp_endpoint_config = sctp::EndpointConfig::default();
 
-                let server_states = Rc::new(ServerStates::new(server_config,
-                                                              SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap()).unwrap());
+                let server_states = Rc::new(RefCell::new(ServerStates::new(server_config,
+                                                              SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap()).unwrap()));
 
                 info!("listening {}:{}...", host, port);
 
@@ -149,13 +150,14 @@ fn main() -> anyhow::Result<()> {
                     move |writer: AsyncTransportWrite<TaggedBytesMut>| {
                         let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
+                        let local_addr = writer.get_local_addr();
                         let async_transport_handler = AsyncTransport::new(writer);
                         let demuxer_handler = DemuxerHandler::new();
                         let write_exception_handler = ExceptionHandler::new();
                         let stun_handler = StunHandler::new();
                         // DTLS
-                        let dtls_handler = DtlsHandler::new(Rc::clone(&server_states_moved), dtls_handshake_config_moved.clone());
-                        let sctp_handler = SctpHandler::new(Rc::clone(&server_states_moved), sctp_endpoint_config_moved.clone());
+                        let dtls_handler = DtlsHandler::new(local_addr, Rc::clone(&server_states_moved), dtls_handshake_config_moved.clone());
+                        let sctp_handler = SctpHandler::new(local_addr, Rc::clone(&server_states_moved), sctp_endpoint_config_moved.clone());
                         let data_channel_handler = DataChannelHandler::new();
                         // SRTP
                         let srtp_handler = SrtpHandler::new(Rc::clone(&server_states_moved));

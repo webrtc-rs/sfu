@@ -43,7 +43,6 @@ fn match_srtp(b: &[u8]) -> bool {
 struct DemuxerInbound;
 #[derive(Default)]
 struct DemuxerOutbound;
-
 #[derive(Default)]
 pub struct DemuxerHandler {
     demuxer_inbound: DemuxerInbound,

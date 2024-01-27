@@ -3,7 +3,6 @@ use sdp::description::session::Origin;
 use sdp::util::ConnectionRole;
 use sdp::SessionDescription;
 use shared::error::{Error, Result};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -29,7 +28,7 @@ use crate::types::{EndpointId, Mid, SessionId};
 pub(crate) struct Session {
     session_config: SessionConfig,
     session_id: SessionId,
-    endpoints: RefCell<HashMap<EndpointId, Rc<Endpoint>>>,
+    endpoints: HashMap<EndpointId, Endpoint>,
 }
 
 impl Session {
@@ -37,7 +36,7 @@ impl Session {
         Self {
             session_config,
             session_id,
-            endpoints: RefCell::new(HashMap::new()),
+            endpoints: HashMap::new(),
         }
     }
 
@@ -50,65 +49,68 @@ impl Session {
     }
 
     pub(crate) fn add_endpoint(
-        self: &Rc<Self>,
+        &mut self,
         candidate: &Rc<Candidate>,
         transport_context: &TransportContext,
-    ) -> Result<(bool, Rc<Endpoint>)> {
+    ) -> Result<bool> {
         let endpoint_id = candidate.endpoint_id();
-        let endpoint = self.get_endpoint(&endpoint_id);
+        let endpoint = self.get_mut_endpoint(&endpoint_id);
         let four_tuple = transport_context.into();
         if let Some(endpoint) = endpoint {
             if endpoint.has_transport(&four_tuple) {
-                Ok((true, endpoint))
+                Ok(true)
             } else {
-                let transport =
-                    Transport::new(four_tuple, Rc::downgrade(&endpoint), Rc::clone(candidate));
+                let transport = Transport::new(four_tuple, Rc::clone(candidate));
                 endpoint.add_transport(transport);
-                Ok((true, endpoint))
+                Ok(true)
             }
         } else {
-            let endpoint = Rc::new(Endpoint::new(Rc::downgrade(self), endpoint_id));
-            let transport =
-                Transport::new(four_tuple, Rc::downgrade(&endpoint), Rc::clone(candidate));
+            let mut endpoint = Endpoint::new(endpoint_id);
+            let transport = Transport::new(four_tuple, Rc::clone(candidate));
             endpoint.add_transport(transport);
             endpoint.set_local_description(candidate.local_description().clone());
             endpoint.set_remote_description(candidate.remote_description().clone());
-
-            {
-                let mut endpoints = self.endpoints.borrow_mut();
-                endpoints.insert(endpoint_id, Rc::clone(&endpoint));
-            }
-
-            Ok((false, endpoint))
+            self.endpoints.insert(endpoint_id, endpoint);
+            Ok(false)
         }
     }
 
-    pub(crate) fn get_endpoint(&self, endpoint_id: &EndpointId) -> Option<Rc<Endpoint>> {
-        self.endpoints.borrow().get(endpoint_id).cloned()
+    pub(crate) fn get_endpoint(&self, endpoint_id: &EndpointId) -> Option<&Endpoint> {
+        self.endpoints.get(endpoint_id)
+    }
+
+    pub(crate) fn get_mut_endpoint(&mut self, endpoint_id: &EndpointId) -> Option<&mut Endpoint> {
+        self.endpoints.get_mut(endpoint_id)
     }
 
     pub(crate) fn has_endpoint(&self, endpoint_id: &EndpointId) -> bool {
-        self.endpoints.borrow().contains_key(endpoint_id)
+        self.endpoints.contains_key(endpoint_id)
     }
 
-    pub(crate) fn endpoints(&self) -> &RefCell<HashMap<EndpointId, Rc<Endpoint>>> {
+    pub(crate) fn get_endpoints(&self) -> &HashMap<EndpointId, Endpoint> {
         &self.endpoints
     }
 
+    pub(crate) fn get_mut_endpoints(&mut self) -> &mut HashMap<EndpointId, Endpoint> {
+        &mut self.endpoints
+    }
+
     pub(crate) fn set_remote_description(
-        &self,
-        endpoint: &Rc<Endpoint>,
+        &mut self,
+        endpoint_id: EndpointId,
         remote_description: &RTCSessionDescription,
     ) -> Result<()> {
+        if !self.has_endpoint(&endpoint_id) {
+            return Err(Error::Other(format!(
+                "can't find endpoint id {}",
+                endpoint_id
+            )));
+        }
         let parsed = remote_description
             .parsed
             .as_ref()
             .ok_or(Error::Other("Unparsed remote description".to_string()))?;
 
-        let (mut mids, mut transceivers) = (
-            endpoint.mids().borrow_mut(),
-            endpoint.transceivers().borrow_mut(),
-        );
         let we_offer = remote_description.sdp_type == RTCSdpType::Answer;
 
         for media in &parsed.media_descriptions {
@@ -139,7 +141,14 @@ impl Session {
 
             if !we_offer {
                 // This is an offer from the remote.
-                if !transceivers.contains_key(mid_value) {
+                let has_mid_value = self
+                    .endpoints
+                    .get(&endpoint_id)
+                    .unwrap()
+                    .get_transceivers()
+                    .contains_key(mid_value);
+
+                if !has_mid_value {
                     let cname = get_cname(media);
                     let msid = get_msid(media);
                     let (ssrc_groups, ssrcs) = get_ssrc_groups(media)?;
@@ -176,20 +185,22 @@ impl Session {
                         kind,
                     };
 
-                    mids.push(mid_value.to_string());
-                    transceivers.insert(mid_value.to_string(), transceiver);
+                    {
+                        let endpoint = self.get_mut_endpoint(&endpoint_id).unwrap();
+                        endpoint.get_mut_mids().push(mid_value.to_string());
+                        endpoint
+                            .get_mut_transceivers()
+                            .insert(mid_value.to_string(), transceiver);
+                    }
 
                     // add it to other endpoints' transceivers as send only
 
-                    let endpoints = self.endpoints.borrow();
-                    for (&other_endpoint_id, other_endpoint) in &*endpoints {
-                        if other_endpoint_id != endpoint.endpoint_id() {
-                            let other_mid_value =
-                                format!("{}-{}", endpoint.endpoint_id(), mid_value);
-                            let (mut other_mids, mut other_transceivers) = (
-                                other_endpoint.mids().borrow_mut(),
-                                other_endpoint.transceivers().borrow_mut(),
-                            );
+                    for (&other_endpoint_id, other_endpoint) in self.get_mut_endpoints().iter_mut()
+                    {
+                        if other_endpoint_id != endpoint_id {
+                            let other_mid_value = format!("{}-{}", endpoint_id, mid_value);
+                            let (other_mids, other_transceivers) =
+                                other_endpoint.get_mut_mids_and_transceivers();
                             if let Some(other_transceiver) =
                                 other_transceivers.get_mut(&other_mid_value)
                             {
@@ -212,7 +223,8 @@ impl Session {
                 }
             } else {
                 // This is an answer from the remote.
-                if let Some(transceiver) = transceivers.get_mut(mid_value) {
+                let endpoint = self.get_mut_endpoint(&endpoint_id).unwrap();
+                if let Some(transceiver) = endpoint.get_mut_transceivers().get_mut(mid_value) {
                     //let previous_direction = transceiver.current_direction();
 
                     // 4.5.9.2.9
@@ -233,16 +245,22 @@ impl Session {
     }
 
     pub(crate) fn set_local_description(
-        &self,
-        endpoint: &Rc<Endpoint>,
+        &mut self,
+        endpoint_id: EndpointId,
         local_description: &RTCSessionDescription,
     ) -> Result<()> {
         let parsed = local_description
             .parsed
             .as_ref()
             .ok_or(Error::Other("Unparsed local description".to_string()))?;
+        let endpoint = self
+            .get_mut_endpoint(&endpoint_id)
+            .ok_or(Error::Other(format!(
+                "can't find endpoint id {}",
+                endpoint_id
+            )))?;
 
-        let mut transceivers = endpoint.transceivers().borrow_mut();
+        let transceivers = endpoint.get_mut_transceivers();
         let we_answer = local_description.sdp_type == RTCSdpType::Answer;
         if we_answer {
             for media in &parsed.media_descriptions {
@@ -285,14 +303,14 @@ impl Session {
 
     pub(crate) fn create_offer(
         &self,
-        endpoint: Option<&Rc<Endpoint>>,
+        endpoint_id: EndpointId,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
     ) -> Result<RTCSessionDescription> {
         let use_identity = false; //TODO: self.config.idp_login_url.is_some();
 
         let mut d = self.generate_matched_sdp(
-            endpoint,
+            endpoint_id,
             remote_description,
             local_ice_params,
             use_identity,
@@ -316,7 +334,7 @@ impl Session {
 
     pub(crate) fn create_answer(
         &self,
-        endpoint: Option<&Rc<Endpoint>>,
+        endpoint: EndpointId,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
     ) -> Result<RTCSessionDescription> {
@@ -348,7 +366,7 @@ impl Session {
     /// this is used everytime we have a remote_description
     pub(crate) fn generate_matched_sdp(
         &self,
-        endpoint: Option<&Rc<Endpoint>>,
+        endpoint_id: EndpointId,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
         use_identity: bool,
@@ -356,13 +374,13 @@ impl Session {
         connection_role: ConnectionRole,
     ) -> Result<SessionDescription> {
         let d = SessionDescription::new_jsep_session_description(use_identity);
-        let (empty_mids, empty_transceivers) = (RefCell::new(vec![]), RefCell::new(HashMap::new()));
+        let (empty_mids, empty_transceivers) = (vec![], HashMap::new());
 
         let media_sections = {
-            let (mids, transceivers) = if let Some(endpoint) = endpoint.as_ref() {
-                (endpoint.mids().borrow(), endpoint.transceivers().borrow())
+            let (mids, transceivers) = if let Some(endpoint) = self.get_endpoint(&endpoint_id) {
+                (endpoint.get_mids(), endpoint.get_transceivers())
             } else {
-                (empty_mids.borrow(), empty_transceivers.borrow())
+                (&empty_mids, &empty_transceivers)
             };
 
             let mut media_sections = vec![];
@@ -440,10 +458,10 @@ impl Session {
                 return Err(Error::Other("ErrNonCertificate".to_string()));
             };
 
-        let transceivers = if let Some(endpoint) = endpoint.as_ref() {
-            endpoint.transceivers().borrow()
+        let transceivers = if let Some(endpoint) = self.get_endpoint(&endpoint_id) {
+            endpoint.get_transceivers()
         } else {
-            empty_transceivers.borrow()
+            &empty_transceivers
         };
 
         populate_sdp(
@@ -453,7 +471,7 @@ impl Session {
             local_ice_params,
             connection_role,
             &media_sections,
-            &transceivers,
+            transceivers,
             true,
         )
     }

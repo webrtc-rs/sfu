@@ -7,13 +7,14 @@ use shared::{
     error::{Error, Result},
     util::is_rtcp,
 };
+use std::cell::RefCell;
 use std::rc::Rc;
 
 struct SrtpInbound {
-    server_states: Rc<ServerStates>, //remote_contexts: Rc<RefCell<HashMap<SocketAddr, Context>>>,
+    server_states: Rc<RefCell<ServerStates>>, // for remote_srtp_context
 }
 struct SrtpOutbound {
-    server_states: Rc<ServerStates>, //local_contexts: Rc<RefCell<HashMap<SocketAddr, Context>>>,
+    server_states: Rc<RefCell<ServerStates>>, // for local_srtp_context
 }
 pub struct SrtpHandler {
     srtp_inbound: SrtpInbound,
@@ -21,7 +22,7 @@ pub struct SrtpHandler {
 }
 
 impl SrtpHandler {
-    pub fn new(server_states: Rc<ServerStates>) -> Self {
+    pub fn new(server_states: Rc<RefCell<ServerStates>>) -> Self {
         SrtpHandler {
             srtp_inbound: SrtpInbound {
                 server_states: Rc::clone(&server_states),
@@ -40,19 +41,13 @@ impl InboundHandler for SrtpInbound {
             debug!("srtp read {:?}", msg.transport.peer_addr);
             let try_read = || -> Result<BytesMut> {
                 let four_tuple = (&msg.transport).into();
-                let endpoint =
-                    self.server_states
-                        .find_endpoint(&four_tuple)
-                        .ok_or(Error::Other(format!(
-                            "can't find endpoint with four_tuple {:?}",
-                            four_tuple
-                        )))?;
-                let mut transports = endpoint.transports().borrow_mut();
-                let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
-                    "can't find transport with four_tuple {:?} for endpoint id {}",
-                    four_tuple,
-                    endpoint.endpoint_id(),
-                )))?;
+                let mut server_states = self.server_states.borrow_mut();
+                let transport = match server_states.get_mut_transport(&four_tuple) {
+                    Ok(transport) => transport,
+                    Err(err) => {
+                        return Err(err);
+                    }
+                };
 
                 if is_rtcp(&rtp_message) {
                     let mut remote_context = transport.remote_srtp_context();
@@ -60,8 +55,8 @@ impl InboundHandler for SrtpInbound {
                         context.decrypt_rtcp(&rtp_message)
                     } else {
                         Err(Error::Other(format!(
-                            "remote_srtp_context is not set yet for four_tuple {:?} of endpoint id {}",
-                            four_tuple, endpoint.endpoint_id()
+                            "remote_srtp_context is not set yet for four_tuple {:?}",
+                            four_tuple
                         )))
                     }
                 } else {
@@ -70,8 +65,8 @@ impl InboundHandler for SrtpInbound {
                         context.decrypt_rtp(&rtp_message)
                     } else {
                         Err(Error::Other(format!(
-                            "remote_srtp_context is not set yet for four_tuple {:?} of endpoint id {}",
-                            four_tuple, endpoint.endpoint_id()
+                            "remote_srtp_context is not set yet for four_tuple {:?}",
+                            four_tuple
                         )))
                     }
                 }
@@ -103,28 +98,21 @@ impl OutboundHandler for SrtpOutbound {
             debug!("srtp write {:?}", msg.transport.peer_addr);
             let try_write = || -> Result<BytesMut> {
                 let four_tuple = (&msg.transport).into();
-                let endpoint =
-                    self.server_states
-                        .find_endpoint(&four_tuple)
-                        .ok_or(Error::Other(format!(
-                            "can't find endpoint with four_tuple {:?}",
-                            four_tuple
-                        )))?;
-                let mut transports = endpoint.transports().borrow_mut();
-                let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
-                    "can't find transport with four_tuple {:?} for endpoint id {}",
-                    four_tuple,
-                    endpoint.endpoint_id(),
-                )))?;
-
+                let mut server_states = self.server_states.borrow_mut();
+                let transport = match server_states.get_mut_transport(&four_tuple) {
+                    Ok(transport) => transport,
+                    Err(err) => {
+                        return Err(err);
+                    }
+                };
                 if is_rtcp(&rtp_message) {
                     let mut local_context = transport.local_srtp_context();
                     if let Some(context) = local_context.as_mut() {
                         context.encrypt_rtcp(&rtp_message)
                     } else {
                         Err(Error::Other(format!(
-                            "local_srtp_context is not set yet for four_tuple {:?} of endpoint id {}",
-                            four_tuple, endpoint.endpoint_id()
+                            "local_srtp_context is not set yet for four_tuple {:?}",
+                            four_tuple
                         )))
                     }
                 } else {
@@ -133,8 +121,8 @@ impl OutboundHandler for SrtpOutbound {
                         context.encrypt_rtp(&rtp_message)
                     } else {
                         Err(Error::Other(format!(
-                            "local_srtp_context is not set yet for four_tuple {:?} of endpoint id {}",
-                            four_tuple, endpoint.endpoint_id()
+                            "local_srtp_context is not set yet for four_tuple {:?}",
+                            four_tuple
                         )))
                     }
                 }

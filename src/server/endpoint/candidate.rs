@@ -1,4 +1,4 @@
-use crate::server::certificate::{RTCCertificate, RTCDtlsFingerprint};
+use crate::server::certificate::RTCDtlsFingerprint;
 use crate::server::session::description::{RTCSessionDescription, UNSPECIFIED_STR};
 use crate::types::{EndpointId, SessionId, UserName};
 use base64::{prelude::BASE64_STANDARD, Engine};
@@ -114,7 +114,7 @@ pub struct ConnectionCredentials {
 }
 
 impl ConnectionCredentials {
-    pub(crate) fn new(certificates: &[RTCCertificate], remote_role: DTLSRole) -> Self {
+    pub(crate) fn new(fingerprints: Vec<RTCDtlsFingerprint>, remote_role: DTLSRole) -> Self {
         let rng = SystemRandom::new();
 
         let mut user = [0u8; 9];
@@ -128,7 +128,7 @@ impl ConnectionCredentials {
                 password: BASE64_STANDARD.encode(&password[..]),
             },
             dtls_params: DTLSParameters {
-                fingerprints: certificates.first().unwrap().get_fingerprints(),
+                fingerprints,
                 role: if remote_role == DTLSRole::Server {
                     DTLSRole::Client
                 } else {
