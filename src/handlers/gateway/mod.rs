@@ -537,10 +537,11 @@ impl GatewayInbound {
         };
 
         let offer = session.create_offer(
-            &Some(endpoint),
+            Some(&endpoint),
             &remote_description,
             &local_conn_cred.ice_params,
         )?;
+        session.set_local_description(&endpoint, &offer)?;
 
         let offer_str =
             serde_json::to_string(&offer).map_err(|err| Error::Other(err.to_string()))?;

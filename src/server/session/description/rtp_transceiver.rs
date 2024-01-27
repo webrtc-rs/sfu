@@ -57,15 +57,36 @@ pub(crate) struct SsrcGroup {
     pub(crate) ssrcs: Vec<SSRC>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RTCRtpSender {
+    pub(crate) cname: String,
+    pub(crate) msid: MediaStreamId,
+    pub(crate) ssrcs: HashSet<SSRC>,
+    pub(crate) ssrc_groups: Vec<SsrcGroup>,
+}
+
 /// RTPTransceiver represents a combination of an RTPSender and an RTPReceiver that share a common mid.
 #[derive(Debug, Clone)]
 pub struct RTCRtpTransceiver {
     pub(crate) mid: String,
-    pub(crate) kind: RTPCodecType,
+
+    pub(crate) sender: Option<RTCRtpSender>,
+
     pub(crate) direction: RTCRtpTransceiverDirection,
-    pub(crate) cname: Option<String>,
-    pub(crate) msid: Option<MediaStreamId>,
+    pub(crate) current_direction: RTCRtpTransceiverDirection,
+
     pub(crate) rtp_params: RTCRtpParameters,
-    pub(crate) ssrcs: HashSet<SSRC>,
-    pub(crate) ssrc_groups: Vec<SsrcGroup>,
+
+    pub(crate) kind: RTPCodecType,
+}
+
+impl RTCRtpTransceiver {
+    /// current_direction returns the RTPTransceiver's current direction as negotiated.
+    pub(crate) fn current_direction(&self) -> RTCRtpTransceiverDirection {
+        self.current_direction
+    }
+
+    pub(crate) fn set_current_direction(&mut self, d: RTCRtpTransceiverDirection) {
+        self.current_direction = d;
+    }
 }

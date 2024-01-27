@@ -80,7 +80,11 @@ impl ServerStates {
             )
         };
 
-        let answer = session.create_answer(&endpoint, &offer, &local_conn_cred.ice_params)?;
+        let answer =
+            session.create_answer(endpoint.as_ref(), &offer, &local_conn_cred.ice_params)?;
+        if let Some(endpoint) = endpoint.as_ref() {
+            session.set_local_description(endpoint, &answer)?;
+        }
 
         if endpoint.is_none() {
             self.add_candidate(Rc::new(Candidate::new(

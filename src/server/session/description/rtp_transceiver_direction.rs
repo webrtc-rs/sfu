@@ -2,8 +2,9 @@ use crate::server::session::description::UNSPECIFIED_STR;
 use std::fmt;
 
 /// RTPTransceiverDirection indicates the direction of the RTPTransceiver.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum RTCRtpTransceiverDirection {
+    #[default]
     Unspecified,
 
     /// Sendrecv indicates the RTPSender will offer

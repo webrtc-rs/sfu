@@ -16,7 +16,7 @@ use crate::server::endpoint::candidate::{
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
 use crate::server::session::description::rtp_codec::{RTCRtpParameters, RTPCodecType};
-use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;
+use crate::server::session::description::rtp_transceiver::{RTCRtpSender, RTCRtpTransceiver};
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::{
@@ -105,22 +105,10 @@ impl Session {
             .as_ref()
             .ok_or(Error::Other("Unparsed remote description".to_string()))?;
 
-        let mut local_transceivers = endpoint.transceivers().borrow_mut();
+        let mut transceivers = endpoint.transceivers().borrow_mut();
+        let we_offer = remote_description.sdp_type == RTCSdpType::Answer;
 
         for media in &parsed.media_descriptions {
-            let mid_value = match get_mid_value(media) {
-                Some(m) => {
-                    if m.is_empty() {
-                        return Err(Error::Other(
-                            "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
-                        ));
-                    } else {
-                        m
-                    }
-                }
-                None => continue,
-            };
-
             if media.media_name.media == MEDIA_SECTION_APPLICATION {
                 continue;
             }
@@ -133,31 +121,154 @@ impl Session {
                 continue;
             }
 
-            let cname = get_cname(media);
-            let msid = get_msid(media);
-            let (ssrc_groups, ssrcs) = get_ssrc_groups(media)?;
-            let codecs = codecs_from_media_description(media)?;
-            let header_extensions = rtp_extensions_from_media_description(media)?;
-            let rtp_params = RTCRtpParameters {
-                header_extensions,
-                codecs,
+            let mid_value = match get_mid_value(media) {
+                Some(mid) => {
+                    if mid.is_empty() {
+                        return Err(Error::Other(
+                            "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
+                        ));
+                    } else {
+                        mid
+                    }
+                }
+                None => continue,
             };
 
-            let transceiver = Rc::new(RTCRtpTransceiver {
-                mid: mid_value.to_string(),
-                kind,
-                direction,
-                cname,
-                msid,
-                rtp_params,
-                ssrcs,
-                ssrc_groups,
-            });
+            if !we_offer {
+                // This is an offer from the remote.
+                if !transceivers.contains_key(mid_value) {
+                    let cname = get_cname(media);
+                    let msid = get_msid(media);
+                    let (ssrc_groups, ssrcs) = get_ssrc_groups(media)?;
+                    let codecs = codecs_from_media_description(media)?;
+                    let header_extensions = rtp_extensions_from_media_description(media)?;
+                    let rtp_params = RTCRtpParameters {
+                        header_extensions,
+                        codecs,
+                    };
 
-            if let Some(local_transceiver) = local_transceivers.get_mut(mid_value) {
-                *local_transceiver = transceiver;
+                    let local_direction = if direction == RTCRtpTransceiverDirection::Recvonly {
+                        RTCRtpTransceiverDirection::Sendonly
+                    } else {
+                        RTCRtpTransceiverDirection::Recvonly
+                    };
+
+                    let sender = if let (Some(cname), Some(msid)) = (cname, msid) {
+                        Some(RTCRtpSender {
+                            cname,
+                            msid,
+                            ssrcs,
+                            ssrc_groups,
+                        })
+                    } else {
+                        None
+                    };
+
+                    let transceiver = RTCRtpTransceiver {
+                        mid: mid_value.to_string(),
+                        sender: sender.clone(),
+                        direction: local_direction,
+                        current_direction: RTCRtpTransceiverDirection::Unspecified,
+                        rtp_params: rtp_params.clone(),
+                        kind,
+                    };
+
+                    transceivers.insert(mid_value.to_string(), transceiver);
+
+                    // add it to other endpoints' transceivers as send only
+
+                    let endpoints = self.endpoints.borrow();
+                    for (&other_endpoint_id, other_endpoint) in &*endpoints {
+                        if other_endpoint_id != endpoint.endpoint_id() {
+                            let other_mid_value =
+                                format!("{}-{}", endpoint.endpoint_id(), mid_value);
+                            let mut other_transceivers = other_endpoint.transceivers().borrow_mut();
+                            if let Some(other_transceiver) =
+                                other_transceivers.get_mut(&other_mid_value)
+                            {
+                                other_transceiver.direction = direction;
+                            } else if direction == RTCRtpTransceiverDirection::Sendonly {
+                                let other_transceiver = RTCRtpTransceiver {
+                                    mid: other_mid_value.clone(),
+                                    sender: sender.clone(),
+                                    direction,
+                                    current_direction: RTCRtpTransceiverDirection::Unspecified,
+                                    rtp_params: rtp_params.clone(),
+                                    kind,
+                                };
+
+                                other_transceivers.insert(other_mid_value, other_transceiver);
+                            }
+                        }
+                    }
+                }
             } else {
-                local_transceivers.insert(mid_value.to_string(), transceiver);
+                // This is an answer from the remote.
+                if let Some(transceiver) = transceivers.get_mut(mid_value) {
+                    //let previous_direction = transceiver.current_direction();
+
+                    // 4.5.9.2.9
+                    // Let direction be an RTCRtpTransceiverDirection value representing the direction
+                    // from the media description, but with the send and receive directions reversed to
+                    // represent this peer's point of view. If the media description is rejected,
+                    // set direction to "inactive".
+                    let reversed_direction = direction.reverse();
+
+                    // 4.5.9.2.13.2
+                    // Set transceiver.[[CurrentDirection]] and transceiver.[[Direction]]s to direction.
+                    transceiver.set_current_direction(reversed_direction);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn set_local_description(
+        &self,
+        endpoint: &Rc<Endpoint>,
+        local_description: &RTCSessionDescription,
+    ) -> Result<()> {
+        let parsed = local_description
+            .parsed
+            .as_ref()
+            .ok_or(Error::Other("Unparsed local description".to_string()))?;
+
+        let mut transceivers = endpoint.transceivers().borrow_mut();
+        let we_answer = local_description.sdp_type == RTCSdpType::Answer;
+        if we_answer {
+            for media in &parsed.media_descriptions {
+                if media.media_name.media == MEDIA_SECTION_APPLICATION {
+                    continue;
+                }
+
+                let kind = RTPCodecType::from(media.media_name.media.as_str());
+                let direction = get_peer_direction(media);
+                if kind == RTPCodecType::Unspecified
+                    || direction == RTCRtpTransceiverDirection::Unspecified
+                {
+                    continue;
+                }
+
+                let mid_value = match get_mid_value(media) {
+                    Some(mid) => {
+                        if mid.is_empty() {
+                            return Err(Error::Other(
+                                "ErrPeerConnRemoteDescriptionWithoutMidValue".to_string(),
+                            ));
+                        } else {
+                            mid
+                        }
+                    }
+                    _ => continue,
+                };
+
+                if let Some(transceiver) = transceivers.get_mut(mid_value) {
+                    //let previous_direction = transceiver.current_direction();
+                    // 4.9.1.7.3 applying a local answer or pranswer
+                    // Set transceiver.[[CurrentDirection]] and transceiver.[[FiredDirection]] to direction.
+                    transceiver.set_current_direction(direction);
+                }
             }
         }
 
@@ -166,7 +277,7 @@ impl Session {
 
     pub(crate) fn create_offer(
         &self,
-        endpoint: &Option<Rc<Endpoint>>,
+        endpoint: Option<&Rc<Endpoint>>,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
     ) -> Result<RTCSessionDescription> {
@@ -197,7 +308,7 @@ impl Session {
 
     pub(crate) fn create_answer(
         &self,
-        endpoint: &Option<Rc<Endpoint>>,
+        endpoint: Option<&Rc<Endpoint>>,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
     ) -> Result<RTCSessionDescription> {
@@ -229,7 +340,7 @@ impl Session {
     /// this is used everytime we have a remote_description
     pub(crate) fn generate_matched_sdp(
         &self,
-        endpoint: &Option<Rc<Endpoint>>,
+        endpoint: Option<&Rc<Endpoint>>,
         remote_description: &RTCSessionDescription,
         local_ice_params: &RTCIceParameters,
         use_identity: bool,
@@ -240,7 +351,7 @@ impl Session {
         let empty_transceivers = RefCell::new(HashMap::new());
 
         let media_sections = {
-            let local_transceivers = if let Some(endpoint) = endpoint.as_ref() {
+            let transceivers = if let Some(endpoint) = endpoint.as_ref() {
                 endpoint.transceivers().borrow()
             } else {
                 empty_transceivers.borrow()
@@ -276,12 +387,11 @@ impl Session {
                             continue;
                         }
 
-                        if let Some(t) = local_transceivers.get(mid_value) {
+                        if let Some(_t) = transceivers.get(mid_value) {
                             matched.insert(mid_value.to_string());
 
                             media_sections.push(MediaSection {
                                 mid: mid_value.to_owned(),
-                                transceiver: Some(t.clone()),
                                 rid_map: get_rids(media),
                                 offered_direction: (!include_unmatched).then_some(direction),
                                 ..Default::default()
@@ -295,11 +405,10 @@ impl Session {
 
             // If we are offering also include unmatched local transceivers
             if include_unmatched {
-                for (mid, t) in local_transceivers.iter() {
+                for (mid, _t) in transceivers.iter() {
                     if !matched.contains::<Mid>(mid) {
                         media_sections.push(MediaSection {
                             mid: mid.clone(),
-                            transceiver: Some(t.clone()),
                             ..Default::default()
                         });
                     }
@@ -311,27 +420,6 @@ impl Session {
                         data: true,
                         ..Default::default()
                     });
-                }
-
-                // we are offering also include other endpoints' local transceivers
-                if let Some(endpoint) = endpoint.as_ref() {
-                    let endpoints = self.endpoints.borrow();
-                    for (&other_endpoint_id, other_endpoint) in &*endpoints {
-                        if other_endpoint_id != endpoint.endpoint_id() {
-                            let other_transceivers = other_endpoint.transceivers().borrow();
-                            for (other_mid, other_transceiver) in other_transceivers.iter() {
-                                if other_transceiver.direction
-                                    == RTCRtpTransceiverDirection::Sendonly
-                                {
-                                    media_sections.push(MediaSection {
-                                        mid: other_mid.to_owned(),
-                                        transceiver: Some(other_transceiver.clone()),
-                                        ..Default::default()
-                                    });
-                                }
-                            }
-                        }
-                    }
                 }
             }
 
@@ -345,6 +433,12 @@ impl Session {
                 return Err(Error::Other("ErrNonCertificate".to_string()));
             };
 
+        let transceivers = if let Some(endpoint) = endpoint.as_ref() {
+            endpoint.transceivers().borrow()
+        } else {
+            empty_transceivers.borrow()
+        };
+
         populate_sdp(
             d,
             &dtls_fingerprints,
@@ -352,6 +446,7 @@ impl Session {
             local_ice_params,
             connection_role,
             &media_sections,
+            &transceivers,
             true,
         )
     }

@@ -8,7 +8,7 @@ use crate::server::session::Session;
 use crate::types::{EndpointId, FourTuple, Mid};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
+use std::rc::Weak;
 
 #[derive(Default)]
 pub(crate) struct Endpoint {
@@ -19,7 +19,7 @@ pub(crate) struct Endpoint {
     local_description: RefCell<Option<RTCSessionDescription>>,
 
     transports: RefCell<HashMap<FourTuple, Transport>>,
-    transceivers: RefCell<HashMap<Mid, Rc<RTCRtpTransceiver>>>,
+    transceivers: RefCell<HashMap<Mid, RTCRtpTransceiver>>,
 }
 
 impl Endpoint {
@@ -63,7 +63,7 @@ impl Endpoint {
         &self.transports
     }
 
-    pub(crate) fn transceivers(&self) -> &RefCell<HashMap<Mid, Rc<RTCRtpTransceiver>>> {
+    pub(crate) fn transceivers(&self) -> &RefCell<HashMap<Mid, RTCRtpTransceiver>> {
         &self.transceivers
     }
 
