@@ -204,7 +204,10 @@ impl Session {
                             if let Some(other_transceiver) =
                                 other_transceivers.get_mut(&other_mid_value)
                             {
-                                other_transceiver.direction = direction;
+                                if other_transceiver.direction != direction {
+                                    other_transceiver.direction = direction;
+                                    other_endpoint.set_renegotiation_needed(true);
+                                }
                             } else if direction == RTCRtpTransceiverDirection::Sendonly {
                                 let other_transceiver = RTCRtpTransceiver {
                                     mid: other_mid_value.clone(),
@@ -217,6 +220,7 @@ impl Session {
 
                                 other_mids.push(other_mid_value.clone());
                                 other_transceivers.insert(other_mid_value, other_transceiver);
+                                other_endpoint.set_renegotiation_needed(true);
                             }
                         }
                     }

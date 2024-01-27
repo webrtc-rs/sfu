@@ -3,6 +3,7 @@ use crate::messages::{
     STUNMessageEvent, TaggedMessageEvent,
 };
 use crate::server::endpoint::candidate::Candidate;
+use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::RTCSessionDescription;
 use crate::server::states::ServerStates;
@@ -231,13 +232,65 @@ impl GatewayInbound {
         association_handle: usize,
         stream_id: u16,
     ) -> Result<Vec<TaggedMessageEvent>> {
-        Ok(vec![GatewayInbound::create_offer_message_event(
-            server_states,
-            now,
-            transport_context,
-            association_handle,
-            stream_id,
-        )?])
+        let four_tuple = (&transport_context).into();
+        let (session_id, endpoint_id) = server_states
+            .find_endpoint(&four_tuple)
+            .ok_or(Error::ErrClientTransportNotSet)?;
+
+        let session = server_states
+            .get_mut_session(&session_id)
+            .ok_or(Error::Other(format!(
+                "can't find session id {}",
+                session_id
+            )))?;
+
+        let mut new_transceivers = vec![];
+        let endpoints = session.get_endpoints();
+        for (&other_endpoint_id, other_endpoint) in endpoints.iter() {
+            if other_endpoint_id != endpoint_id {
+                let other_transceivers = other_endpoint.get_transceivers();
+                for (_, other_transceiver) in other_transceivers.iter() {
+                    if other_transceiver.direction == RTCRtpTransceiverDirection::Recvonly {
+                        let mut transceiver = other_transceiver.clone();
+                        transceiver.direction = RTCRtpTransceiverDirection::Sendonly;
+                        new_transceivers.push(transceiver);
+                    }
+                }
+            }
+        }
+
+        let endpoint = session
+            .get_mut_endpoint(&endpoint_id)
+            .ok_or(Error::Other(format!(
+                "can't find endpoint id {}",
+                endpoint_id
+            )))?;
+
+        let transports = endpoint.get_mut_transports();
+        let transport = transports.get_mut(&four_tuple).ok_or(Error::Other(format!(
+            "can't find transport for endpoint id {} with {:?}",
+            endpoint_id, four_tuple
+        )))?;
+        transport.set_association_handle_and_stream_id(association_handle, stream_id);
+        endpoint.set_renegotiation_needed(!new_transceivers.is_empty());
+
+        let (mids, transceivers) = endpoint.get_mut_mids_and_transceivers();
+        for transceiver in new_transceivers {
+            mids.push(transceiver.mid.clone());
+            transceivers.insert(transceiver.mid.clone(), transceiver);
+        }
+
+        if endpoint.is_renegotiation_needed() {
+            Ok(vec![GatewayInbound::create_offer_message_event(
+                server_states,
+                now,
+                transport_context,
+                association_handle,
+                stream_id,
+            )?])
+        } else {
+            Ok(vec![])
+        }
     }
 
     fn handle_datachannel_close(
@@ -248,6 +301,7 @@ impl GatewayInbound {
         _stream_id: u16,
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: handle datachannel close event!
+        // clean up resources, like sctp_association, endpoint, etc.
         Ok(vec![])
     }
 
@@ -303,14 +357,22 @@ impl GatewayInbound {
                 });
 
                 // trigger other endpoints' create_offer()
-                for (other_transport_context, association_handle, stream_id) in peers {
-                    messages.push(GatewayInbound::create_offer_message_event(
-                        server_states,
-                        now,
-                        other_transport_context,
-                        association_handle,
-                        stream_id,
-                    )?);
+                for (
+                    other_transport_context,
+                    association_handle,
+                    stream_id,
+                    is_renegotiation_needed,
+                ) in peers
+                {
+                    if is_renegotiation_needed {
+                        messages.push(GatewayInbound::create_offer_message_event(
+                            server_states,
+                            now,
+                            other_transport_context,
+                            association_handle,
+                            stream_id,
+                        )?);
+                    }
                 }
 
                 Ok(messages)
@@ -337,7 +399,7 @@ impl GatewayInbound {
             GatewayInbound::get_other_transport_contexts(server_states, &transport_context)?;
 
         let mut outgoing_messages = Vec::with_capacity(peers.len());
-        for (transport, _, _) in peers {
+        for (transport, _, _, _) in peers {
             outgoing_messages.push(TaggedMessageEvent {
                 now,
                 transport,
@@ -359,7 +421,7 @@ impl GatewayInbound {
             GatewayInbound::get_other_transport_contexts(server_states, &transport_context)?;
 
         let mut outgoing_messages = Vec::with_capacity(peers.len());
-        for (transport, _, _) in peers {
+        for (transport, _, _, _) in peers {
             outgoing_messages.push(TaggedMessageEvent {
                 now,
                 transport,
@@ -424,7 +486,7 @@ impl GatewayInbound {
     fn get_other_transport_contexts(
         server_states: &mut ServerStates,
         transport_context: &TransportContext,
-    ) -> Result<Vec<(TransportContext, usize, u16)>> {
+    ) -> Result<Vec<(TransportContext, usize, u16, bool)>> {
         let four_tuple = transport_context.into();
         let (session_id, endpoint_id) = server_states
             .find_endpoint(&four_tuple)
@@ -453,6 +515,7 @@ impl GatewayInbound {
                             },
                             association_handle,
                             stream_id,
+                            other_endpoint.is_renegotiation_needed(),
                         ));
                     } else {
                         trace!(
@@ -528,7 +591,6 @@ impl GatewayInbound {
         Ok(is_new_endpoint)
     }
 
-    //TODO: only create offer message when SDP renegotiation is needed
     fn create_offer_message_event(
         server_states: &mut ServerStates,
         now: Instant,
@@ -553,6 +615,7 @@ impl GatewayInbound {
                 "can't find endpoint id {}",
                 endpoint_id
             )))?;
+        endpoint.set_renegotiation_needed(false); //clean renegotiation_needed flag
 
         let remote_description = endpoint
             .remote_description()
@@ -565,7 +628,6 @@ impl GatewayInbound {
                 "can't find transport for endpoint id {} with {:?}",
                 endpoint_id, four_tuple
             )))?;
-            transport.set_association_handle_and_stream_id(association_handle, stream_id);
             transport.candidate().local_connection_credentials().clone()
         };
 
