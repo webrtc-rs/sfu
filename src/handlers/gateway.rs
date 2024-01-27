@@ -246,9 +246,10 @@ impl GatewayInbound {
         for (&other_endpoint_id, other_endpoint) in endpoints.iter() {
             if other_endpoint_id != endpoint_id {
                 let other_transceivers = other_endpoint.get_transceivers();
-                for (_, other_transceiver) in other_transceivers.iter() {
+                for (other_mid_value, other_transceiver) in other_transceivers.iter() {
                     if other_transceiver.direction == RTCRtpTransceiverDirection::Recvonly {
                         let mut transceiver = other_transceiver.clone();
+                        transceiver.mid = format!("{}-{}", other_endpoint_id, other_mid_value);
                         transceiver.direction = RTCRtpTransceiverDirection::Sendonly;
                         new_transceivers.push(transceiver);
                     }
