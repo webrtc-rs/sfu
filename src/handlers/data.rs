@@ -31,8 +31,8 @@ impl InboundHandler for DataChannelInbound {
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
         if let MessageEvent::DTLS(DTLSMessageEvent::SCTP(message)) = msg.message {
             debug!(
-                "recv SCTP DataChannelMessage {:?} with {:?}",
-                msg.transport.peer_addr, message
+                "recv SCTP DataChannelMessage from {:?}",
+                msg.transport.peer_addr
             );
             let try_read =
                 || -> Result<(Option<ApplicationMessage>, Option<DataChannelMessage>)> {
@@ -44,8 +44,7 @@ impl InboundHandler for DataChannelInbound {
                             message.stream_id,
                             message.data_message_type);
 
-                            let open = DataChannelOpen::unmarshal(&mut buf)?;
-                            debug!("recv DataChannelOpen {:?}", open);
+                            let _open = DataChannelOpen::unmarshal(&mut buf)?;
 
                             let payload = Message::DataChannelAck(DataChannelAck {}).marshal()?;
                             Ok((
@@ -127,10 +126,7 @@ impl OutboundHandler for DataChannelOutbound {
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
         if let MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(message)) = msg.message {
-            debug!(
-                "send application message {:?} with {:?}",
-                msg.transport.peer_addr, message
-            );
+            debug!("send application message {:?}", msg.transport.peer_addr);
 
             if let DataChannelEvent::Message(payload) = message.data_channel_event {
                 ctx.fire_write(TaggedMessageEvent {
@@ -151,8 +147,8 @@ impl OutboundHandler for DataChannelOutbound {
                 });
             } else {
                 warn!(
-                    "drop unsupported DATACHANNEL message {:?} to {}",
-                    message, msg.transport.peer_addr
+                    "drop unsupported DATACHANNEL message to {}",
+                    msg.transport.peer_addr
                 );
             }
         } else {

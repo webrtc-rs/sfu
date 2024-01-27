@@ -8,7 +8,7 @@ use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::server::session::description::RTCSessionDescription;
 use crate::server::states::ServerStates;
 use bytes::BytesMut;
-use log::{debug, info, trace, warn};
+use log::{debug, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;
 use shared::error::{Error, Result};
@@ -89,10 +89,7 @@ impl InboundHandler for GatewayInbound {
                     )
                 }
                 _ => {
-                    warn!(
-                        "drop unsupported message {:?} from {}",
-                        msg.message, msg.transport.peer_addr
-                    );
+                    warn!("drop unsupported message from {}", msg.transport.peer_addr);
                     Ok(vec![])
                 }
             }
@@ -314,8 +311,6 @@ impl GatewayInbound {
         payload: BytesMut,
     ) -> Result<Vec<TaggedMessageEvent>> {
         let request_sdp_str = String::from_utf8(payload.to_vec())?;
-        info!("handle_dtls_message: request_sdp {}", request_sdp_str);
-
         let request_sdp = serde_json::from_str::<RTCSessionDescription>(&request_sdp_str)
             .map_err(|err| Error::Other(err.to_string()))?;
 
@@ -334,7 +329,6 @@ impl GatewayInbound {
                 )?;
                 let answer_str =
                     serde_json::to_string(&answer).map_err(|err| Error::Other(err.to_string()))?;
-                info!("handle_dtls_message: answer_str {}", answer_str);
 
                 let peers = GatewayInbound::get_other_transport_contexts(
                     server_states,
@@ -518,10 +512,9 @@ impl GatewayInbound {
                             other_endpoint.is_renegotiation_needed(),
                         ));
                     } else {
-                        trace!(
+                        warn!(
                             "session id {}/endpoint id {}'s data channel is not ready",
-                            session_id,
-                            endpoint_id
+                            session_id, endpoint_id
                         );
                     }
                 }
@@ -640,7 +633,6 @@ impl GatewayInbound {
 
         let offer_str =
             serde_json::to_string(&offer).map_err(|err| Error::Other(err.to_string()))?;
-        info!("create_offer_message_event: offer_str {}", offer_str);
 
         Ok(TaggedMessageEvent {
             now,

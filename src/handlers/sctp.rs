@@ -120,7 +120,7 @@ impl InboundHandler for SctpInbound {
                         for (event_ch, conn_events) in sctp_events.iter_mut() {
                             if ch == event_ch {
                                 for event in conn_events.drain(..) {
-                                    debug!("association_handle {} handle_event {:?}", ch.0, event);
+                                    debug!("association_handle {} handle_event", ch.0);
                                     conn.handle_event(event);
                                 }
                             }
@@ -247,8 +247,8 @@ impl OutboundHandler for SctpOutbound {
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
         if let MessageEvent::DTLS(DTLSMessageEvent::SCTP(message)) = msg.message {
             debug!(
-                "send sctp data channel message {:?} with {:?}",
-                msg.transport.peer_addr, message
+                "send sctp data channel message {:?}",
+                msg.transport.peer_addr
             );
             let mut try_write = || -> Result<()> {
                 let mut server_states = self.server_states.borrow_mut();
