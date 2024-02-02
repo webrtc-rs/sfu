@@ -105,8 +105,8 @@ impl RTCRtpCodecCapability {
             || mime_type == MIME_TYPE_TELEPHONE_EVENT.to_lowercase()
         {
             Ok(Box::<rtp::codecs::g7xx::G7xxPayloader>::default())
-        /*TODO:} else if mime_type == MIME_TYPE_AV1.to_lowercase() {
-        Ok(Box::<rtp::codecs::av1::Av1Payloader>::default())*/
+        } else if mime_type == MIME_TYPE_AV1.to_lowercase() {
+            Ok(Box::<rtp::codecs::av1::Av1Payloader>::default())
         } else {
             Err(Error::Other("ErrNoPayloaderForCodec".to_string()))
         }
