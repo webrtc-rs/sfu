@@ -53,7 +53,7 @@ impl From<Level> for log::LevelFilter {
 #[command(version = "0.1.0")]
 #[command(about = "An example of SFU Server", long_about = None)]
 struct Cli {
-    #[arg(long, default_value_t = format!("0.0.0.0"))]
+    #[arg(long, default_value_t = format!("127.0.0.1"))]
     host: String,
     #[arg(short, long, default_value_t = 8080)]
     signal_port: u16,
