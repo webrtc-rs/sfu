@@ -1,3 +1,4 @@
+pub(crate) mod config;
 pub(crate) mod fmtp;
 pub(crate) mod rtp_codec;
 pub(crate) mod rtp_transceiver;
@@ -810,7 +811,7 @@ pub(crate) fn codecs_from_media_description(
                 rtcp_feedbacks: feedback,
             },
             payload_type,
-            //stats_id: String::new(),
+            ..Default::default() //stats_id: String::new(),
         })
     }
 
