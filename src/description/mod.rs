@@ -309,7 +309,10 @@ pub(crate) fn add_transceiver_sdp(
         )?;
     }
 
-    let codecs = &transceiver.rtp_params.codecs;
+    let codecs = session_config
+        .server_config
+        .media_config
+        .get_codecs_by_kind(transceiver.kind);
     for codec in codecs {
         let name = codec
             .capability
@@ -336,8 +339,11 @@ pub(crate) fn add_transceiver_sdp(
         }
     }
 
-    let header_extensions = &transceiver.rtp_params.header_extensions;
-    for rtp_extension in header_extensions {
+    let parameters = session_config
+        .server_config
+        .media_config
+        .get_rtp_parameters_by_kind(transceiver.kind, transceiver.direction);
+    for rtp_extension in parameters.header_extensions {
         let ext_url = Url::parse(rtp_extension.uri.as_str())?;
         media = media.with_extmap(ExtMap {
             value: rtp_extension.id,

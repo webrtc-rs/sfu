@@ -694,6 +694,105 @@ impl MediaConfig {
     }
 
     pub(crate) fn get_rtp_parameters_by_kind(
+        &self,
+        typ: RTPCodecType,
+        direction: RTCRtpTransceiverDirection,
+    ) -> RTCRtpParameters {
+        let mut header_extensions = vec![];
+
+        if self.negotiated_video && typ == RTPCodecType::Video
+            || self.negotiated_audio && typ == RTPCodecType::Audio
+        {
+            for (id, e) in &self.negotiated_header_extensions {
+                if e.is_matching_direction(direction)
+                    && (e.is_audio && typ == RTPCodecType::Audio
+                        || e.is_video && typ == RTPCodecType::Video)
+                {
+                    header_extensions.push(RTCRtpHeaderExtensionParameters {
+                        id: *id,
+                        uri: e.uri.clone(),
+                    });
+                }
+            }
+        } else {
+            for local_extension in &self.header_extensions {
+                let relevant = local_extension.is_matching_direction(direction)
+                    && (local_extension.is_audio && typ == RTPCodecType::Audio
+                        || local_extension.is_video && typ == RTPCodecType::Video);
+
+                if !relevant {
+                    continue;
+                }
+
+                if let Some((id, negotiated_extension)) = self
+                    .negotiated_header_extensions
+                    .iter()
+                    .find(|(_, e)| e.uri == local_extension.uri)
+                {
+                    // We have previously negotiated this extension, make sure to record it as
+                    // active for the current type
+                    //TODO: negotiated_extension.is_audio |= typ == RTPCodecType::Audio;
+                    // negotiated_extension.is_video |= typ == RTPCodecType::Video;
+
+                    header_extensions.push(RTCRtpHeaderExtensionParameters {
+                        id: *id,
+                        uri: negotiated_extension.uri.clone(),
+                    });
+
+                    continue;
+                }
+
+                if let Some((id, negotiated_extension)) = self
+                    .proposed_header_extensions
+                    .iter()
+                    .find(|(_, e)| e.uri == local_extension.uri)
+                {
+                    // We have previously proposed this extension, re-use it
+                    header_extensions.push(RTCRtpHeaderExtensionParameters {
+                        id: *id,
+                        uri: negotiated_extension.uri.clone(),
+                    });
+
+                    continue;
+                }
+
+                // Figure out which (unused id) to propose.
+                let id = VALID_EXT_IDS.clone().find(|id| {
+                    !self
+                        .negotiated_header_extensions
+                        .keys()
+                        .any(|nid| nid == id)
+                        && !self.proposed_header_extensions.keys().any(|pid| pid == id)
+                });
+
+                if let Some(id) = id {
+                    /*TODO: self.proposed_header_extensions.insert(
+                        id,
+                        RTCRtpHeaderExtension {
+                            uri: local_extension.uri.clone(),
+                            is_audio: local_extension.is_audio,
+                            is_video: local_extension.is_video,
+                            allowed_direction: local_extension.allowed_direction,
+                        },
+                    );*/
+
+                    header_extensions.push(RTCRtpHeaderExtensionParameters {
+                        id,
+                        uri: local_extension.uri.clone(),
+                    });
+                } else {
+                    log::warn!("No available RTP extension ID for {}", local_extension.uri);
+                }
+            }
+        }
+
+        RTCRtpParameters {
+            header_extensions,
+            codecs: self.get_codecs_by_kind(typ).to_vec(),
+        }
+    }
+
+    pub(crate) fn get_mut_rtp_parameters_by_kind(
         &mut self,
         typ: RTPCodecType,
         direction: RTCRtpTransceiverDirection,
