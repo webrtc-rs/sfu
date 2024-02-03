@@ -6,9 +6,11 @@ use crate::description::{
         RTPCodecType,
     },
     rtp_extensions_from_media_description,
+    rtp_transceiver::TYPE_RTCP_FB_TRANSPORT_CC,
     rtp_transceiver_direction::RTCRtpTransceiverDirection,
     PayloadType, RTCPFeedback,
 };
+
 //TODO: use crate::stats::stats_collector::StatsCollector;
 //use crate::stats::CodecStats;
 //use crate::stats::StatsReportType::Codec;
@@ -47,15 +49,15 @@ pub const MIME_TYPE_TELEPHONE_EVENT: &str = "audio/telephone-event";
 
 const VALID_EXT_IDS: Range<isize> = 1..15;
 
-#[derive(Default, Clone)]
-pub(crate) struct MediaEngineHeaderExtension {
+#[derive(Default, Debug, Clone)]
+pub(crate) struct RTCRtpHeaderExtension {
     pub(crate) uri: String,
     pub(crate) is_audio: bool,
     pub(crate) is_video: bool,
     pub(crate) allowed_direction: Option<RTCRtpTransceiverDirection>,
 }
 
-impl MediaEngineHeaderExtension {
+impl RTCRtpHeaderExtension {
     pub fn is_matching_direction(&self, dir: RTCRtpTransceiverDirection) -> bool {
         if let Some(allowed_direction) = self.allowed_direction {
             use RTCRtpTransceiverDirection::*;
@@ -69,11 +71,11 @@ impl MediaEngineHeaderExtension {
     }
 }
 
-/// A MediaEngine defines the codecs supported by a PeerConnection, and the
-/// configuration of those codecs. A MediaEngine must not be shared between
+/// A MediaConfig defines the codecs supported by a PeerConnection, and the
+/// configuration of those codecs. A MediaConfig must not be shared between
 /// PeerConnections.
-#[derive(Default)]
-pub struct MediaEngine {
+#[derive(Debug, Clone)]
+pub struct MediaConfig {
     // If we have attempted to negotiate a codec type yet.
     pub(crate) negotiated_video: bool,
     pub(crate) negotiated_audio: bool,
@@ -83,12 +85,32 @@ pub struct MediaEngine {
     pub(crate) negotiated_video_codecs: Vec<RTCRtpCodecParameters>,
     pub(crate) negotiated_audio_codecs: Vec<RTCRtpCodecParameters>,
 
-    header_extensions: Vec<MediaEngineHeaderExtension>,
-    proposed_header_extensions: HashMap<isize, MediaEngineHeaderExtension>,
-    pub(crate) negotiated_header_extensions: HashMap<isize, MediaEngineHeaderExtension>,
+    header_extensions: Vec<RTCRtpHeaderExtension>,
+    proposed_header_extensions: HashMap<isize, RTCRtpHeaderExtension>,
+    pub(crate) negotiated_header_extensions: HashMap<isize, RTCRtpHeaderExtension>,
 }
 
-impl MediaEngine {
+impl Default for MediaConfig {
+    fn default() -> Self {
+        let mut media_config = MediaConfig {
+            negotiated_video: false,
+            negotiated_audio: false,
+            video_codecs: vec![],
+            audio_codecs: vec![],
+            negotiated_video_codecs: vec![],
+            negotiated_audio_codecs: vec![],
+            header_extensions: vec![],
+            proposed_header_extensions: HashMap::new(),
+            negotiated_header_extensions: HashMap::new(),
+        };
+
+        let _ = media_config.register_default_codecs();
+
+        media_config
+    }
+}
+
+impl MediaConfig {
     /// register_default_codecs registers the default codecs supported by Pion WebRTC.
     /// register_default_codecs is not safe for concurrent use.
     pub fn register_default_codecs(&mut self) -> Result<()> {
@@ -301,19 +323,17 @@ impl MediaEngine {
         Ok(())
     }
 
-    /// add_codec will append codec if it not exists
-    fn add_codec(codecs: &mut Vec<RTCRtpCodecParameters>, codec: RTCRtpCodecParameters) {
-        for c in codecs.iter() {
-            if c.capability.mime_type == codec.capability.mime_type
-                && c.payload_type == codec.payload_type
-            {
-                return;
-            }
-        }
-        codecs.push(codec);
+    /// register_default_interceptors will register some useful interceptors.
+    /// If you want to customize which interceptors are loaded, you should copy the
+    /// code from this method and remove unwanted interceptors.
+    pub fn register_default_interceptors(&mut self) -> Result<()> {
+        self.configure_nack()?;
+        self.configure_twcc_receiver_only()?;
+
+        Ok(())
     }
 
-    /// register_codec adds codec to the MediaEngine
+    /// register_codec adds codec to the MediaConfig
     /// These are the list of codecs supported by this PeerConnection.
     /// register_codec is not safe for concurrent use.
     pub fn register_codec(
@@ -330,18 +350,18 @@ impl MediaEngine {
         );*/
         match typ {
             RTPCodecType::Audio => {
-                MediaEngine::add_codec(&mut self.audio_codecs, codec);
+                MediaConfig::add_codec(&mut self.audio_codecs, codec);
                 Ok(())
             }
             RTPCodecType::Video => {
-                MediaEngine::add_codec(&mut self.video_codecs, codec);
+                MediaConfig::add_codec(&mut self.video_codecs, codec);
                 Ok(())
             }
             _ => Err(Error::Other("ErrUnknownType".to_string())),
         }
     }
 
-    /// Adds a header extension to the MediaEngine
+    /// Adds a header extension to the MediaConfig
     /// To determine the negotiated value use [`get_header_extension_id`] after signaling is complete.
     ///
     /// The `allowed_direction` controls for which transceiver directions the extension matches. If
@@ -367,7 +387,7 @@ impl MediaEngine {
                             "ErrRegisterHeaderExtensionNoFreeID".to_string(),
                         ));
                     }
-                    self.header_extensions.push(MediaEngineHeaderExtension {
+                    self.header_extensions.push(RTCRtpHeaderExtension {
                         allowed_direction,
                         ..Default::default()
                     });
@@ -395,21 +415,33 @@ impl MediaEngine {
         Ok(())
     }
 
-    /// register_feedback adds feedback mechanism to already registered codecs.
-    pub fn register_feedback(&mut self, feedback: RTCPFeedback, typ: RTPCodecType) {
+    /// register_rtcp_feedback adds feedback mechanism to already registered codecs.
+    pub fn register_rtcp_feedback(&mut self, rtcp_feedback: RTCPFeedback, typ: RTPCodecType) {
         match typ {
             RTPCodecType::Video => {
                 for v in &mut self.video_codecs {
-                    v.capability.rtcp_feedbacks.push(feedback.clone());
+                    v.capability.rtcp_feedbacks.push(rtcp_feedback.clone());
                 }
             }
             RTPCodecType::Audio => {
                 for a in &mut self.audio_codecs {
-                    a.capability.rtcp_feedbacks.push(feedback.clone());
+                    a.capability.rtcp_feedbacks.push(rtcp_feedback.clone());
                 }
             }
             _ => {}
         }
+    }
+
+    /// add_codec will append codec if it not exists
+    fn add_codec(codecs: &mut Vec<RTCRtpCodecParameters>, codec: RTCRtpCodecParameters) {
+        for c in codecs.iter() {
+            if c.capability.mime_type == codec.capability.mime_type
+                && c.payload_type == codec.payload_type
+            {
+                return;
+            }
+        }
+        codecs.push(codec);
     }
 
     /// get_header_extension_id returns the negotiated ID for a header extension.
@@ -431,10 +463,10 @@ impl MediaEngine {
         (0, false, false)
     }
 
-    /// clone_to copies any user modifiable state of the MediaEngine
+    /// clone_to copies any user modifiable state of the MediaConfig
     /// all internal state is reset
     pub(crate) fn clone_to(&self) -> Self {
-        MediaEngine {
+        MediaConfig {
             video_codecs: self.video_codecs.clone(),
             audio_codecs: self.audio_codecs.clone(),
             header_extensions: self.header_extensions.clone(),
@@ -560,12 +592,11 @@ impl MediaEngine {
             } else {
                 // We either only have a proposal or we have neither proposal nor a negotiated id
                 // Accept whatevers the peer suggests
-
                 if let Some(prev_ext) = self.negotiated_header_extensions.get(&id) {
                     let prev_uri = &prev_ext.uri;
                     log::warn!("Assigning {} to {} would override previous assignment to {}, no action taken", id, uri, prev_uri);
                 } else {
-                    let h = MediaEngineHeaderExtension {
+                    let h = RTCRtpHeaderExtension {
                         uri: uri.to_owned(),
                         is_audio: local_extension.is_audio && typ == RTPCodecType::Audio,
                         is_video: local_extension.is_video && typ == RTPCodecType::Video,
@@ -584,14 +615,14 @@ impl MediaEngine {
     pub(crate) fn push_codecs(&mut self, codecs: Vec<RTCRtpCodecParameters>, typ: RTPCodecType) {
         for codec in codecs {
             if typ == RTPCodecType::Audio {
-                MediaEngine::add_codec(&mut self.negotiated_audio_codecs, codec);
+                MediaConfig::add_codec(&mut self.negotiated_audio_codecs, codec);
             } else if typ == RTPCodecType::Video {
-                MediaEngine::add_codec(&mut self.negotiated_video_codecs, codec);
+                MediaConfig::add_codec(&mut self.negotiated_video_codecs, codec);
             }
         }
     }
 
-    /// Update the MediaEngine from a remote description
+    /// Update the MediaConfig from a remote description
     pub(crate) fn update_from_remote_description(
         &mut self,
         desc: &SessionDescription,
@@ -713,7 +744,7 @@ impl MediaEngine {
 
                 if let Some((id, negotiated_extension)) = self
                     .proposed_header_extensions
-                    .iter_mut()
+                    .iter()
                     .find(|(_, e)| e.uri == local_extension.uri)
                 {
                     // We have previously proposed this extension, re-use it
@@ -737,7 +768,7 @@ impl MediaEngine {
                 if let Some(id) = id {
                     self.proposed_header_extensions.insert(
                         id,
-                        MediaEngineHeaderExtension {
+                        RTCRtpHeaderExtension {
                             uri: local_extension.uri.clone(),
                             is_audio: local_extension.is_audio,
                             is_video: local_extension.is_video,
@@ -785,5 +816,118 @@ impl MediaEngine {
             header_extensions,
             codecs: vec![codec],
         })
+    }
+
+    /// configure_nack will setup everything necessary for handling generating/responding to nack messages.
+    pub fn configure_nack(&mut self) -> Result<()> {
+        self.register_rtcp_feedback(
+            RTCPFeedback {
+                typ: "nack".to_owned(),
+                parameter: "".to_owned(),
+            },
+            RTPCodecType::Video,
+        );
+        self.register_rtcp_feedback(
+            RTCPFeedback {
+                typ: "nack".to_owned(),
+                parameter: "pli".to_owned(),
+            },
+            RTPCodecType::Video,
+        );
+
+        Ok(())
+    }
+
+    /// configure_twcc will setup everything necessary for adding
+    /// a TWCC header extension to outgoing RTP packets and generating TWCC reports.
+    pub fn configure_twcc(&mut self) -> Result<()> {
+        self.register_rtcp_feedback(
+            RTCPFeedback {
+                typ: TYPE_RTCP_FB_TRANSPORT_CC.to_owned(),
+                ..Default::default()
+            },
+            RTPCodecType::Video,
+        );
+        self.register_header_extension(
+            RTCRtpHeaderExtensionCapability {
+                uri: sdp::extmap::TRANSPORT_CC_URI.to_owned(),
+            },
+            RTPCodecType::Video,
+            None,
+        )?;
+
+        self.register_rtcp_feedback(
+            RTCPFeedback {
+                typ: TYPE_RTCP_FB_TRANSPORT_CC.to_owned(),
+                ..Default::default()
+            },
+            RTPCodecType::Audio,
+        );
+        self.register_header_extension(
+            RTCRtpHeaderExtensionCapability {
+                uri: sdp::extmap::TRANSPORT_CC_URI.to_owned(),
+            },
+            RTPCodecType::Audio,
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    /// configure_twcc_sender will setup everything necessary for adding
+    /// a TWCC header extension to outgoing RTP packets. This will allow the remote peer to generate TWCC reports.
+    pub fn configure_twcc_sender_only(&mut self) -> Result<()> {
+        self.register_header_extension(
+            RTCRtpHeaderExtensionCapability {
+                uri: sdp::extmap::TRANSPORT_CC_URI.to_owned(),
+            },
+            RTPCodecType::Video,
+            None,
+        )?;
+
+        self.register_header_extension(
+            RTCRtpHeaderExtensionCapability {
+                uri: sdp::extmap::TRANSPORT_CC_URI.to_owned(),
+            },
+            RTPCodecType::Audio,
+            None,
+        )?;
+
+        Ok(())
+    }
+
+    /// configure_twcc_receiver will setup everything necessary for generating TWCC reports.
+    pub fn configure_twcc_receiver_only(&mut self) -> Result<()> {
+        self.register_rtcp_feedback(
+            RTCPFeedback {
+                typ: TYPE_RTCP_FB_TRANSPORT_CC.to_owned(),
+                ..Default::default()
+            },
+            RTPCodecType::Video,
+        );
+        self.register_header_extension(
+            RTCRtpHeaderExtensionCapability {
+                uri: sdp::extmap::TRANSPORT_CC_URI.to_owned(),
+            },
+            RTPCodecType::Video,
+            None,
+        )?;
+
+        self.register_rtcp_feedback(
+            RTCPFeedback {
+                typ: TYPE_RTCP_FB_TRANSPORT_CC.to_owned(),
+                ..Default::default()
+            },
+            RTPCodecType::Audio,
+        );
+        self.register_header_extension(
+            RTCRtpHeaderExtensionCapability {
+                uri: sdp::extmap::TRANSPORT_CC_URI.to_owned(),
+            },
+            RTPCodecType::Audio,
+            None,
+        )?;
+
+        Ok(())
     }
 }
