@@ -48,29 +48,29 @@ pub struct ApplicationMessage {
 
 #[derive(Debug)]
 pub enum STUNMessageEvent {
-    RAW(BytesMut),
-    STUN(stun::message::Message),
+    Raw(BytesMut),
+    Stun(stun::message::Message),
 }
 
 #[derive(Debug)]
 pub enum DTLSMessageEvent {
-    RAW(BytesMut),
-    SCTP(DataChannelMessage),
-    DATACHANNEL(ApplicationMessage),
+    Raw(BytesMut),
+    Sctp(DataChannelMessage),
+    DataChannel(ApplicationMessage),
 }
 
 #[derive(Debug)]
 pub enum RTPMessageEvent {
-    RAW(BytesMut),
-    RTP(rtp::packet::Packet),
-    RTCP(Vec<Box<dyn rtcp::packet::Packet>>),
+    Raw(BytesMut),
+    Rtp(rtp::packet::Packet),
+    Rtcp(Vec<Box<dyn rtcp::packet::Packet>>),
 }
 
 #[derive(Debug)]
 pub enum MessageEvent {
-    STUN(STUNMessageEvent),
-    DTLS(DTLSMessageEvent),
-    RTP(RTPMessageEvent),
+    Stun(STUNMessageEvent),
+    Dtls(DTLSMessageEvent),
+    Rtp(RTPMessageEvent),
 }
 
 pub struct TaggedMessageEvent {

@@ -28,11 +28,11 @@ impl InboundHandler for RtpInbound {
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, mut msg: Self::Rin) {
         debug!("rtp read {:?}", msg.transport.peer_addr);
-        if let MessageEvent::RTP(RTPMessageEvent::RAW(mut message)) = msg.message {
+        if let MessageEvent::Rtp(RTPMessageEvent::Raw(mut message)) = msg.message {
             if is_rtcp(&message) {
                 match rtcp::packet::unmarshal(&mut message) {
                     Ok(rtcp_packet) => {
-                        msg.message = MessageEvent::RTP(RTPMessageEvent::RTCP(rtcp_packet));
+                        msg.message = MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_packet));
                         ctx.fire_read(msg);
                     }
                     Err(err) => {
@@ -43,7 +43,7 @@ impl InboundHandler for RtpInbound {
             } else {
                 match rtp::Packet::unmarshal(&mut message) {
                     Ok(rtp_packet) => {
-                        msg.message = MessageEvent::RTP(RTPMessageEvent::RTP(rtp_packet));
+                        msg.message = MessageEvent::Rtp(RTPMessageEvent::Rtp(rtp_packet));
                         ctx.fire_read(msg);
                     }
                     Err(err) => {
@@ -66,10 +66,10 @@ impl OutboundHandler for RtpOutbound {
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, mut msg: Self::Win) {
         debug!("rtp write {:?}", msg.transport.peer_addr);
         match msg.message {
-            MessageEvent::RTP(RTPMessageEvent::RTCP(rtcp_message)) => {
+            MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_message)) => {
                 match rtcp::packet::marshal(&rtcp_message) {
                     Ok(message) => {
-                        msg.message = MessageEvent::RTP(RTPMessageEvent::RAW(message));
+                        msg.message = MessageEvent::Rtp(RTPMessageEvent::Raw(message));
                         ctx.fire_write(msg);
                     }
                     Err(err) => {
@@ -78,9 +78,9 @@ impl OutboundHandler for RtpOutbound {
                     }
                 }
             }
-            MessageEvent::RTP(RTPMessageEvent::RTP(rtp_message)) => match rtp_message.marshal() {
+            MessageEvent::Rtp(RTPMessageEvent::Rtp(rtp_message)) => match rtp_message.marshal() {
                 Ok(message) => {
-                    msg.message = MessageEvent::RTP(RTPMessageEvent::RAW(message));
+                    msg.message = MessageEvent::Rtp(RTPMessageEvent::Raw(message));
                     ctx.fire_write(msg);
                 }
                 Err(err) => {

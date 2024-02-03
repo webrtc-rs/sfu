@@ -23,7 +23,7 @@ impl InboundHandler for RtcpInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        if let MessageEvent::RTP(RTPMessageEvent::RTCP(rtcp_messages)) = &msg.message {
+        if let MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_messages)) = &msg.message {
             if let Some(rtcp_message) = rtcp_messages.first() {
                 debug!("rtcp read {:?}", rtcp_message.header());
             }
@@ -38,7 +38,7 @@ impl OutboundHandler for RtcpOutbound {
     type Wout = Self::Win;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        if let MessageEvent::RTP(RTPMessageEvent::RTCP(rtcp_messages)) = &msg.message {
+        if let MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_messages)) = &msg.message {
             if let Some(rtcp_message) = rtcp_messages.first() {
                 debug!("rtcp write {:?}", rtcp_message.header());
             }

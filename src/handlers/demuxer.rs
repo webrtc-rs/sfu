@@ -66,19 +66,19 @@ impl InboundHandler for DemuxerInbound {
             ctx.fire_read(TaggedMessageEvent {
                 now: msg.now,
                 transport: msg.transport,
-                message: MessageEvent::DTLS(DTLSMessageEvent::RAW(msg.message)),
+                message: MessageEvent::Dtls(DTLSMessageEvent::Raw(msg.message)),
             });
         } else if match_srtp(&msg.message) {
             ctx.fire_read(TaggedMessageEvent {
                 now: msg.now,
                 transport: msg.transport,
-                message: MessageEvent::RTP(RTPMessageEvent::RAW(msg.message)),
+                message: MessageEvent::Rtp(RTPMessageEvent::Raw(msg.message)),
             });
         } else {
             ctx.fire_read(TaggedMessageEvent {
                 now: msg.now,
                 transport: msg.transport,
-                message: MessageEvent::STUN(STUNMessageEvent::RAW(msg.message)),
+                message: MessageEvent::Stun(STUNMessageEvent::Raw(msg.message)),
             });
         }
     }
@@ -90,9 +90,9 @@ impl OutboundHandler for DemuxerOutbound {
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
         match msg.message {
-            MessageEvent::STUN(STUNMessageEvent::RAW(message))
-            | MessageEvent::DTLS(DTLSMessageEvent::RAW(message))
-            | MessageEvent::RTP(RTPMessageEvent::RAW(message)) => {
+            MessageEvent::Stun(STUNMessageEvent::Raw(message))
+            | MessageEvent::Dtls(DTLSMessageEvent::Raw(message))
+            | MessageEvent::Rtp(RTPMessageEvent::Raw(message)) => {
                 ctx.fire_write(TaggedBytesMut {
                     now: msg.now,
                     transport: msg.transport,

@@ -26,7 +26,7 @@ impl InboundHandler for StunInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        if let MessageEvent::STUN(STUNMessageEvent::RAW(message)) = msg.message {
+        if let MessageEvent::Stun(STUNMessageEvent::Raw(message)) = msg.message {
             let try_read = || -> Result<Message> {
                 let mut stun_message = Message {
                     raw: message.to_vec(),
@@ -45,7 +45,7 @@ impl InboundHandler for StunInbound {
                     ctx.fire_read(TaggedMessageEvent {
                         now: msg.now,
                         transport: msg.transport,
-                        message: MessageEvent::STUN(STUNMessageEvent::STUN(stun_message)),
+                        message: MessageEvent::Stun(STUNMessageEvent::Stun(stun_message)),
                     });
                 }
                 Err(err) => {
@@ -65,7 +65,7 @@ impl OutboundHandler for StunOutbound {
     type Wout = Self::Win;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        if let MessageEvent::STUN(STUNMessageEvent::STUN(mut stun_message)) = msg.message {
+        if let MessageEvent::Stun(STUNMessageEvent::Stun(mut stun_message)) = msg.message {
             debug!(
                 "StunMessage type {} sent to {}",
                 stun_message.typ, msg.transport.peer_addr
@@ -75,7 +75,7 @@ impl OutboundHandler for StunOutbound {
             ctx.fire_write(TaggedMessageEvent {
                 now: msg.now,
                 transport: msg.transport,
-                message: MessageEvent::STUN(STUNMessageEvent::RAW(message)),
+                message: MessageEvent::Stun(STUNMessageEvent::Raw(message)),
             });
         } else {
             debug!("bypass StunOutbound for {}", msg.transport.peer_addr);

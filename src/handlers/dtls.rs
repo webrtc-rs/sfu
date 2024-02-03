@@ -60,7 +60,7 @@ impl InboundHandler for DtlsInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        if let MessageEvent::DTLS(DTLSMessageEvent::RAW(dtls_message)) = msg.message {
+        if let MessageEvent::Dtls(DTLSMessageEvent::Raw(dtls_message)) = msg.message {
             debug!("recv dtls RAW {:?}", msg.transport.peer_addr);
             let try_read = || -> Result<Vec<EndpointEvent>> {
                 let mut dtls_endpoint = self.dtls_endpoint.borrow_mut();
@@ -101,7 +101,7 @@ impl InboundHandler for DtlsInbound {
                                 ctx.fire_read(TaggedMessageEvent {
                                     now: msg.now,
                                     transport: msg.transport,
-                                    message: MessageEvent::DTLS(DTLSMessageEvent::RAW(message)),
+                                    message: MessageEvent::Dtls(DTLSMessageEvent::Raw(message)),
                                 });
                             }
                         }
@@ -156,7 +156,7 @@ impl OutboundHandler for DtlsOutbound {
     type Wout = Self::Win;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        if let MessageEvent::DTLS(DTLSMessageEvent::RAW(dtls_message)) = msg.message {
+        if let MessageEvent::Dtls(DTLSMessageEvent::Raw(dtls_message)) = msg.message {
             debug!("send dtls RAW {:?}", msg.transport.peer_addr);
             let try_write = || -> Result<()> {
                 let mut dtls_endpoint = self.dtls_endpoint.borrow_mut();
@@ -228,7 +228,7 @@ fn handle_outgoing(
                 peer_addr: transmit.remote,
                 ecn: transmit.ecn,
             },
-            message: MessageEvent::DTLS(DTLSMessageEvent::RAW(transmit.payload)),
+            message: MessageEvent::Dtls(DTLSMessageEvent::Raw(transmit.payload)),
         });
     }
 }

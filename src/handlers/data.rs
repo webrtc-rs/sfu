@@ -29,7 +29,7 @@ impl InboundHandler for DataChannelInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        if let MessageEvent::DTLS(DTLSMessageEvent::SCTP(message)) = msg.message {
+        if let MessageEvent::Dtls(DTLSMessageEvent::Sctp(message)) = msg.message {
             debug!(
                 "recv SCTP DataChannelMessage from {:?}",
                 msg.transport.peer_addr
@@ -89,7 +89,7 @@ impl InboundHandler for DataChannelInbound {
                         ctx.fire_write(TaggedMessageEvent {
                             now: msg.now,
                             transport: msg.transport,
-                            message: MessageEvent::DTLS(DTLSMessageEvent::SCTP(
+                            message: MessageEvent::Dtls(DTLSMessageEvent::Sctp(
                                 data_channel_message,
                             )),
                         });
@@ -101,7 +101,7 @@ impl InboundHandler for DataChannelInbound {
                         ctx.fire_read(TaggedMessageEvent {
                             now: msg.now,
                             transport: msg.transport,
-                            message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(
+                            message: MessageEvent::Dtls(DTLSMessageEvent::DataChannel(
                                 application_message,
                             )),
                         })
@@ -125,14 +125,14 @@ impl OutboundHandler for DataChannelOutbound {
     type Wout = Self::Win;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        if let MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(message)) = msg.message {
+        if let MessageEvent::Dtls(DTLSMessageEvent::DataChannel(message)) = msg.message {
             debug!("send application message {:?}", msg.transport.peer_addr);
 
             if let DataChannelEvent::Message(payload) = message.data_channel_event {
                 ctx.fire_write(TaggedMessageEvent {
                     now: msg.now,
                     transport: msg.transport,
-                    message: MessageEvent::DTLS(DTLSMessageEvent::SCTP(DataChannelMessage {
+                    message: MessageEvent::Dtls(DTLSMessageEvent::Sctp(DataChannelMessage {
                         association_handle: message.association_handle,
                         stream_id: message.stream_id,
                         data_message_type: DataChannelMessageType::Text,

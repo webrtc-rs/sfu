@@ -56,7 +56,7 @@ impl InboundHandler for GatewayInbound {
         let try_read = || -> Result<Vec<TaggedMessageEvent>> {
             let mut server_states = self.server_states.borrow_mut();
             match msg.message {
-                MessageEvent::STUN(STUNMessageEvent::STUN(message)) => {
+                MessageEvent::Stun(STUNMessageEvent::Stun(message)) => {
                     GatewayInbound::handle_stun_message(
                         &mut server_states,
                         msg.now,
@@ -64,7 +64,7 @@ impl InboundHandler for GatewayInbound {
                         message,
                     )
                 }
-                MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(message)) => {
+                MessageEvent::Dtls(DTLSMessageEvent::DataChannel(message)) => {
                     GatewayInbound::handle_dtls_message(
                         &mut server_states,
                         msg.now,
@@ -72,7 +72,7 @@ impl InboundHandler for GatewayInbound {
                         message,
                     )
                 }
-                MessageEvent::RTP(RTPMessageEvent::RTP(message)) => {
+                MessageEvent::Rtp(RTPMessageEvent::Rtp(message)) => {
                     GatewayInbound::handle_rtp_message(
                         &mut server_states,
                         msg.now,
@@ -80,7 +80,7 @@ impl InboundHandler for GatewayInbound {
                         message,
                     )
                 }
-                MessageEvent::RTP(RTPMessageEvent::RTCP(message)) => {
+                MessageEvent::Rtp(RTPMessageEvent::Rtcp(message)) => {
                     GatewayInbound::handle_rtcp_message(
                         &mut server_states,
                         msg.now,
@@ -186,7 +186,7 @@ impl GatewayInbound {
         Ok(vec![TaggedMessageEvent {
             now,
             transport: transport_context,
-            message: MessageEvent::STUN(STUNMessageEvent::STUN(response)),
+            message: MessageEvent::Stun(STUNMessageEvent::Stun(response)),
         }])
     }
 
@@ -340,7 +340,7 @@ impl GatewayInbound {
                 messages.push(TaggedMessageEvent {
                     now,
                     transport: transport_context,
-                    message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(
+                    message: MessageEvent::Dtls(DTLSMessageEvent::DataChannel(
                         ApplicationMessage {
                             association_handle,
                             stream_id,
@@ -398,7 +398,7 @@ impl GatewayInbound {
             outgoing_messages.push(TaggedMessageEvent {
                 now,
                 transport,
-                message: MessageEvent::RTP(RTPMessageEvent::RTP(rtp_packet.clone())),
+                message: MessageEvent::Rtp(RTPMessageEvent::Rtp(rtp_packet.clone())),
             });
         }
 
@@ -420,7 +420,7 @@ impl GatewayInbound {
             outgoing_messages.push(TaggedMessageEvent {
                 now,
                 transport,
-                message: MessageEvent::RTP(RTPMessageEvent::RTCP(rtcp_packets.clone())),
+                message: MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_packets.clone())),
             });
         }
 
@@ -547,7 +547,7 @@ impl GatewayInbound {
         Ok(vec![TaggedMessageEvent {
             now,
             transport: transport_context,
-            message: MessageEvent::STUN(STUNMessageEvent::STUN(response)),
+            message: MessageEvent::Stun(STUNMessageEvent::Stun(response)),
         }])
     }
 
@@ -638,7 +638,7 @@ impl GatewayInbound {
         Ok(TaggedMessageEvent {
             now,
             transport: transport_context,
-            message: MessageEvent::DTLS(DTLSMessageEvent::DATACHANNEL(ApplicationMessage {
+            message: MessageEvent::Dtls(DTLSMessageEvent::DataChannel(ApplicationMessage {
                 association_handle,
                 stream_id,
                 data_channel_event: DataChannelEvent::Message(BytesMut::from(offer_str.as_str())),

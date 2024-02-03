@@ -37,7 +37,7 @@ impl InboundHandler for SrtpInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, mut msg: Self::Rin) {
-        if let MessageEvent::RTP(RTPMessageEvent::RAW(rtp_message)) = msg.message {
+        if let MessageEvent::Rtp(RTPMessageEvent::Raw(rtp_message)) = msg.message {
             debug!("srtp read {:?}", msg.transport.peer_addr);
             let try_read = || -> Result<BytesMut> {
                 let four_tuple = (&msg.transport).into();
@@ -74,7 +74,7 @@ impl InboundHandler for SrtpInbound {
 
             match try_read() {
                 Ok(decrypted) => {
-                    msg.message = MessageEvent::RTP(RTPMessageEvent::RAW(decrypted));
+                    msg.message = MessageEvent::Rtp(RTPMessageEvent::Raw(decrypted));
                     ctx.fire_read(msg);
                 }
                 Err(err) => {
@@ -94,7 +94,7 @@ impl OutboundHandler for SrtpOutbound {
     type Wout = Self::Win;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, mut msg: Self::Win) {
-        if let MessageEvent::RTP(RTPMessageEvent::RAW(rtp_message)) = msg.message {
+        if let MessageEvent::Rtp(RTPMessageEvent::Raw(rtp_message)) = msg.message {
             debug!("srtp write {:?}", msg.transport.peer_addr);
             let try_write = || -> Result<BytesMut> {
                 let four_tuple = (&msg.transport).into();
@@ -130,7 +130,7 @@ impl OutboundHandler for SrtpOutbound {
 
             match try_write() {
                 Ok(encrypted) => {
-                    msg.message = MessageEvent::RTP(RTPMessageEvent::RAW(encrypted));
+                    msg.message = MessageEvent::Rtp(RTPMessageEvent::Raw(encrypted));
                     ctx.fire_write(msg);
                 }
                 Err(err) => {

@@ -81,7 +81,7 @@ impl InboundHandler for SctpInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
-        if let MessageEvent::DTLS(DTLSMessageEvent::RAW(dtls_message)) = msg.message {
+        if let MessageEvent::Dtls(DTLSMessageEvent::Raw(dtls_message)) = msg.message {
             debug!("recv sctp RAW {:?}", msg.transport.peer_addr);
             let try_read = || -> Result<Vec<DataChannelMessage>> {
                 let handle_result = {
@@ -172,7 +172,7 @@ impl InboundHandler for SctpInbound {
                         ctx.fire_read(TaggedMessageEvent {
                             now: msg.now,
                             transport: msg.transport,
-                            message: MessageEvent::DTLS(DTLSMessageEvent::SCTP(message)),
+                            message: MessageEvent::Dtls(DTLSMessageEvent::Sctp(message)),
                         })
                     }
                 }
@@ -245,7 +245,7 @@ impl OutboundHandler for SctpOutbound {
     type Wout = Self::Win;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        if let MessageEvent::DTLS(DTLSMessageEvent::SCTP(message)) = msg.message {
+        if let MessageEvent::Dtls(DTLSMessageEvent::Sctp(message)) = msg.message {
             debug!(
                 "send sctp data channel message {:?}",
                 msg.transport.peer_addr
@@ -361,7 +361,7 @@ fn handle_outgoing(
                         peer_addr: transmit.remote,
                         ecn: transmit.ecn,
                     },
-                    message: MessageEvent::DTLS(DTLSMessageEvent::RAW(BytesMut::from(&raw[..]))),
+                    message: MessageEvent::Dtls(DTLSMessageEvent::Raw(BytesMut::from(&raw[..]))),
                 });
             }
         }
