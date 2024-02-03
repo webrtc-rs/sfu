@@ -165,7 +165,7 @@ impl MediaConfig {
         }
 
         let video_rtcp_feedback = vec![
-            RTCPFeedback {
+            /*TODO: RTCPFeedback {
                 typ: "goog-remb".to_owned(),
                 parameter: "".to_owned(),
             },
@@ -180,7 +180,7 @@ impl MediaConfig {
             RTCPFeedback {
                 typ: "nack".to_owned(),
                 parameter: "pli".to_owned(),
-            },
+            },*/
         ];
         for codec in vec![
             RTCRtpCodecParameters {
