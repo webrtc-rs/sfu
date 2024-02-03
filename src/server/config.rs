@@ -3,8 +3,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-//TODO: use builder pattern to build ServerConfig and SessionConfig
-
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub certificates: Vec<RTCCertificate>,
@@ -19,9 +17,24 @@ impl ServerConfig {
         Self {
             certificates,
             sctp_server_config: Arc::new(sctp::ServerConfig::default()),
-            endpoint_idle_timeout: Duration::from_secs(30), //TODO: be to configurable
-            candidate_idle_timeout: Duration::from_secs(30), //TODO: be to configurable
+            endpoint_idle_timeout: Duration::from_secs(30),
+            candidate_idle_timeout: Duration::from_secs(30),
         }
+    }
+
+    pub fn with_sctp_server_config(mut self, sctp_server_config: Arc<sctp::ServerConfig>) -> Self {
+        self.sctp_server_config = sctp_server_config;
+        self
+    }
+
+    pub fn with_endpoint_idle_timeout(mut self, endpoint_idle_timeout: Duration) -> Self {
+        self.endpoint_idle_timeout = endpoint_idle_timeout;
+        self
+    }
+
+    pub fn with_candidate_idle_timeout(mut self, candidate_idle_timeout: Duration) -> Self {
+        self.candidate_idle_timeout = candidate_idle_timeout;
+        self
     }
 }
 
