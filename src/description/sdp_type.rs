@@ -1,4 +1,4 @@
-use crate::server::session::description::UNSPECIFIED_STR;
+use crate::description::UNSPECIFIED_STR;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

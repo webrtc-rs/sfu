@@ -1,8 +1,8 @@
+use crate::description::RTCSessionDescription;
 use crate::server::config::ServerConfig;
 use crate::server::endpoint::candidate::{Candidate, ConnectionCredentials};
 use crate::server::endpoint::transport::Transport;
 use crate::server::session::config::SessionConfig;
-use crate::server::session::description::RTCSessionDescription;
 use crate::server::session::Session;
 use crate::types::{EndpointId, FourTuple, SessionId, UserName};
 use sctp::{Association, AssociationHandle};

@@ -4,17 +4,17 @@ pub(crate) mod rtp_transceiver;
 pub(crate) mod rtp_transceiver_direction;
 pub(crate) mod sdp_type;
 
+use crate::description::{
+    rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpHeaderExtensionParameters},
+    rtp_transceiver::{
+        MediaStreamId, PayloadType, RTCPFeedback, RTCRtpTransceiver, SsrcGroup, SSRC,
+    },
+    rtp_transceiver_direction::RTCRtpTransceiverDirection,
+    sdp_type::RTCSdpType,
+};
 use crate::server::certificate::RTCDtlsFingerprint;
 use crate::server::endpoint::candidate::RTCIceParameters;
 use crate::server::session::config::SessionConfig;
-use crate::server::session::description::rtp_codec::{
-    RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpHeaderExtensionParameters,
-};
-use crate::server::session::description::rtp_transceiver::{
-    MediaStreamId, PayloadType, RTCPFeedback, RTCRtpTransceiver, SsrcGroup, SSRC,
-};
-use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
-use crate::server::session::description::sdp_type::RTCSdpType;
 use crate::types::Mid;
 use sdp::description::common::{Address, ConnectionInformation};
 use sdp::description::media::{MediaName, RangedPort};

@@ -1,4 +1,4 @@
-use crate::server::session::description::UNSPECIFIED_STR;
+use crate::description::UNSPECIFIED_STR;
 use std::fmt;
 
 /// RTPTransceiverDirection indicates the direction of the RTPTransceiver.

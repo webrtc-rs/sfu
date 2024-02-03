@@ -1,5 +1,7 @@
-use crate::server::session::description::fmtp;
-use crate::server::session::description::rtp_transceiver::{PayloadType, RTCPFeedback};
+use crate::description::{
+    fmtp,
+    rtp_transceiver::{PayloadType, RTCPFeedback},
+};
 use shared::error::{Error, Result};
 
 /// MIME_TYPE_H264 H264 MIME type.

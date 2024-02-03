@@ -1,11 +1,12 @@
+use crate::description::{
+    rtp_transceiver_direction::RTCRtpTransceiverDirection, sdp_type::RTCSdpType,
+    RTCSessionDescription,
+};
 use crate::messages::{
     ApplicationMessage, DTLSMessageEvent, DataChannelEvent, MessageEvent, RTPMessageEvent,
     STUNMessageEvent, TaggedMessageEvent,
 };
 use crate::server::endpoint::candidate::Candidate;
-use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
-use crate::server::session::description::sdp_type::RTCSdpType;
-use crate::server::session::description::RTCSessionDescription;
 use crate::server::states::ServerStates;
 use bytes::BytesMut;
 use log::{debug, warn};

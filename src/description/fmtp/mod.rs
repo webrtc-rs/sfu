@@ -5,7 +5,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::server::session::description::fmtp::{generic::GenericFmtp, h264::H264Fmtp};
+use crate::description::fmtp::{generic::GenericFmtp, h264::H264Fmtp};
 
 /// Fmtp interface for implementing custom
 /// Fmtp parsers based on mime_type

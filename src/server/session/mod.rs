@@ -7,23 +7,24 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 pub(crate) mod config;
-pub(crate) mod description;
 
+use crate::description::{
+    codecs_from_media_description, get_cname, get_mid_value, get_msid, get_peer_direction,
+    get_rids, get_ssrc_groups, populate_sdp, rtp_extensions_from_media_description,
+    update_sdp_origin, MediaSection, RTCSessionDescription, MEDIA_SECTION_APPLICATION,
+};
+use crate::description::{
+    rtp_codec::{RTCRtpParameters, RTPCodecType},
+    rtp_transceiver::{RTCRtpSender, RTCRtpTransceiver},
+    rtp_transceiver_direction::RTCRtpTransceiverDirection,
+    sdp_type::RTCSdpType,
+};
 use crate::server::endpoint::candidate::{
     Candidate, DTLSRole, RTCIceParameters, DEFAULT_DTLS_ROLE_OFFER,
 };
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
 use crate::server::session::config::SessionConfig;
-use crate::server::session::description::rtp_codec::{RTCRtpParameters, RTPCodecType};
-use crate::server::session::description::rtp_transceiver::{RTCRtpSender, RTCRtpTransceiver};
-use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
-use crate::server::session::description::sdp_type::RTCSdpType;
-use crate::server::session::description::{
-    codecs_from_media_description, get_cname, get_mid_value, get_msid, get_peer_direction,
-    get_rids, get_ssrc_groups, populate_sdp, rtp_extensions_from_media_description,
-    update_sdp_origin, MediaSection, RTCSessionDescription, MEDIA_SECTION_APPLICATION,
-};
 use crate::types::{EndpointId, Mid, SessionId};
 
 pub(crate) struct Session {

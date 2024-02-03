@@ -1,5 +1,7 @@
-use crate::server::session::description::rtp_codec::{RTCRtpParameters, RTPCodecType};
-use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;
+use crate::description::{
+    rtp_codec::{RTCRtpParameters, RTPCodecType},
+    rtp_transceiver_direction::RTCRtpTransceiverDirection,
+};
 use std::collections::HashSet;
 
 /// SSRC represents a synchronization source

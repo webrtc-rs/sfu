@@ -1,5 +1,5 @@
+use crate::description::{RTCSessionDescription, UNSPECIFIED_STR};
 use crate::server::certificate::RTCDtlsFingerprint;
-use crate::server::session::description::{RTCSessionDescription, UNSPECIFIED_STR};
 use crate::types::{EndpointId, SessionId, UserName};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use ring::rand::{SecureRandom, SystemRandom};
