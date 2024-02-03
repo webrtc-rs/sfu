@@ -1,3 +1,4 @@
+use crate::description::config::MediaConfig;
 use crate::server::certificate::RTCCertificate;
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,6 +6,7 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub certificates: Vec<RTCCertificate>,
+    pub(crate) media_config: MediaConfig,
     pub(crate) sctp_server_config: Arc<sctp::ServerConfig>,
     pub(crate) endpoint_idle_timeout: Duration,
     pub(crate) candidate_idle_timeout: Duration,
@@ -15,10 +17,16 @@ impl ServerConfig {
     pub fn new(certificates: Vec<RTCCertificate>) -> Self {
         Self {
             certificates,
+            media_config: MediaConfig::default(),
             sctp_server_config: Arc::new(sctp::ServerConfig::default()),
             endpoint_idle_timeout: Duration::from_secs(30),
             candidate_idle_timeout: Duration::from_secs(30),
         }
+    }
+
+    pub fn with_media_config(mut self, media_config: MediaConfig) -> Self {
+        self.media_config = media_config;
+        self
     }
 
     pub fn with_sctp_server_config(mut self, sctp_server_config: Arc<sctp::ServerConfig>) -> Self {
