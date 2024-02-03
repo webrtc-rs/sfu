@@ -1,5 +1,5 @@
-pub mod candidate;
-pub mod transport;
+pub(crate) mod candidate;
+pub(crate) mod transport;
 
 use crate::server::endpoint::transport::Transport;
 use crate::server::session::description::rtp_transceiver::RTCRtpTransceiver;

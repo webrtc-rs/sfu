@@ -33,7 +33,7 @@ impl PartialEq for dyn Fmtp {
 }
 
 /// parse parses an fmtp string based on the MimeType
-pub fn parse(mime_type: &str, line: &str) -> Box<dyn Fmtp> {
+pub(crate) fn parse(mime_type: &str, line: &str) -> Box<dyn Fmtp> {
     let mut parameters = HashMap::new();
     for p in line.split(';').collect::<Vec<&str>>() {
         let pp: Vec<&str> = p.trim().splitn(2, '=').collect();

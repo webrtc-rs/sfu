@@ -95,20 +95,20 @@ impl DTLSRole {
 /// ICEParameters includes the ICE username fragment
 /// and password and other ICE-related parameters.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RTCIceParameters {
-    pub username_fragment: String,
-    pub password: String,
+pub(crate) struct RTCIceParameters {
+    pub(crate) username_fragment: String,
+    pub(crate) password: String,
 }
 
 /// DTLSParameters holds information relating to DTLS configuration.
 #[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DTLSParameters {
-    pub role: DTLSRole,
-    pub fingerprints: Vec<RTCDtlsFingerprint>,
+pub(crate) struct DTLSParameters {
+    pub(crate) role: DTLSRole,
+    pub(crate) fingerprints: Vec<RTCDtlsFingerprint>,
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ConnectionCredentials {
+pub(crate) struct ConnectionCredentials {
     pub(crate) ice_params: RTCIceParameters,
     pub(crate) dtls_params: DTLSParameters,
 }
@@ -138,7 +138,7 @@ impl ConnectionCredentials {
         }
     }
 
-    pub fn from_sdp(sdp: &SessionDescription) -> Result<Self> {
+    pub(crate) fn from_sdp(sdp: &SessionDescription) -> Result<Self> {
         let username_fragment = sdp
             .media_descriptions
             .iter()
@@ -174,7 +174,7 @@ impl ConnectionCredentials {
         })
     }
 
-    pub fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         self.ice_params.username_fragment.len() >= 4
             && self.ice_params.username_fragment.len() <= 256
             && self.ice_params.password.len() >= 22
@@ -183,7 +183,7 @@ impl ConnectionCredentials {
 }
 
 #[derive(Debug)]
-pub struct Candidate {
+pub(crate) struct Candidate {
     session_id: SessionId,
     endpoint_id: EndpointId,
     remote_conn_cred: ConnectionCredentials,

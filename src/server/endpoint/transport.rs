@@ -3,7 +3,7 @@ use crate::types::FourTuple;
 use srtp::context::Context;
 use std::rc::Rc;
 
-pub struct Transport {
+pub(crate) struct Transport {
     four_tuple: FourTuple,
 
     // ICE

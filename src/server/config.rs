@@ -1,5 +1,4 @@
 use crate::server::certificate::RTCCertificate;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,20 +34,5 @@ impl ServerConfig {
     pub fn with_candidate_idle_timeout(mut self, candidate_idle_timeout: Duration) -> Self {
         self.candidate_idle_timeout = candidate_idle_timeout;
         self
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SessionConfig {
-    pub(crate) server_config: Arc<ServerConfig>,
-    pub(crate) local_addr: SocketAddr,
-}
-
-impl SessionConfig {
-    pub(crate) fn new(server_config: Arc<ServerConfig>, local_addr: SocketAddr) -> Self {
-        Self {
-            server_config,
-            local_addr,
-        }
     }
 }

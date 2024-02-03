@@ -6,14 +6,15 @@ use shared::error::{Error, Result};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-pub mod description;
+pub(crate) mod config;
+pub(crate) mod description;
 
-use crate::server::config::SessionConfig;
 use crate::server::endpoint::candidate::{
     Candidate, DTLSRole, RTCIceParameters, DEFAULT_DTLS_ROLE_OFFER,
 };
 use crate::server::endpoint::transport::Transport;
 use crate::server::endpoint::Endpoint;
+use crate::server::session::config::SessionConfig;
 use crate::server::session::description::rtp_codec::{RTCRtpParameters, RTPCodecType};
 use crate::server::session::description::rtp_transceiver::{RTCRtpSender, RTCRtpTransceiver};
 use crate::server::session::description::rtp_transceiver_direction::RTCRtpTransceiverDirection;

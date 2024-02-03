@@ -5,8 +5,8 @@ pub(crate) mod rtp_transceiver_direction;
 pub(crate) mod sdp_type;
 
 use crate::server::certificate::RTCDtlsFingerprint;
-use crate::server::config::SessionConfig;
 use crate::server::endpoint::candidate::RTCIceParameters;
+use crate::server::session::config::SessionConfig;
 use crate::server::session::description::rtp_codec::{
     RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpHeaderExtensionParameters,
 };

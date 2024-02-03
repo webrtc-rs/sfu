@@ -233,13 +233,6 @@ fn handle_outgoing(
     }
 }
 
-pub fn default_srtp_protection_profiles() -> Vec<SrtpProtectionProfile> {
-    vec![
-        SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80,
-        //SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_32,
-    ]
-}
-
 impl DtlsInbound {
     const DEFAULT_SESSION_SRTP_REPLAY_PROTECTION_WINDOW: usize = 64;
     const DEFAULT_SESSION_SRTCP_REPLAY_PROTECTION_WINDOW: usize = 64;
