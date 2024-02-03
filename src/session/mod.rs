@@ -19,12 +19,12 @@ use crate::description::{
     rtp_transceiver_direction::RTCRtpTransceiverDirection,
     sdp_type::RTCSdpType,
 };
-use crate::server::endpoint::candidate::{
-    Candidate, DTLSRole, RTCIceParameters, DEFAULT_DTLS_ROLE_OFFER,
+use crate::endpoint::{
+    candidate::{Candidate, DTLSRole, RTCIceParameters, DEFAULT_DTLS_ROLE_OFFER},
+    transport::Transport,
+    Endpoint,
 };
-use crate::server::endpoint::transport::Transport;
-use crate::server::endpoint::Endpoint;
-use crate::server::session::config::SessionConfig;
+use crate::session::config::SessionConfig;
 use crate::types::{EndpointId, Mid, SessionId};
 
 pub(crate) struct Session {

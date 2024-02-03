@@ -2,9 +2,11 @@
 #![allow(dead_code)]
 
 pub(crate) mod description;
+pub(crate) mod endpoint;
 pub(crate) mod handlers;
 pub(crate) mod messages;
 pub(crate) mod server;
+pub(crate) mod session;
 pub(crate) mod types;
 
 pub use description::RTCSessionDescription;

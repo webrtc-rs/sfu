@@ -1,4 +1,4 @@
-use crate::server::endpoint::candidate::Candidate;
+use crate::endpoint::candidate::Candidate;
 use crate::types::FourTuple;
 use srtp::context::Context;
 use std::rc::Rc;

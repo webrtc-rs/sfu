@@ -12,9 +12,9 @@ use crate::description::{
     rtp_transceiver_direction::RTCRtpTransceiverDirection,
     sdp_type::RTCSdpType,
 };
+use crate::endpoint::candidate::RTCIceParameters;
 use crate::server::certificate::RTCDtlsFingerprint;
-use crate::server::endpoint::candidate::RTCIceParameters;
-use crate::server::session::config::SessionConfig;
+use crate::session::config::SessionConfig;
 use crate::types::Mid;
 use sdp::description::common::{Address, ConnectionInformation};
 use sdp::description::media::{MediaName, RangedPort};

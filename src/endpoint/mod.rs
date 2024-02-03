@@ -2,7 +2,7 @@ pub(crate) mod candidate;
 pub(crate) mod transport;
 
 use crate::description::{rtp_transceiver::RTCRtpTransceiver, RTCSessionDescription};
-use crate::server::endpoint::transport::Transport;
+use crate::endpoint::transport::Transport;
 use crate::types::{EndpointId, FourTuple, Mid};
 use std::collections::HashMap;
 
