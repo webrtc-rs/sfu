@@ -5,6 +5,7 @@ pub(crate) mod rtp_transceiver_direction;
 pub(crate) mod sdp_type;
 
 use crate::server::certificate::RTCDtlsFingerprint;
+use crate::server::config::SessionConfig;
 use crate::server::endpoint::candidate::RTCIceParameters;
 use crate::server::session::description::rtp_codec::{
     RTCRtpCodecCapability, RTCRtpCodecParameters, RTCRtpHeaderExtensionParameters,
@@ -186,7 +187,7 @@ pub(crate) struct AddDataMediaSectionParams {
 pub(crate) fn add_data_media_section(
     d: SessionDescription,
     dtls_fingerprints: &[RTCDtlsFingerprint],
-    candidate: &SocketAddr,
+    session_config: &SessionConfig,
     params: AddDataMediaSectionParams,
 ) -> Result<SessionDescription> {
     let mut media = MediaDescription {
@@ -219,8 +220,24 @@ pub(crate) fn add_data_media_section(
     )
     .with_value_attribute(ATTR_KEY_MID.to_owned(), params.mid_value)
     .with_property_attribute(RTCRtpTransceiverDirection::Sendrecv.to_string())
-    .with_value_attribute("sctp-port".to_owned(), "5000".to_owned()) //TODO: configurable
-    .with_value_attribute("max-message-size".to_owned(), "262144".to_owned()) //TODO: configurable
+    .with_value_attribute(
+        "sctp-port".to_owned(),
+        session_config
+            .server_config
+            .sctp_server_config
+            .transport
+            .sctp_port()
+            .to_string(),
+    )
+    .with_value_attribute(
+        "max-message-size".to_owned(),
+        session_config
+            .server_config
+            .sctp_server_config
+            .transport
+            .max_message_size()
+            .to_string(),
+    )
     .with_ice_credentials(
         params.ice_params.username_fragment,
         params.ice_params.password,
@@ -231,7 +248,11 @@ pub(crate) fn add_data_media_section(
     }
 
     if params.should_add_candidates {
-        media = add_candidate_to_media_descriptions(candidate, media, params.ice_gathering_state)?;
+        media = add_candidate_to_media_descriptions(
+            &session_config.local_addr,
+            media,
+            params.ice_gathering_state,
+        )?;
     }
 
     Ok(d.with_media(media))
@@ -249,7 +270,7 @@ pub(crate) fn add_transceiver_sdp(
     d: SessionDescription,
     dtls_fingerprints: &[RTCDtlsFingerprint],
     ice_params: &RTCIceParameters,
-    candidate: &SocketAddr,
+    session_config: &SessionConfig,
     media_section: &MediaSection,
     transceiver: &RTCRtpTransceiver,
     params: AddTransceiverSdpParams,
@@ -280,7 +301,11 @@ pub(crate) fn add_transceiver_sdp(
     }
 
     if should_add_candidates {
-        media = add_candidate_to_media_descriptions(candidate, media, ice_gathering_state)?;
+        media = add_candidate_to_media_descriptions(
+            &session_config.local_addr,
+            media,
+            ice_gathering_state,
+        )?;
     }
 
     let codecs = &transceiver.rtp_params.codecs;
@@ -426,7 +451,7 @@ pub(crate) struct MediaSection {
 pub(crate) fn populate_sdp(
     mut d: SessionDescription,
     dtls_fingerprints: &[RTCDtlsFingerprint],
-    candidate: &SocketAddr,
+    session_config: &SessionConfig,
     ice_params: &RTCIceParameters,
     connection_role: ConnectionRole,
     media_sections: &[MediaSection],
@@ -463,7 +488,7 @@ pub(crate) fn populate_sdp(
                 dtls_role: connection_role,
                 ice_gathering_state: RTCIceGatheringState::Complete,
             };
-            d = add_data_media_section(d, &media_dtls_fingerprints, candidate, params)?;
+            d = add_data_media_section(d, &media_dtls_fingerprints, session_config, params)?;
             true
         } else {
             let params = AddTransceiverSdpParams {
@@ -477,7 +502,7 @@ pub(crate) fn populate_sdp(
                 d,
                 &media_dtls_fingerprints,
                 ice_params,
-                candidate,
+                session_config,
                 m,
                 transceivers
                     .get(&m.mid)

@@ -471,7 +471,7 @@ impl Session {
         populate_sdp(
             d,
             &dtls_fingerprints,
-            &self.session_config.local_addr,
+            &self.session_config,
             local_ice_params,
             connection_role,
             &media_sections,
