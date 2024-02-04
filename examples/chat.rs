@@ -153,7 +153,7 @@ fn main() -> anyhow::Result<()> {
                         let data_channel_handler = DataChannelHandler::new();
                         // SRTP
                         let srtp_handler = SrtpHandler::new(Rc::clone(&server_states_moved));
-                        let interceptor_handler = InterceptorHandler::new();
+                        let interceptor_handler = InterceptorHandler::new(Rc::clone(&server_states_moved));
                         // Gateway
                         let gateway_handler = GatewayHandler::new(Rc::clone(&server_states_moved));
                         let read_exception_handler = ExceptionHandler::new();

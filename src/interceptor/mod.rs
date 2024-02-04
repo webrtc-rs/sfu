@@ -13,8 +13,8 @@ pub enum InterceptorEvent {
 
 pub trait Interceptor {
     fn chain(self: Box<Self>, next: Box<dyn Interceptor>) -> Box<dyn Interceptor>;
-    fn read(&mut self, msg: TaggedMessageEvent) -> Vec<InterceptorEvent>;
-    fn write(&mut self, msg: TaggedMessageEvent) -> Vec<InterceptorEvent>;
+    fn read(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent>;
+    fn write(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent>;
     fn handle_timeout(&mut self, now: Instant) -> Vec<InterceptorEvent>;
     fn poll_timeout(&mut self, eto: &mut Instant);
 }
@@ -63,11 +63,11 @@ impl Interceptor for NoOp {
         self
     }
 
-    fn read(&mut self, _msg: TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn read(&mut self, _msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
         vec![]
     }
 
-    fn write(&mut self, _msg: TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn write(&mut self, _msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
         vec![]
     }
 
@@ -90,7 +90,7 @@ impl Interceptor for Chain {
         self
     }
 
-    fn read(&mut self, msg: TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn read(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
         let mut interceptor_events = vec![];
         if let Some(next) = self.next.as_mut() {
             let mut events = next.read(msg);
@@ -99,7 +99,7 @@ impl Interceptor for Chain {
         interceptor_events
     }
 
-    fn write(&mut self, msg: TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn write(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
         let mut interceptor_events = vec![];
         if let Some(next) = self.next.as_mut() {
             let mut events = next.write(msg);

@@ -14,6 +14,8 @@ use crate::description::{
 //TODO: use crate::stats::stats_collector::StatsCollector;
 //use crate::stats::CodecStats;
 //use crate::stats::StatsReportType::Codec;
+use crate::interceptor::report::receiver_report::ReceiverReport;
+use crate::interceptor::report::sender_report::SenderReport;
 use crate::interceptor::Registry;
 use sdp::description::session::SessionDescription;
 use shared::error::{Error, Result};
@@ -116,6 +118,11 @@ impl Default for MediaConfig {
 }
 
 impl MediaConfig {
+    /// get Registry
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
     /// register_default_codecs registers the default codecs supported by Pion WebRTC.
     /// register_default_codecs is not safe for concurrent use.
     pub fn register_default_codecs(&mut self) -> Result<()> {
@@ -333,9 +340,10 @@ impl MediaConfig {
     /// code from this method and remove unwanted interceptors.
     pub fn register_default_interceptors(&mut self) -> Result<()> {
         self.configure_nack();
-        self.configure_rtcp_reports();
         self.configure_twcc_receiver_only()?;
 
+        //TODO: add new interceptor above configure_rtcp_reports
+        self.configure_rtcp_reports();
         Ok(())
     }
 
@@ -925,11 +933,10 @@ impl MediaConfig {
 
     /// configure_rtcp_reports will setup everything necessary for generating Sender and Receiver Reports
     pub fn configure_rtcp_reports(&mut self) {
-        /*TODO: let receiver = Box::new(ReceiverReport::builder());
+        let receiver = Box::new(ReceiverReport::builder());
         let sender = Box::new(SenderReport::builder());
-        registry.add(receiver);
-        registry.add(sender);
-        registry*/
+        self.registry.add(receiver);
+        self.registry.add(sender);
     }
 
     /// configure_nack will setup everything necessary for handling generating/responding to nack messages.
