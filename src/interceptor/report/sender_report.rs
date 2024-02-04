@@ -59,11 +59,13 @@ impl Interceptor for SenderReport {
                 inbound_rtcp_packets.push(rtcp_packets[0].clone());
             }
 
-            interceptor_events.push(InterceptorEvent::Inbound(TaggedMessageEvent {
-                now: msg.now,
-                transport: msg.transport,
-                message: MessageEvent::Rtp(RTPMessageEvent::Rtcp(inbound_rtcp_packets)),
-            }));
+            if !inbound_rtcp_packets.is_empty() {
+                interceptor_events.push(InterceptorEvent::Inbound(TaggedMessageEvent {
+                    now: msg.now,
+                    transport: msg.transport,
+                    message: MessageEvent::Rtp(RTPMessageEvent::Rtcp(inbound_rtcp_packets)),
+                }));
+            }
         }
 
         if let Some(next) = self.next.as_mut() {

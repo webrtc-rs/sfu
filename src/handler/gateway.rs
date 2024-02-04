@@ -108,6 +108,10 @@ impl InboundHandler for GatewayInbound {
             }
         }
     }
+
+    fn handle_timeout(&mut self, _ctx: &InboundContext<Self::Rin, Self::Rout>, _now: Instant) {
+        // terminate timeout here, no more ctx.fire_handle_timeout(now);
+    }
 }
 
 impl OutboundHandler for GatewayOutbound {

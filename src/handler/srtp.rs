@@ -55,8 +55,10 @@ impl InboundHandler for SrtpInbound {
                             let compound_packet = CompoundPacket(rtcp_packets);
                             compound_packet.validate()?;
                             compound_packet.0
-                        } else {
+                        } else if !rtcp_packets.is_empty() {
                             rtcp_packets
+                        } else {
+                            return Err(Error::Other("empty rtcp_packets".to_string()));
                         };
                         Ok(MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_packets)))
                     } else {
@@ -115,8 +117,10 @@ impl OutboundHandler for SrtpOutbound {
                             let compound_packet = CompoundPacket(rtcp_packets);
                             compound_packet.validate()?;
                             compound_packet.0
-                        } else {
+                        } else if !rtcp_packets.is_empty() {
                             rtcp_packets
+                        } else {
+                            return Err(Error::Other("empty rtcp_packets".to_string()));
                         };
 
                         let mut local_context = transport.local_srtp_context();
