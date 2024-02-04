@@ -12,8 +12,9 @@ pub enum InterceptorEvent {
 }
 
 pub trait Interceptor {
-    fn read(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent>;
-    fn write(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent>;
+    fn chain(self: Box<Self>, next: Box<dyn Interceptor>) -> Box<dyn Interceptor>;
+    fn read(&mut self, msg: TaggedMessageEvent) -> Vec<InterceptorEvent>;
+    fn write(&mut self, msg: TaggedMessageEvent) -> Vec<InterceptorEvent>;
     fn handle_timeout(&mut self, now: Instant) -> Vec<InterceptorEvent>;
     fn poll_timeout(&mut self, eto: &mut Instant);
 }
@@ -44,17 +45,11 @@ impl Registry {
         if self.builders.is_empty() {
             Box::new(NoOp)
         } else {
-            Box::new(self.build_chain(id))
-        }
-    }
-
-    // construct a non-type erased Chain from an Interceptor registry.
-    fn build_chain(&self, id: &str) -> Chain {
-        if self.builders.is_empty() {
-            Chain::new(vec![Box::new(NoOp {})])
-        } else {
-            let interceptors: Vec<_> = self.builders.iter().map(|b| b.build(id)).collect();
-            Chain::new(interceptors)
+            let mut next = Box::<Chain>::default() as Box<dyn Interceptor>;
+            for interceptor in self.builders.iter().rev().map(|b| b.build(id)) {
+                next = interceptor.chain(next);
+            }
+            next
         }
     }
 }
@@ -64,11 +59,15 @@ impl Registry {
 struct NoOp;
 
 impl Interceptor for NoOp {
-    fn read(&mut self, _msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn chain(self: Box<Self>, _next: Box<dyn Interceptor>) -> Box<dyn Interceptor> {
+        self
+    }
+
+    fn read(&mut self, _msg: TaggedMessageEvent) -> Vec<InterceptorEvent> {
         vec![]
     }
 
-    fn write(&mut self, _msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn write(&mut self, _msg: TaggedMessageEvent) -> Vec<InterceptorEvent> {
         vec![]
     }
 
@@ -82,34 +81,28 @@ impl Interceptor for NoOp {
 /// Chain is an interceptor that runs all child interceptors in order.
 #[derive(Default)]
 struct Chain {
-    interceptors: Vec<Box<dyn Interceptor>>,
-}
-
-impl Chain {
-    // new returns a new Chain interceptor.
-    fn new(interceptors: Vec<Box<dyn Interceptor>>) -> Self {
-        Chain { interceptors }
-    }
-
-    fn add(&mut self, icpr: Box<dyn Interceptor>) {
-        self.interceptors.push(icpr);
-    }
+    next: Option<Box<dyn Interceptor>>,
 }
 
 impl Interceptor for Chain {
-    fn read(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn chain(mut self: Box<Self>, next: Box<dyn Interceptor>) -> Box<dyn Interceptor> {
+        self.next = Some(next);
+        self
+    }
+
+    fn read(&mut self, msg: TaggedMessageEvent) -> Vec<InterceptorEvent> {
         let mut interceptor_events = vec![];
-        for interceptor in &mut self.interceptors {
-            let mut events = interceptor.read(msg);
+        if let Some(next) = self.next.as_mut() {
+            let mut events = next.read(msg);
             interceptor_events.append(&mut events);
         }
         interceptor_events
     }
 
-    fn write(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn write(&mut self, msg: TaggedMessageEvent) -> Vec<InterceptorEvent> {
         let mut interceptor_events = vec![];
-        for interceptor in &mut self.interceptors {
-            let mut events = interceptor.write(msg);
+        if let Some(next) = self.next.as_mut() {
+            let mut events = next.write(msg);
             interceptor_events.append(&mut events);
         }
         interceptor_events
@@ -117,16 +110,16 @@ impl Interceptor for Chain {
 
     fn handle_timeout(&mut self, now: Instant) -> Vec<InterceptorEvent> {
         let mut interceptor_events = vec![];
-        for interceptor in &mut self.interceptors {
-            let mut events = interceptor.handle_timeout(now);
+        if let Some(next) = self.next.as_mut() {
+            let mut events = next.handle_timeout(now);
             interceptor_events.append(&mut events);
         }
         interceptor_events
     }
 
     fn poll_timeout(&mut self, eto: &mut Instant) {
-        for interceptor in &mut self.interceptors {
-            interceptor.poll_timeout(eto);
+        if let Some(next) = self.next.as_mut() {
+            next.poll_timeout(eto);
         }
     }
 }
