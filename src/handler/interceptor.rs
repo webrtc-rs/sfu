@@ -1,6 +1,7 @@
 use crate::messages::{MessageEvent, RTPMessageEvent, TaggedMessageEvent};
 use log::debug;
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
+use std::time::Instant;
 
 #[derive(Default)]
 struct InterceptorInbound;
@@ -30,6 +31,14 @@ impl InboundHandler for InterceptorInbound {
         }
 
         ctx.fire_read(msg);
+    }
+
+    fn handle_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, now: Instant) {
+        ctx.fire_handle_timeout(now);
+    }
+
+    fn poll_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, eto: &mut Instant) {
+        ctx.fire_poll_timeout(eto);
     }
 }
 
