@@ -27,7 +27,7 @@ pub trait InterceptorBuilder {
 /// Registry is a collector for interceptors.
 #[derive(Default)]
 pub struct Registry {
-    builders: Vec<Box<dyn InterceptorBuilder>>,
+    builders: Vec<Box<dyn InterceptorBuilder + Send + Sync>>,
 }
 
 impl Registry {
@@ -36,7 +36,7 @@ impl Registry {
     }
 
     /// add a new InterceptorBuilder to the registry.
-    pub fn add(&mut self, builder: Box<dyn InterceptorBuilder>) {
+    pub fn add(&mut self, builder: Box<dyn InterceptorBuilder + Send + Sync>) {
         self.builders.push(builder);
     }
 

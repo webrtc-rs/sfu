@@ -3,7 +3,6 @@ use crate::server::certificate::RTCCertificate;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub certificates: Vec<RTCCertificate>,
     pub(crate) media_config: MediaConfig,

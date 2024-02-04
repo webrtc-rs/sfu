@@ -14,6 +14,7 @@ use crate::description::{
 //TODO: use crate::stats::stats_collector::StatsCollector;
 //use crate::stats::CodecStats;
 //use crate::stats::StatsReportType::Codec;
+use crate::interceptor::Registry;
 use sdp::description::session::SessionDescription;
 use shared::error::{Error, Result};
 use std::collections::HashMap;
@@ -74,8 +75,9 @@ impl RTCRtpHeaderExtension {
 /// A MediaConfig defines the codecs supported by a PeerConnection, and the
 /// configuration of those codecs. A MediaConfig must not be shared between
 /// PeerConnections.
-#[derive(Debug, Clone)]
 pub struct MediaConfig {
+    registry: Registry,
+
     // If we have attempted to negotiate a codec type yet.
     pub(crate) negotiated_video: bool,
     pub(crate) negotiated_audio: bool,
@@ -93,6 +95,8 @@ pub struct MediaConfig {
 impl Default for MediaConfig {
     fn default() -> Self {
         let mut media_config = MediaConfig {
+            registry: Registry::new(),
+
             negotiated_video: false,
             negotiated_audio: false,
             video_codecs: vec![],
@@ -105,6 +109,7 @@ impl Default for MediaConfig {
         };
 
         let _ = media_config.register_default_codecs();
+        //TODO: let _ = media_config.register_default_interceptors();
 
         media_config
     }
@@ -327,7 +332,8 @@ impl MediaConfig {
     /// If you want to customize which interceptors are loaded, you should copy the
     /// code from this method and remove unwanted interceptors.
     pub fn register_default_interceptors(&mut self) -> Result<()> {
-        self.configure_nack()?;
+        self.configure_nack();
+        self.configure_rtcp_reports();
         self.configure_twcc_receiver_only()?;
 
         Ok(())
@@ -917,8 +923,17 @@ impl MediaConfig {
         })
     }
 
+    /// configure_rtcp_reports will setup everything necessary for generating Sender and Receiver Reports
+    pub fn configure_rtcp_reports(&mut self) {
+        /*TODO: let receiver = Box::new(ReceiverReport::builder());
+        let sender = Box::new(SenderReport::builder());
+        registry.add(receiver);
+        registry.add(sender);
+        registry*/
+    }
+
     /// configure_nack will setup everything necessary for handling generating/responding to nack messages.
-    pub fn configure_nack(&mut self) -> Result<()> {
+    pub fn configure_nack(&mut self) {
         self.register_rtcp_feedback(
             RTCPFeedback {
                 typ: "nack".to_owned(),
@@ -934,7 +949,11 @@ impl MediaConfig {
             RTPCodecType::Video,
         );
 
-        Ok(())
+        /*TODO: let generator = Box::new(Generator::builder());
+        let responder = Box::new(Responder::builder());
+        registry.add(responder);
+        registry.add(generator);
+        registry*/
     }
 
     /// configure_twcc will setup everything necessary for adding
@@ -970,6 +989,11 @@ impl MediaConfig {
             None,
         )?;
 
+        /*TODO:
+        let sender = Box::new(Sender::builder());
+        let receiver = Box::new(Receiver::builder());
+        registry.add(sender);
+        registry.add(receiver); */
         Ok(())
     }
 
@@ -991,6 +1015,10 @@ impl MediaConfig {
             RTPCodecType::Audio,
             None,
         )?;
+
+        /*TODO:
+        let sender = Box::new(Sender::builder());
+        registry.add(sender);*/
 
         Ok(())
     }
@@ -1026,6 +1054,10 @@ impl MediaConfig {
             RTPCodecType::Audio,
             None,
         )?;
+
+        /*TODO:
+        let receiver = Box::new(Receiver::builder());
+        registry.add(receiver);*/
 
         Ok(())
     }

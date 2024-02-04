@@ -2,7 +2,6 @@ use crate::server::config::ServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
 pub(crate) struct SessionConfig {
     pub(crate) server_config: Arc<ServerConfig>,
     pub(crate) local_addr: SocketAddr,
