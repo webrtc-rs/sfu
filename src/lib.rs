@@ -4,6 +4,7 @@
 pub(crate) mod description;
 pub(crate) mod endpoint;
 pub(crate) mod handler;
+pub(crate) mod interceptor;
 pub(crate) mod messages;
 pub(crate) mod server;
 pub(crate) mod session;
@@ -12,7 +13,7 @@ pub(crate) mod types;
 pub use description::RTCSessionDescription;
 pub use handler::{
     data::DataChannelHandler, demuxer::DemuxerHandler, dtls::DtlsHandler,
-    exception::ExceptionHandler, gateway::GatewayHandler, rtcp::RtcpHandler, rtp::RtpHandler,
+    exception::ExceptionHandler, gateway::GatewayHandler, interceptor::InterceptorHandler,
     sctp::SctpHandler, srtp::SrtpHandler, stun::StunHandler,
 };
 pub use server::{certificate::RTCCertificate, config::ServerConfig, states::ServerStates};

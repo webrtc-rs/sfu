@@ -3,22 +3,22 @@ use log::debug;
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 
 #[derive(Default)]
-struct RtcpInbound;
+struct InterceptorInbound;
 #[derive(Default)]
-struct RtcpOutbound;
+struct InterceptorOutbound;
 #[derive(Default)]
-pub struct RtcpHandler {
-    rtcp_inbound: RtcpInbound,
-    rtcp_outbound: RtcpOutbound,
+pub struct InterceptorHandler {
+    interceptor_inbound: InterceptorInbound,
+    interceptor_outbound: InterceptorOutbound,
 }
 
-impl RtcpHandler {
+impl InterceptorHandler {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl InboundHandler for RtcpInbound {
+impl InboundHandler for InterceptorInbound {
     type Rin = TaggedMessageEvent;
     type Rout = Self::Rin;
 
@@ -33,7 +33,7 @@ impl InboundHandler for RtcpInbound {
     }
 }
 
-impl OutboundHandler for RtcpOutbound {
+impl OutboundHandler for InterceptorOutbound {
     type Win = TaggedMessageEvent;
     type Wout = Self::Win;
 
@@ -48,7 +48,7 @@ impl OutboundHandler for RtcpOutbound {
     }
 }
 
-impl Handler for RtcpHandler {
+impl Handler for InterceptorHandler {
     type Rin = TaggedMessageEvent;
     type Rout = Self::Rin;
     type Win = TaggedMessageEvent;
@@ -64,6 +64,9 @@ impl Handler for RtcpHandler {
         Box<dyn InboundHandler<Rin = Self::Rin, Rout = Self::Rout>>,
         Box<dyn OutboundHandler<Win = Self::Win, Wout = Self::Wout>>,
     ) {
-        (Box::new(self.rtcp_inbound), Box::new(self.rtcp_outbound))
+        (
+            Box::new(self.interceptor_inbound),
+            Box::new(self.interceptor_outbound),
+        )
     }
 }

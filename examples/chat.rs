@@ -9,7 +9,7 @@ use retty::executor::LocalExecutorBuilder;
 use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
 use sfu::{
     DataChannelHandler, DemuxerHandler, DtlsHandler, ExceptionHandler, GatewayHandler,
-    RTCCertificate, RtcpHandler, RtpHandler, SctpHandler, ServerConfig, ServerStates, SrtpHandler,
+    InterceptorHandler, RTCCertificate, SctpHandler, ServerConfig, ServerStates, SrtpHandler,
     StunHandler,
 };
 use std::cell::RefCell;
@@ -153,8 +153,7 @@ fn main() -> anyhow::Result<()> {
                         let data_channel_handler = DataChannelHandler::new();
                         // SRTP
                         let srtp_handler = SrtpHandler::new(Rc::clone(&server_states_moved));
-                        let rtp_handler = RtpHandler::new();
-                        let rtcp_handler = RtcpHandler::new();
+                        let interceptor_handler = InterceptorHandler::new();
                         // Gateway
                         let gateway_handler = GatewayHandler::new(Rc::clone(&server_states_moved));
                         let read_exception_handler = ExceptionHandler::new();
@@ -169,8 +168,7 @@ fn main() -> anyhow::Result<()> {
                         pipeline.add_back(data_channel_handler);
                         // SRTP
                         pipeline.add_back(srtp_handler);
-                        pipeline.add_back(rtp_handler);
-                        pipeline.add_back(rtcp_handler);
+                        pipeline.add_back(interceptor_handler);
                         // Gateway
                         pipeline.add_back(gateway_handler);
                         pipeline.add_back(read_exception_handler);

@@ -5,6 +5,7 @@ use log::{debug, error};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use shared::{
     error::{Error, Result},
+    marshal::{Marshal, Unmarshal},
     util::is_rtcp,
 };
 use std::cell::RefCell;
@@ -37,22 +38,19 @@ impl InboundHandler for SrtpInbound {
     type Rout = Self::Rin;
 
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, mut msg: Self::Rin) {
-        if let MessageEvent::Rtp(RTPMessageEvent::Raw(rtp_message)) = msg.message {
+        if let MessageEvent::Rtp(RTPMessageEvent::Raw(message)) = msg.message {
             debug!("srtp read {:?}", msg.transport.peer_addr);
-            let try_read = || -> Result<BytesMut> {
+            let try_read = || -> Result<MessageEvent> {
                 let four_tuple = (&msg.transport).into();
                 let mut server_states = self.server_states.borrow_mut();
-                let transport = match server_states.get_mut_transport(&four_tuple) {
-                    Ok(transport) => transport,
-                    Err(err) => {
-                        return Err(err);
-                    }
-                };
+                let transport = server_states.get_mut_transport(&four_tuple)?;
 
-                if is_rtcp(&rtp_message) {
+                if is_rtcp(&message) {
                     let mut remote_context = transport.remote_srtp_context();
                     if let Some(context) = remote_context.as_mut() {
-                        context.decrypt_rtcp(&rtp_message)
+                        let mut decrypted = context.decrypt_rtcp(&message)?;
+                        let rtcp_packet = rtcp::packet::unmarshal(&mut decrypted)?;
+                        Ok(MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_packet)))
                     } else {
                         Err(Error::Other(format!(
                             "remote_srtp_context is not set yet for four_tuple {:?}",
@@ -62,7 +60,9 @@ impl InboundHandler for SrtpInbound {
                 } else {
                     let mut remote_context = transport.remote_srtp_context();
                     if let Some(context) = remote_context.as_mut() {
-                        context.decrypt_rtp(&rtp_message)
+                        let mut decrypted = context.decrypt_rtp(&message)?;
+                        let rtp_packet = rtp::Packet::unmarshal(&mut decrypted)?;
+                        Ok(MessageEvent::Rtp(RTPMessageEvent::Rtp(rtp_packet)))
                     } else {
                         Err(Error::Other(format!(
                             "remote_srtp_context is not set yet for four_tuple {:?}",
@@ -73,8 +73,8 @@ impl InboundHandler for SrtpInbound {
             };
 
             match try_read() {
-                Ok(decrypted) => {
-                    msg.message = MessageEvent::Rtp(RTPMessageEvent::Raw(decrypted));
+                Ok(message) => {
+                    msg.message = message;
                     ctx.fire_read(msg);
                 }
                 Err(err) => {
@@ -94,36 +94,42 @@ impl OutboundHandler for SrtpOutbound {
     type Wout = Self::Win;
 
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, mut msg: Self::Win) {
-        if let MessageEvent::Rtp(RTPMessageEvent::Raw(rtp_message)) = msg.message {
+        if let MessageEvent::Rtp(message) = msg.message {
             debug!("srtp write {:?}", msg.transport.peer_addr);
             let try_write = || -> Result<BytesMut> {
                 let four_tuple = (&msg.transport).into();
                 let mut server_states = self.server_states.borrow_mut();
-                let transport = match server_states.get_mut_transport(&four_tuple) {
-                    Ok(transport) => transport,
-                    Err(err) => {
-                        return Err(err);
+                let transport = server_states.get_mut_transport(&four_tuple)?;
+
+                match message {
+                    RTPMessageEvent::Rtcp(rtcp_message) => {
+                        let mut local_context = transport.local_srtp_context();
+                        if let Some(context) = local_context.as_mut() {
+                            let packet = rtcp::packet::marshal(&rtcp_message)?;
+                            context.encrypt_rtcp(&packet)
+                        } else {
+                            Err(Error::Other(format!(
+                                "local_srtp_context is not set yet for four_tuple {:?}",
+                                four_tuple
+                            )))
+                        }
                     }
-                };
-                if is_rtcp(&rtp_message) {
-                    let mut local_context = transport.local_srtp_context();
-                    if let Some(context) = local_context.as_mut() {
-                        context.encrypt_rtcp(&rtp_message)
-                    } else {
-                        Err(Error::Other(format!(
-                            "local_srtp_context is not set yet for four_tuple {:?}",
-                            four_tuple
-                        )))
+                    RTPMessageEvent::Rtp(rtp_message) => {
+                        let mut local_context = transport.local_srtp_context();
+                        if let Some(context) = local_context.as_mut() {
+                            let packet = rtp_message.marshal()?;
+                            context.encrypt_rtp(&packet)
+                        } else {
+                            Err(Error::Other(format!(
+                                "local_srtp_context is not set yet for four_tuple {:?}",
+                                four_tuple
+                            )))
+                        }
                     }
-                } else {
-                    let mut local_context = transport.local_srtp_context();
-                    if let Some(context) = local_context.as_mut() {
-                        context.encrypt_rtp(&rtp_message)
-                    } else {
-                        Err(Error::Other(format!(
-                            "local_srtp_context is not set yet for four_tuple {:?}",
-                            four_tuple
-                        )))
+                    RTPMessageEvent::Raw(raw_packet) => {
+                        // Bypass
+                        debug!("Bypass srtp write {:?}", msg.transport.peer_addr);
+                        Ok(raw_packet)
                     }
                 }
             };
