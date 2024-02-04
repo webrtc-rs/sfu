@@ -2,6 +2,7 @@ use crate::description::RTCSessionDescription;
 use crate::endpoint::{
     candidate::{Candidate, ConnectionCredentials},
     transport::Transport,
+    Endpoint,
 };
 use crate::server::config::ServerConfig;
 use crate::session::{config::SessionConfig, Session};
@@ -157,6 +158,10 @@ impl ServerStates {
         self.sessions.get_mut(&session_id).unwrap()
     }
 
+    pub(crate) fn get_mut_sessions(&mut self) -> &mut HashMap<SessionId, Session> {
+        &mut self.sessions
+    }
+
     pub(crate) fn get_session(&self, session_id: &SessionId) -> Option<&Session> {
         self.sessions.get(session_id)
     }
@@ -193,6 +198,27 @@ impl ServerStates {
 
     pub(crate) fn find_endpoint(&self, four_tuple: &FourTuple) -> Option<(SessionId, EndpointId)> {
         self.endpoints.get(four_tuple).cloned()
+    }
+
+    pub(crate) fn get_mut_endpoint(&mut self, four_tuple: &FourTuple) -> Result<&mut Endpoint> {
+        let (session_id, endpoint_id) = self.find_endpoint(four_tuple).ok_or(Error::Other(
+            format!("can't find endpoint with four_tuple {:?}", four_tuple),
+        ))?;
+
+        let session = self
+            .get_mut_session(&session_id)
+            .ok_or(Error::Other(format!(
+                "can't find session id {:?}",
+                session_id
+            )))?;
+        let endpoint = session
+            .get_mut_endpoint(&endpoint_id)
+            .ok_or(Error::Other(format!(
+                "can't find endpoint id {:?}",
+                endpoint_id
+            )))?;
+
+        Ok(endpoint)
     }
 
     pub(crate) fn get_mut_transport(&mut self, four_tuple: &FourTuple) -> Result<&mut Transport> {

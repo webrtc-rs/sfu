@@ -1,17 +1,18 @@
-use crate::interceptor::{Interceptor, InterceptorEvent};
+use crate::interceptor::InterceptorEvent;
 use crate::messages::{MessageEvent, RTPMessageEvent, TaggedMessageEvent};
 use crate::ServerStates;
 use log::error;
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
+use shared::error::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 
 struct InterceptorInbound {
-    interceptor: Rc<RefCell<Box<dyn Interceptor>>>,
+    server_states: Rc<RefCell<ServerStates>>,
 }
 struct InterceptorOutbound {
-    interceptor: Rc<RefCell<Box<dyn Interceptor>>>,
+    server_states: Rc<RefCell<ServerStates>>,
 }
 pub struct InterceptorHandler {
     interceptor_inbound: InterceptorInbound,
@@ -20,15 +21,11 @@ pub struct InterceptorHandler {
 
 impl InterceptorHandler {
     pub fn new(server_states: Rc<RefCell<ServerStates>>) -> Self {
-        let server_states = server_states.borrow();
-        let registry = server_states.server_config().media_config.registry();
-        let interceptor = Rc::new(RefCell::new(registry.build(""))); //TODO: use named registry id
-
         Self {
             interceptor_inbound: InterceptorInbound {
-                interceptor: Rc::clone(&interceptor),
+                server_states: Rc::clone(&server_states),
             },
-            interceptor_outbound: InterceptorOutbound { interceptor },
+            interceptor_outbound: InterceptorOutbound { server_states },
         }
     }
 }
@@ -41,25 +38,36 @@ impl InboundHandler for InterceptorInbound {
         if let MessageEvent::Rtp(RTPMessageEvent::Rtp(_))
         | MessageEvent::Rtp(RTPMessageEvent::Rtcp(_)) = &msg.message
         {
-            let mut try_read = || -> Vec<InterceptorEvent> {
-                let mut interceptor = self.interceptor.borrow_mut();
-                interceptor.read(&mut msg)
+            let mut try_read = || -> Result<Vec<InterceptorEvent>> {
+                let mut server_states = self.server_states.borrow_mut();
+                let four_tuple = (&msg.transport).into();
+                let endpoint = server_states.get_mut_endpoint(&four_tuple)?;
+                let interceptor = endpoint.get_mut_interceptor();
+                Ok(interceptor.read(&mut msg))
             };
 
-            for event in try_read() {
-                match event {
-                    InterceptorEvent::Inbound(inbound) => {
-                        ctx.fire_read(inbound);
-                    }
-                    InterceptorEvent::Outbound(outbound) => {
-                        ctx.fire_write(outbound);
-                    }
-                    InterceptorEvent::Error(err) => {
-                        error!("try_read got error {}", err);
-                        ctx.fire_read_exception(err);
+            match try_read() {
+                Ok(events) => {
+                    for event in events {
+                        match event {
+                            InterceptorEvent::Inbound(inbound) => {
+                                ctx.fire_read(inbound);
+                            }
+                            InterceptorEvent::Outbound(outbound) => {
+                                ctx.fire_write(outbound);
+                            }
+                            InterceptorEvent::Error(err) => {
+                                error!("try_read got error {}", err);
+                                ctx.fire_read_exception(err);
+                            }
+                        }
                     }
                 }
-            }
+                Err(err) => {
+                    error!("try_read with error {}", err);
+                    ctx.fire_read_exception(Box::new(err))
+                }
+            };
 
             if let MessageEvent::Rtp(RTPMessageEvent::Rtcp(_)) = &msg.message {
                 // RTCP message read must end here in SFU case. If any rtcp packet needs to be forwarded to other Endpoints,
@@ -72,23 +80,43 @@ impl InboundHandler for InterceptorInbound {
     }
 
     fn handle_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, now: Instant) {
-        let try_handle_timeout = || -> Vec<InterceptorEvent> {
-            let mut interceptor = self.interceptor.borrow_mut();
-            interceptor.handle_timeout(now)
+        let try_handle_timeout = || -> Result<Vec<InterceptorEvent>> {
+            let mut interceptor_events = vec![];
+
+            let mut server_states = self.server_states.borrow_mut();
+            let sessions = server_states.get_mut_sessions();
+            for session in sessions.values_mut() {
+                let endpoints = session.get_mut_endpoints();
+                for endpoint in endpoints.values_mut() {
+                    let interceptor = endpoint.get_mut_interceptor();
+                    let mut events = interceptor.handle_timeout(now);
+                    interceptor_events.append(&mut events);
+                }
+            }
+
+            Ok(interceptor_events)
         };
 
-        for event in try_handle_timeout() {
-            match event {
-                InterceptorEvent::Inbound(_) => {
-                    error!("unexpected inbound message from try_handle_timeout");
+        match try_handle_timeout() {
+            Ok(events) => {
+                for event in events {
+                    match event {
+                        InterceptorEvent::Inbound(_) => {
+                            error!("unexpected inbound message from try_handle_timeout");
+                        }
+                        InterceptorEvent::Outbound(outbound) => {
+                            ctx.fire_write(outbound);
+                        }
+                        InterceptorEvent::Error(err) => {
+                            error!("try_read got error {}", err);
+                            ctx.fire_read_exception(err);
+                        }
+                    }
                 }
-                InterceptorEvent::Outbound(outbound) => {
-                    ctx.fire_write(outbound);
-                }
-                InterceptorEvent::Error(err) => {
-                    error!("try_read got error {}", err);
-                    ctx.fire_read_exception(err);
-                }
+            }
+            Err(err) => {
+                error!("try_handle_timeout with error {}", err);
+                ctx.fire_read_exception(Box::new(err))
             }
         }
 
@@ -97,8 +125,15 @@ impl InboundHandler for InterceptorInbound {
 
     fn poll_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, eto: &mut Instant) {
         {
-            let mut interceptor = self.interceptor.borrow_mut();
-            interceptor.poll_timeout(eto);
+            let mut server_states = self.server_states.borrow_mut();
+            let sessions = server_states.get_mut_sessions();
+            for session in sessions.values_mut() {
+                let endpoints = session.get_mut_endpoints();
+                for endpoint in endpoints.values_mut() {
+                    let interceptor = endpoint.get_mut_interceptor();
+                    interceptor.poll_timeout(eto)
+                }
+            }
         }
 
         ctx.fire_poll_timeout(eto);
@@ -113,25 +148,36 @@ impl OutboundHandler for InterceptorOutbound {
         if let MessageEvent::Rtp(RTPMessageEvent::Rtp(_))
         | MessageEvent::Rtp(RTPMessageEvent::Rtcp(_)) = &msg.message
         {
-            let mut try_write = || -> Vec<InterceptorEvent> {
-                let mut interceptor = self.interceptor.borrow_mut();
-                interceptor.write(&mut msg)
+            let mut try_write = || -> Result<Vec<InterceptorEvent>> {
+                let mut server_states = self.server_states.borrow_mut();
+                let four_tuple = (&msg.transport).into();
+                let endpoint = server_states.get_mut_endpoint(&four_tuple)?;
+                let interceptor = endpoint.get_mut_interceptor();
+                Ok(interceptor.write(&mut msg))
             };
 
-            for event in try_write() {
-                match event {
-                    InterceptorEvent::Inbound(_) => {
-                        error!("unexpected inbound message from try_write");
-                    }
-                    InterceptorEvent::Outbound(outbound) => {
-                        ctx.fire_write(outbound);
-                    }
-                    InterceptorEvent::Error(err) => {
-                        error!("try_write got error {}", err);
-                        ctx.fire_write_exception(err);
+            match try_write() {
+                Ok(events) => {
+                    for event in events {
+                        match event {
+                            InterceptorEvent::Inbound(_) => {
+                                error!("unexpected inbound message from try_write");
+                            }
+                            InterceptorEvent::Outbound(outbound) => {
+                                ctx.fire_write(outbound);
+                            }
+                            InterceptorEvent::Error(err) => {
+                                error!("try_write got error {}", err);
+                                ctx.fire_write_exception(err);
+                            }
+                        }
                     }
                 }
-            }
+                Err(err) => {
+                    error!("try_write with error {}", err);
+                    ctx.fire_write_exception(Box::new(err))
+                }
+            };
         }
 
         ctx.fire_write(msg);

@@ -67,7 +67,9 @@ impl Session {
                 Ok(true)
             }
         } else {
-            let mut endpoint = Endpoint::new(endpoint_id);
+            let registry = self.session_config.server_config.media_config.registry();
+            let interceptor = registry.build(""); //TODO: use named registry id
+            let mut endpoint = Endpoint::new(endpoint_id, interceptor);
             let transport = Transport::new(four_tuple, Rc::clone(candidate));
             endpoint.add_transport(transport);
             endpoint.set_local_description(candidate.local_description().clone());

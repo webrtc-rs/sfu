@@ -3,12 +3,13 @@ pub(crate) mod transport;
 
 use crate::description::{rtp_transceiver::RTCRtpTransceiver, RTCSessionDescription};
 use crate::endpoint::transport::Transport;
+use crate::interceptor::Interceptor;
 use crate::types::{EndpointId, FourTuple, Mid};
 use std::collections::HashMap;
 
-#[derive(Default)]
 pub(crate) struct Endpoint {
     endpoint_id: EndpointId,
+    interceptor: Box<dyn Interceptor>,
 
     is_renegotiation_needed: bool,
     remote_description: Option<RTCSessionDescription>,
@@ -21,10 +22,19 @@ pub(crate) struct Endpoint {
 }
 
 impl Endpoint {
-    pub(crate) fn new(endpoint_id: EndpointId) -> Self {
+    pub(crate) fn new(endpoint_id: EndpointId, interceptor: Box<dyn Interceptor>) -> Self {
         Self {
             endpoint_id,
-            ..Default::default()
+            interceptor,
+
+            is_renegotiation_needed: false,
+            remote_description: None,
+            local_description: None,
+
+            transports: HashMap::new(),
+
+            mids: vec![],
+            transceivers: HashMap::new(),
         }
     }
 
@@ -50,6 +60,10 @@ impl Endpoint {
 
     pub(crate) fn get_mut_transports(&mut self) -> &mut HashMap<FourTuple, Transport> {
         &mut self.transports
+    }
+
+    pub(crate) fn get_mut_interceptor(&mut self) -> &mut Box<dyn Interceptor> {
+        &mut self.interceptor
     }
 
     pub(crate) fn get_mids(&self) -> &Vec<Mid> {

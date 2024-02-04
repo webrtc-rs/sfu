@@ -26,7 +26,7 @@ impl ReportBuilder {
             interval: if let Some(interval) = &self.interval {
                 *interval
             } else {
-                Duration::from_secs(1)
+                Duration::from_secs(1) //TODO: make it configurable
             },
             eto: Instant::now(),
             next: None,
