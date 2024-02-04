@@ -34,15 +34,7 @@ impl ReportBuilder {
     }
 
     fn build_sr(&self) -> SenderReport {
-        SenderReport {
-            interval: if let Some(interval) = &self.interval {
-                *interval
-            } else {
-                Duration::from_secs(1)
-            },
-            eto: Instant::now(),
-            next: None,
-        }
+        SenderReport { next: None }
     }
 }
 

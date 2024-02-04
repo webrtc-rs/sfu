@@ -111,7 +111,7 @@ impl Default for MediaConfig {
         };
 
         let _ = media_config.register_default_codecs();
-        //TODO: let _ = media_config.register_default_interceptors();
+        let _ = media_config.register_default_interceptors();
 
         media_config
     }
@@ -339,11 +339,11 @@ impl MediaConfig {
     /// If you want to customize which interceptors are loaded, you should copy the
     /// code from this method and remove unwanted interceptors.
     pub fn register_default_interceptors(&mut self) -> Result<()> {
-        self.configure_nack();
-        self.configure_twcc_receiver_only()?;
-
-        //TODO: add new interceptor above configure_rtcp_reports
         self.configure_rtcp_reports();
+
+        /*TODO:self.configure_nack();
+        self.configure_twcc_receiver_only()?;*/
+
         Ok(())
     }
 
@@ -933,10 +933,11 @@ impl MediaConfig {
 
     /// configure_rtcp_reports will setup everything necessary for generating Sender and Receiver Reports
     pub fn configure_rtcp_reports(&mut self) {
-        let receiver = Box::new(ReceiverReport::builder());
         let sender = Box::new(SenderReport::builder());
-        self.registry.add(receiver);
         self.registry.add(sender);
+
+        let receiver = Box::new(ReceiverReport::builder());
+        self.registry.add(receiver);
     }
 
     /// configure_nack will setup everything necessary for handling generating/responding to nack messages.

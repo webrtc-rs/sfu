@@ -60,6 +60,12 @@ impl InboundHandler for InterceptorInbound {
                     }
                 }
             }
+
+            if let MessageEvent::Rtp(RTPMessageEvent::Rtcp(_)) = &msg.message {
+                // RTCP message read must end here in SFU case. If any rtcp packet needs to be forwarded to other Endpoints,
+                // just add a new interceptor to forward it.
+                return;
+            }
         }
 
         ctx.fire_read(msg);
@@ -73,8 +79,8 @@ impl InboundHandler for InterceptorInbound {
 
         for event in try_handle_timeout() {
             match event {
-                InterceptorEvent::Inbound(inbound) => {
-                    ctx.fire_read(inbound);
+                InterceptorEvent::Inbound(_) => {
+                    error!("unexpected inbound message from try_handle_timeout");
                 }
                 InterceptorEvent::Outbound(outbound) => {
                     ctx.fire_write(outbound);

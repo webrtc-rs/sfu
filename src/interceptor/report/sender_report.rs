@@ -1,11 +1,9 @@
 use crate::interceptor::report::ReportBuilder;
 use crate::interceptor::{Interceptor, InterceptorEvent};
 use crate::messages::TaggedMessageEvent;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub(crate) struct SenderReport {
-    pub(super) interval: Duration,
-    pub(super) eto: Instant,
     pub(super) next: Option<Box<dyn Interceptor>>,
 }
 
@@ -26,9 +24,6 @@ impl Interceptor for SenderReport {
 
     fn read(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
         let mut interceptor_events = vec![];
-
-        //TODO:
-
         if let Some(next) = self.next.as_mut() {
             let mut events = next.read(msg);
             interceptor_events.append(&mut events);
@@ -38,9 +33,6 @@ impl Interceptor for SenderReport {
 
     fn write(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
         let mut interceptor_events = vec![];
-
-        //TODO:
-
         if let Some(next) = self.next.as_mut() {
             let mut events = next.write(msg);
             interceptor_events.append(&mut events);
@@ -49,11 +41,9 @@ impl Interceptor for SenderReport {
     }
 
     fn handle_timeout(&mut self, now: Instant) -> Vec<InterceptorEvent> {
+        // SenderReport in SFU does nothing, but just forwarding it to other Endpoints
+
         let mut interceptor_events = vec![];
-
-        //TODO:
-        self.eto = now + self.interval;
-
         if let Some(next) = self.next.as_mut() {
             let mut events = next.handle_timeout(now);
             interceptor_events.append(&mut events);
@@ -62,9 +52,7 @@ impl Interceptor for SenderReport {
     }
 
     fn poll_timeout(&mut self, eto: &mut Instant) {
-        if self.eto < *eto {
-            *eto = self.eto
-        }
+        // SenderReport in SFU does nothing, but just forwarding it to other Endpoints
 
         if let Some(next) = self.next.as_mut() {
             next.poll_timeout(eto);
