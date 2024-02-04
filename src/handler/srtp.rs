@@ -3,6 +3,7 @@ use crate::server::states::ServerStates;
 use bytes::BytesMut;
 use log::{debug, error};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
+use rtcp::compound_packet::CompoundPacket;
 use shared::{
     error::{Error, Result},
     marshal::{Marshal, Unmarshal},
@@ -49,8 +50,15 @@ impl InboundHandler for SrtpInbound {
                     let mut remote_context = transport.remote_srtp_context();
                     if let Some(context) = remote_context.as_mut() {
                         let mut decrypted = context.decrypt_rtcp(&message)?;
-                        let rtcp_packet = rtcp::packet::unmarshal(&mut decrypted)?;
-                        Ok(MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_packet)))
+                        let rtcp_packets = rtcp::packet::unmarshal(&mut decrypted)?;
+                        let rtcp_packets = if rtcp_packets.len() > 1 {
+                            let compound_packet = CompoundPacket(rtcp_packets);
+                            compound_packet.validate()?;
+                            compound_packet.0
+                        } else {
+                            rtcp_packets
+                        };
+                        Ok(MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_packets)))
                     } else {
                         Err(Error::Other(format!(
                             "remote_srtp_context is not set yet for four_tuple {:?}",
@@ -102,10 +110,18 @@ impl OutboundHandler for SrtpOutbound {
                 let transport = server_states.get_mut_transport(&four_tuple)?;
 
                 match message {
-                    RTPMessageEvent::Rtcp(rtcp_message) => {
+                    RTPMessageEvent::Rtcp(rtcp_packets) => {
+                        let rtcp_packets = if rtcp_packets.len() > 1 {
+                            let compound_packet = CompoundPacket(rtcp_packets);
+                            compound_packet.validate()?;
+                            compound_packet.0
+                        } else {
+                            rtcp_packets
+                        };
+
                         let mut local_context = transport.local_srtp_context();
                         if let Some(context) = local_context.as_mut() {
-                            let packet = rtcp::packet::marshal(&rtcp_message)?;
+                            let packet = rtcp::packet::marshal(&rtcp_packets)?;
                             context.encrypt_rtcp(&packet)
                         } else {
                             Err(Error::Other(format!(
