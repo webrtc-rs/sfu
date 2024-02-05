@@ -1,11 +1,16 @@
+use crate::interceptor::report::receiver_stream::ReceiverStream;
 use crate::interceptor::report::ReportBuilder;
 use crate::interceptor::{Interceptor, InterceptorEvent};
-use crate::messages::TaggedMessageEvent;
+use crate::messages::{MessageEvent, RTPMessageEvent, TaggedMessageEvent};
+use crate::types::FourTuple;
+use retty::transport::TransportContext;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub(crate) struct ReceiverReport {
     pub(super) interval: Duration,
     pub(super) eto: Instant,
+    pub(crate) streams: HashMap<u32, ReceiverStream>,
     pub(super) next: Option<Box<dyn Interceptor>>,
 }
 
@@ -24,38 +29,61 @@ impl Interceptor for ReceiverReport {
         self
     }
 
+    fn next(&mut self) -> Option<&mut Box<dyn Interceptor>> {
+        self.next.as_mut()
+    }
+
     fn read(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
-        let mut interceptor_events = vec![];
-
-        //TODO:
-
-        if let Some(next) = self.next.as_mut() {
-            let mut events = next.read(msg);
-            interceptor_events.append(&mut events);
+        if let MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_packets)) = &msg.message {
+            for rtcp_packet in rtcp_packets {
+                if let Some(sr) = rtcp_packet
+                    .as_any()
+                    .downcast_ref::<rtcp::sender_report::SenderReport>()
+                {
+                    if let Some(stream) = self.streams.get_mut(&sr.ssrc) {
+                        stream.process_sender_report(msg.now, sr);
+                    }
+                }
+            }
+        } else if let MessageEvent::Rtp(RTPMessageEvent::Rtp(rtp_packet)) = &msg.message {
+            if let Some(stream) = self.streams.get_mut(&rtp_packet.header.ssrc) {
+                stream.process_rtp(msg.now, rtp_packet);
+            }
         }
-        interceptor_events
+
+        if let Some(next) = self.next() {
+            next.read(msg)
+        } else {
+            vec![]
+        }
     }
 
-    fn write(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
+    fn handle_timeout(&mut self, now: Instant, four_tuples: &[FourTuple]) -> Vec<InterceptorEvent> {
         let mut interceptor_events = vec![];
 
-        //TODO:
+        if self.eto <= now {
+            self.eto = now + self.interval;
 
-        if let Some(next) = self.next.as_mut() {
-            let mut events = next.write(msg);
-            interceptor_events.append(&mut events);
+            for stream in self.streams.values_mut() {
+                let rr = stream.generate_report(now);
+                for four_tuple in four_tuples {
+                    interceptor_events.push(InterceptorEvent::Outbound(TaggedMessageEvent {
+                        now,
+                        transport: TransportContext {
+                            local_addr: four_tuple.local_addr,
+                            peer_addr: four_tuple.peer_addr,
+                            ecn: None,
+                        },
+                        message: MessageEvent::Rtp(RTPMessageEvent::Rtcp(vec![Box::new(
+                            rr.clone(),
+                        )])),
+                    }));
+                }
+            }
         }
-        interceptor_events
-    }
 
-    fn handle_timeout(&mut self, now: Instant) -> Vec<InterceptorEvent> {
-        let mut interceptor_events = vec![];
-
-        //TODO:
-        self.eto = now + self.interval;
-
-        if let Some(next) = self.next.as_mut() {
-            let mut events = next.handle_timeout(now);
+        if let Some(next) = self.next() {
+            let mut events = next.handle_timeout(now, four_tuples);
             interceptor_events.append(&mut events);
         }
         interceptor_events
@@ -66,7 +94,7 @@ impl Interceptor for ReceiverReport {
             *eto = self.eto
         }
 
-        if let Some(next) = self.next.as_mut() {
+        if let Some(next) = self.next() {
             next.poll_timeout(eto);
         }
     }

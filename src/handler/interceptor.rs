@@ -1,5 +1,6 @@
 use crate::interceptor::InterceptorEvent;
 use crate::messages::{MessageEvent, RTPMessageEvent, TaggedMessageEvent};
+use crate::types::FourTuple;
 use crate::ServerStates;
 use log::error;
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
@@ -88,8 +89,14 @@ impl InboundHandler for InterceptorInbound {
             for session in sessions.values_mut() {
                 let endpoints = session.get_mut_endpoints();
                 for endpoint in endpoints.values_mut() {
+                    #[allow(clippy::map_clone)]
+                    let four_tuples: Vec<FourTuple> = endpoint
+                        .get_transports()
+                        .keys()
+                        .map(|four_tuple| *four_tuple)
+                        .collect();
                     let interceptor = endpoint.get_mut_interceptor();
-                    let mut events = interceptor.handle_timeout(now);
+                    let mut events = interceptor.handle_timeout(now, &four_tuples);
                     interceptor_events.append(&mut events);
                 }
             }

@@ -1,4 +1,5 @@
 use crate::messages::TaggedMessageEvent;
+use crate::types::FourTuple;
 use std::time::Instant;
 
 pub(crate) mod nack;
@@ -13,10 +14,36 @@ pub enum InterceptorEvent {
 
 pub trait Interceptor {
     fn chain(self: Box<Self>, next: Box<dyn Interceptor>) -> Box<dyn Interceptor>;
-    fn read(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent>;
-    fn write(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent>;
-    fn handle_timeout(&mut self, now: Instant) -> Vec<InterceptorEvent>;
-    fn poll_timeout(&mut self, eto: &mut Instant);
+    fn next(&mut self) -> Option<&mut Box<dyn Interceptor>>;
+
+    fn read(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
+        if let Some(next) = self.next() {
+            next.read(msg)
+        } else {
+            vec![]
+        }
+    }
+    fn write(&mut self, msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
+        if let Some(next) = self.next() {
+            next.write(msg)
+        } else {
+            vec![]
+        }
+    }
+
+    fn handle_timeout(&mut self, now: Instant, four_tuples: &[FourTuple]) -> Vec<InterceptorEvent> {
+        if let Some(next) = self.next() {
+            next.handle_timeout(now, four_tuples)
+        } else {
+            vec![]
+        }
+    }
+
+    fn poll_timeout(&mut self, eto: &mut Instant) {
+        if let Some(next) = self.next() {
+            next.poll_timeout(eto);
+        }
+    }
 }
 
 /// InterceptorBuilder provides an interface for constructing interceptors
@@ -59,17 +86,7 @@ impl Interceptor for NoOp {
         self
     }
 
-    fn read(&mut self, _msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
-        vec![]
+    fn next(&mut self) -> Option<&mut Box<dyn Interceptor>> {
+        None
     }
-
-    fn write(&mut self, _msg: &mut TaggedMessageEvent) -> Vec<InterceptorEvent> {
-        vec![]
-    }
-
-    fn handle_timeout(&mut self, _now: Instant) -> Vec<InterceptorEvent> {
-        vec![]
-    }
-
-    fn poll_timeout(&mut self, _eto: &mut Instant) {}
 }

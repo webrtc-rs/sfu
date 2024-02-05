@@ -1,7 +1,9 @@
 use crate::interceptor::{Interceptor, InterceptorBuilder};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub(crate) mod receiver_report;
+pub(crate) mod receiver_stream;
 pub(crate) mod sender_report;
 
 use receiver_report::ReceiverReport;
@@ -29,6 +31,7 @@ impl ReportBuilder {
                 Duration::from_secs(1) //TODO: make it configurable
             },
             eto: Instant::now(),
+            streams: HashMap::new(),
             next: None,
         }
     }
