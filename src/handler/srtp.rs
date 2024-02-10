@@ -3,7 +3,6 @@ use crate::server::states::ServerStates;
 use bytes::BytesMut;
 use log::{debug, error};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
-use rtcp::compound_packet::CompoundPacket;
 use shared::{
     error::{Error, Result},
     marshal::{Marshal, Unmarshal},
@@ -51,15 +50,9 @@ impl InboundHandler for SrtpInbound {
                     if let Some(context) = remote_context.as_mut() {
                         let mut decrypted = context.decrypt_rtcp(&message)?;
                         let rtcp_packets = rtcp::packet::unmarshal(&mut decrypted)?;
-                        let rtcp_packets = if rtcp_packets.len() > 1 {
-                            let compound_packet = CompoundPacket(rtcp_packets);
-                            compound_packet.validate()?;
-                            compound_packet.0
-                        } else if !rtcp_packets.is_empty() {
-                            rtcp_packets
-                        } else {
+                        if rtcp_packets.is_empty() {
                             return Err(Error::Other("empty rtcp_packets".to_string()));
-                        };
+                        }
                         Ok(MessageEvent::Rtp(RTPMessageEvent::Rtcp(rtcp_packets)))
                     } else {
                         Err(Error::Other(format!(
@@ -113,13 +106,7 @@ impl OutboundHandler for SrtpOutbound {
 
                 match message {
                     RTPMessageEvent::Rtcp(rtcp_packets) => {
-                        let rtcp_packets = if rtcp_packets.len() > 1 {
-                            let compound_packet = CompoundPacket(rtcp_packets);
-                            compound_packet.validate()?;
-                            compound_packet.0
-                        } else if !rtcp_packets.is_empty() {
-                            rtcp_packets
-                        } else {
+                        if rtcp_packets.is_empty() {
                             return Err(Error::Other("empty rtcp_packets".to_string()));
                         };
 
