@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+
+      - name: Run server
+        run: cargo run --release --package sfu --example chat -- -d --level info > sfu.log 2>&1 & echo $! > server_pid.txt
+
+      - name: Run tests
+        run: cargo test --release -- --show-output > test.log 2>&1
+
+      - name: Shutdown server
+        run: kill -INT $(cat server_pid.txt) || true
+
+      - name: Upload logs as artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: logs
+          path: |
+            sfu.log
+            test.log
