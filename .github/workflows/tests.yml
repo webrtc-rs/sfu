@@ -15,6 +15,7 @@ env:
 
 jobs:
   tests:
+    name: Integration Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -26,7 +27,7 @@ jobs:
         run: cargo run --release --package sfu --example chat -- -d --level info > sfu.log 2>&1 & echo $! > server_pid.txt
 
       - name: Run tests
-        run: cargo test --release -- --show-output > test.log 2>&1
+        run: cargo test --release --no-fail-fast -- --show-output > test.log 2>&1 || true
 
       - name: Shutdown server
         run: kill -INT $(cat server_pid.txt) || true
@@ -38,3 +39,6 @@ jobs:
           path: |
             sfu.log
             test.log
+
+      - name: Parse test results
+        run: ./scripts/parse_test_results.sh test.log
