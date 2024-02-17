@@ -639,12 +639,12 @@ pub(crate) fn extract_fingerprint(desc: &SessionDescription) -> Result<(String, 
     let mut fingerprints = vec![];
 
     if let Some(fingerprint) = desc.attribute("fingerprint") {
-        fingerprints.push(fingerprint.clone());
+        fingerprints.push(fingerprint.to_string());
     }
 
     for m in &desc.media_descriptions {
         if let Some(fingerprint) = m.attribute("fingerprint").and_then(|o| o) {
-            fingerprints.push(fingerprint.to_owned());
+            fingerprints.push(fingerprint.to_string());
         }
     }
 

@@ -23,11 +23,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Run server
-        run: cargo run --release --package sfu --example chat -- -d --level info > sfu.log 2>&1 & echo $! > server_pid.txt
-
-      - name: Run tests
-        run: cargo test --release --no-fail-fast -- --show-output > test.log 2>&1 || true
+      - name: Run server and tests
+        run: |
+          cargo run --release --package sfu --example chat -- -d --level info > sfu.log 2>&1 & echo $! > server_pid.txt
+          cargo test --release --no-fail-fast -- --show-output > test.log 2>&1 || true
 
       - name: Shutdown server
         run: kill -INT $(cat server_pid.txt) || true

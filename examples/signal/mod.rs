@@ -224,6 +224,11 @@ async fn remote_handler(
                             endpoint_id: _,
                             reason,
                         } => {
+                            error!(
+                                "SignalingProtocolMessage::Err {}",
+                                String::from_utf8(reason.to_vec())
+                                    .unwrap_or("Unknown Error".to_string()),
+                            );
                             let mut response = Response::new(Body::from(reason));
                             *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                             return Ok(response);

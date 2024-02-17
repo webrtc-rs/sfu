@@ -17,3 +17,4 @@ pub use handler::{
     sctp::SctpHandler, srtp::SrtpHandler, stun::StunHandler,
 };
 pub use server::{certificate::RTCCertificate, config::ServerConfig, states::ServerStates};
+pub use types::{EndpointId, SessionId};

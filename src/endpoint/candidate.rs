@@ -153,13 +153,16 @@ impl ConnectionCredentials {
             .ok_or(Error::ErrAttributeNotFound)?
             .ok_or(Error::ErrAttributeNotFound)?
             .to_string();
-        let fingerprint = sdp
-            .media_descriptions
-            .iter()
-            .find_map(|m| m.attribute("fingerprint"))
-            .ok_or(Error::ErrAttributeNotFound)?
-            .ok_or(Error::ErrAttributeNotFound)?
-            .try_into()?;
+        let fingerprint = if let Some(fingerprint) = sdp.attribute("fingerprint") {
+            fingerprint.try_into()?
+        } else {
+            sdp.media_descriptions
+                .iter()
+                .find_map(|m| m.attribute("fingerprint"))
+                .ok_or(Error::ErrAttributeNotFound)?
+                .ok_or(Error::ErrAttributeNotFound)?
+                .try_into()?
+        };
         let role = DTLSRole::from(sdp);
 
         Ok(Self {
