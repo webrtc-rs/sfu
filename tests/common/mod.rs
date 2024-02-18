@@ -9,6 +9,7 @@ use sfu::{EndpointId, SessionId};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Notify;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
@@ -202,7 +203,10 @@ pub async fn connect(
     session_id: SessionId,
     endpoint_id: EndpointId,
     peer_connection: &Arc<RTCPeerConnection>,
-) -> Result<Arc<RTCDataChannel>> {
+) -> Result<(
+    Arc<RTCDataChannel>,
+    UnboundedReceiver<RTCSessionDescription>,
+)> {
     // Create a datachannel with label 'data'
     let data_channel = peer_connection.create_data_channel("data", None).await?;
 
@@ -216,6 +220,8 @@ pub async fn connect(
     }));
 
     // Register SDP message handling
+    let (data_channel_tx, data_channel_rx) =
+        tokio::sync::mpsc::unbounded_channel::<RTCSessionDescription>();
     let peer_connection_clone = peer_connection.clone();
     let data_channel_clone = data_channel.clone();
     data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -236,10 +242,11 @@ pub async fn connect(
         };
         let pc = peer_connection_clone.clone();
         let dc = data_channel_clone.clone();
+        let tx = data_channel_tx.clone();
         Box::pin(async move {
             match sdp.sdp_type {
                 RTCSdpType::Offer => {
-                    if let Err(err) = pc.set_remote_description(sdp).await {
+                    if let Err(err) = pc.set_remote_description(sdp.clone()).await {
                         error!("set_remote_description offer error {:?}", err);
                         assert!(false);
                         return;
@@ -276,7 +283,7 @@ pub async fn connect(
                     }
                 }
                 RTCSdpType::Answer => {
-                    if let Err(err) = pc.set_remote_description(sdp).await {
+                    if let Err(err) = pc.set_remote_description(sdp.clone()).await {
                         error!("set_remote_description answer error {:?}", err);
                         assert!(false);
                         return;
@@ -286,6 +293,10 @@ pub async fn connect(
                     error!("Unsupported SDP type {}", sdp.sdp_type);
                     assert!(false);
                 }
+            };
+            if let Err(err) = tx.send(sdp) {
+                error!("data_channel_tx send error {}", err);
+                assert!(false);
             }
         })
     }));
@@ -321,7 +332,7 @@ pub async fn connect(
     // Wait for data channel opened
     data_channel_opened_ready_notify_rx.notified().await;
 
-    Ok(data_channel)
+    Ok((data_channel, data_channel_rx))
 }
 
 pub async fn add_track(

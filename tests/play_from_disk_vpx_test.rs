@@ -5,6 +5,7 @@ use sfu::SessionId;
 use webrtc::api::media_engine::MIME_TYPE_VP8;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
 use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 
 // importing common module.
@@ -33,7 +34,7 @@ async fn test_play_from_disk_vpx_1to1() -> anyhow::Result<()> {
 
     let mut data_channels = vec![];
     for (endpoint_id, peer_connection) in peer_connections.iter() {
-        let data_channel =
+        let (data_channel_tx, data_channel_rx) =
             match common::connect(HOST, SIGNAL_PORT, session_id, *endpoint_id, peer_connection)
                 .await
             {
@@ -43,7 +44,7 @@ async fn test_play_from_disk_vpx_1to1() -> anyhow::Result<()> {
                     return Err(err.into());
                 }
             };
-        data_channels.push(data_channel);
+        data_channels.push((data_channel_tx, data_channel_rx));
     }
 
     let rtp_transceiver = match common::add_track(
@@ -78,7 +79,7 @@ async fn test_play_from_disk_vpx_1to1() -> anyhow::Result<()> {
         session_id,
         peer_connections[0].0,
         &peer_connections[0].1,
-        Some(&data_channels[0]),
+        Some(&data_channels[0].0),
     )
     .await
     {
@@ -88,6 +89,22 @@ async fn test_play_from_disk_vpx_1to1() -> anyhow::Result<()> {
             return Err(err.into());
         }
     };
+
+    // waiting for answer SDP from data channel of endpoint 0
+    let answer_sdp = data_channels[0].1.recv().await;
+    if let Some(answer_sdp) = answer_sdp {
+        assert_eq!(RTCSdpType::Answer, answer_sdp.sdp_type);
+    } else {
+        assert!(false);
+    }
+
+    // waiting for offer SDP from data channel of endpoint 1
+    let offer_sdp = data_channels[1].1.recv().await;
+    if let Some(offer_sdp) = offer_sdp {
+        assert_eq!(RTCSdpType::Offer, offer_sdp.sdp_type);
+    } else {
+        assert!(false);
+    }
 
     match common::teardown_peer_connections(peer_connections).await {
         Ok(ok) => ok,
