@@ -77,3 +77,10 @@ if [[ $total_failed -gt 0 ]]; then
 else
     exit 0
 fi
+
+# Return non-zero exit code if there are zero passed tests
+if [[ $total_passed -eq 0 ]]; then
+    exit 1
+else
+    exit 0
+fi

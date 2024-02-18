@@ -23,13 +23,21 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Run server and tests
-        run: |
-          cargo run --release --package sfu --example chat -- -d --level info > sfu.log 2>&1 & echo $! > server_pid.txt
-          cargo test --release --no-fail-fast -- --show-output > test.log 2>&1 || true
+      - name: Build and run chat server and tests in Docker
+        run: |          
+          docker build -t chat-server .
+          docker run -d --name chat-server -p 8080:8080 -p 3478-3495:3478-3495/udp chat-server
 
-      - name: Shutdown server
-        run: kill -INT $(cat server_pid.txt) || true
+      - name: Wait for docker container to exit
+        run: |
+          while docker ps | grep chat-server >/dev/null; do
+            echo "chat-server is still running, waiting..."
+            sleep 5
+          done
+
+      - name: Copy logs from container to host
+        run: |
+          docker cp chat-server:/usr/src/app/logs/. .
 
       - name: Upload logs as artifact
         uses: actions/upload-artifact@v2
@@ -38,6 +46,9 @@ jobs:
           path: |
             sfu.log
             test.log
+
+      - name: Shutdown chat server
+        run: docker stop chat-server && docker rm chat-server
 
       - name: Parse test results
         run: ./scripts/parse_test_results.sh test.log
