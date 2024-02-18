@@ -6,6 +6,7 @@ use log::LevelFilter::Debug;
 use log::{error, info};
 use rand::random;
 use sfu::{EndpointId, SessionId};
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -19,8 +20,13 @@ use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
-pub async fn setup(config: RTCConfiguration) -> Result<(Arc<RTCPeerConnection>, EndpointId)> {
-    env_logger::Builder::new()
+pub const HOST: &'static str = "127.0.0.1";
+pub const SIGNAL_PORT: u16 = 8080;
+
+pub async fn setup_peer_connection(
+    config: RTCConfiguration,
+) -> Result<(EndpointId, Arc<RTCPeerConnection>)> {
+    let _ = env_logger::Builder::new()
         .format(|buf, record| {
             writeln!(
                 buf,
@@ -33,11 +39,13 @@ pub async fn setup(config: RTCConfiguration) -> Result<(Arc<RTCPeerConnection>, 
             )
         })
         .filter(None, Debug)
-        .try_init()?;
+        .try_init();
+
+    let endpoint_id = random::<u64>();
 
     // some setup code, like creating required files/directories, starting
     // servers, etc.
-    info!("common setup");
+    info!("setup_peer_connection {}", endpoint_id);
 
     // Create a MediaEngine object to configure the supported codec
     let mut m = MediaEngine::default();
@@ -79,17 +87,40 @@ pub async fn setup(config: RTCConfiguration) -> Result<(Arc<RTCPeerConnection>, 
         Box::pin(async {})
     }));
 
-    Ok((peer_connection, random::<u64>()))
+    Ok((endpoint_id, peer_connection))
 }
 
-pub async fn teardown(pc: Arc<RTCPeerConnection>) -> Result<()> {
+pub async fn setup_peer_connections(
+    configs: Vec<RTCConfiguration>,
+) -> Result<HashMap<EndpointId, Arc<RTCPeerConnection>>> {
+    let mut peer_connections = HashMap::new();
+
+    for config in configs {
+        let (endpoint_id, peer_connection) = setup_peer_connection(config).await?;
+        peer_connections.insert(endpoint_id, peer_connection);
+    }
+
+    Ok(peer_connections)
+}
+
+pub async fn teardown_peer_connection(pc: Arc<RTCPeerConnection>) -> Result<()> {
     pc.close().await?;
 
     Ok(())
 }
 
+pub async fn teardown_peer_connections(
+    pcs: HashMap<EndpointId, Arc<RTCPeerConnection>>,
+) -> Result<()> {
+    for (_, pc) in pcs {
+        teardown_peer_connection(pc).await?;
+    }
+
+    Ok(())
+}
+
 async fn signaling(
-    host: String,
+    host: &str,
     signal_port: u16,
     session_id: SessionId,
     endpoint_id: EndpointId,
@@ -107,13 +138,17 @@ async fn signaling(
     let resp = Client::new().request(req).await?;
     let answer_payload =
         std::str::from_utf8(&hyper::body::to_bytes(resp.into_body()).await?)?.to_string();
+    info!(
+        "{}/{}: answer sdp {}",
+        session_id, endpoint_id, answer_payload
+    );
     let answer = serde_json::from_str::<RTCSessionDescription>(&answer_payload)?;
 
     Ok(answer)
 }
 
 pub async fn connect(
-    host: String,
+    host: &str,
     signal_port: u16,
     session_id: SessionId,
     endpoint_id: EndpointId,
@@ -127,7 +162,7 @@ pub async fn connect(
     let data_channel_clone = data_channel.clone();
     data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
         let sdp_str = String::from_utf8(msg.data.to_vec()).unwrap();
-        info!("SDP from DataChannel: '{sdp_str}'");
+        info!("{session_id}/{endpoint_id}: SDP from DataChannel: '{sdp_str}'");
         let sdp = match serde_json::from_str::<RTCSessionDescription>(&sdp_str) {
             Ok(sdp) => sdp,
             Err(err) => {
@@ -165,6 +200,7 @@ pub async fn connect(
                             return;
                         }
                     };
+                    info!("{session_id}/{endpoint_id}: SDP to DataChannel: '{answer_str}'");
                     if let Err(err) = dc.send_text(answer_str).await {
                         error!("data channel send answer error {:?}", err);
                         assert!(false);
@@ -191,6 +227,10 @@ pub async fn connect(
 
     // Send our offer to the HTTP server listening in the other process
     let offer_payload = serde_json::to_string(&offer)?;
+    info!(
+        "{}/{}: offer sdp {}",
+        session_id, endpoint_id, offer_payload
+    );
 
     // Sets the LocalDescription, and starts our UDP listeners
     // Note: this will start the gathering of ICE candidates

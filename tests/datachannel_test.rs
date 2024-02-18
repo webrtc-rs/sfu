@@ -1,3 +1,4 @@
+use crate::common::{HOST, SIGNAL_PORT};
 use log::error;
 use rand::random;
 use sfu::SessionId;
@@ -8,8 +9,9 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 mod common;
 
 #[tokio::test]
-async fn test_datachannel() -> anyhow::Result<()> {
+async fn test_data_channel() -> anyhow::Result<()> {
     // Prepare the configuration
+    let session_id: SessionId = random::<u64>();
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
@@ -17,30 +19,68 @@ async fn test_datachannel() -> anyhow::Result<()> {
         }],
         ..Default::default()
     };
-    let host = "127.0.0.1".to_string();
-    let signal_port = 8080u16;
+
+    let (endpoint_id, peer_connection) = match common::setup_peer_connection(config).await {
+        Ok(ok) => ok,
+        Err(err) => {
+            error!("error: {}", err);
+            return Err(err.into());
+        }
+    };
+
+    match common::connect(HOST, SIGNAL_PORT, session_id, endpoint_id, &peer_connection).await {
+        Ok(ok) => ok,
+        Err(err) => {
+            error!("error: {}", err);
+            return Err(err.into());
+        }
+    };
+
+    match common::teardown_peer_connection(peer_connection).await {
+        Ok(ok) => ok,
+        Err(err) => {
+            error!("error: {}", err);
+            return Err(err.into());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_data_channels() -> anyhow::Result<()> {
+    // Prepare the configuration
     let session_id: SessionId = random::<u64>();
-
-    let (peer_connection, endpoint_id) = match common::setup(config).await {
-        Ok(ok) => ok,
-        Err(err) => {
-            error!("error: {}", err);
-            return Err(err.into());
-        }
+    let config = RTCConfiguration {
+        ice_servers: vec![RTCIceServer {
+            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+            ..Default::default()
+        }],
+        ..Default::default()
     };
 
-    match common::connect(host, signal_port, session_id, endpoint_id, &peer_connection).await {
-        Ok(ok) => ok,
-        Err(err) => {
-            error!("error: {}", err);
-            return Err(err.into());
-        }
-    };
+    let peer_connections =
+        match common::setup_peer_connections(vec![config.clone(), config.clone(), config]).await {
+            Ok(ok) => ok,
+            Err(err) => {
+                error!("{}: error {}", session_id, err);
+                return Err(err.into());
+            }
+        };
 
-    match common::teardown(peer_connection).await {
+    for (&endpoint_id, peer_connection) in peer_connections.iter() {
+        match common::connect(HOST, SIGNAL_PORT, session_id, endpoint_id, peer_connection).await {
+            Ok(ok) => ok,
+            Err(err) => {
+                error!("{}/{}: error {}", session_id, endpoint_id, err);
+                return Err(err.into());
+            }
+        };
+    }
+
+    match common::teardown_peer_connections(peer_connections).await {
         Ok(ok) => ok,
         Err(err) => {
-            error!("error: {}", err);
+            error!("{}: error {}", session_id, err);
             return Err(err.into());
         }
     }
