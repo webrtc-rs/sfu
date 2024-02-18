@@ -67,8 +67,8 @@ async fn test_data_channels() -> anyhow::Result<()> {
             }
         };
 
-    for (&endpoint_id, peer_connection) in peer_connections.iter() {
-        match common::connect(HOST, SIGNAL_PORT, session_id, endpoint_id, peer_connection).await {
+    for (endpoint_id, peer_connection) in peer_connections.iter() {
+        match common::connect(HOST, SIGNAL_PORT, session_id, *endpoint_id, peer_connection).await {
             Ok(ok) => ok,
             Err(err) => {
                 error!("{}/{}: error {}", session_id, endpoint_id, err);
