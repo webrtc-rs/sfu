@@ -1,7 +1,7 @@
 use crate::common::{HOST, SIGNAL_PORT};
 use log::error;
 use rand::random;
-use sfu::SessionId;
+use sfu::{EndpointId, SessionId};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 
@@ -12,6 +12,7 @@ mod common;
 async fn test_data_channel() -> anyhow::Result<()> {
     // Prepare the configuration
     let session_id: SessionId = random::<u64>();
+    let endpoint_id = 0;
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
@@ -20,7 +21,7 @@ async fn test_data_channel() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let (endpoint_id, peer_connection) = match common::setup_peer_connection(config, 0).await {
+    let peer_connection = match common::setup_peer_connection(config, endpoint_id).await {
         Ok(ok) => ok,
         Err(err) => {
             error!("error: {}", err);
@@ -49,6 +50,7 @@ async fn test_data_channel() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_data_channels() -> anyhow::Result<()> {
     // Prepare the configuration
+    let endpoint_count: usize = 3;
     let session_id: SessionId = random::<u64>();
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
@@ -58,12 +60,14 @@ async fn test_data_channels() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let peer_connections = match common::setup_peer_connections(
-        vec![config.clone(), config.clone(), config],
-        vec![0, 1, 2],
-    )
-    .await
-    {
+    let mut configs = vec![];
+    let mut endpoint_ids = vec![];
+    for endpoint_id in 0..endpoint_count {
+        configs.push(config.clone());
+        endpoint_ids.push(endpoint_id);
+    }
+
+    let peer_connections = match common::setup_peer_connections(configs, &endpoint_ids).await {
         Ok(ok) => ok,
         Err(err) => {
             error!("{}: error {}", session_id, err);
@@ -71,8 +75,16 @@ async fn test_data_channels() -> anyhow::Result<()> {
         }
     };
 
-    for (endpoint_id, peer_connection) in peer_connections.iter() {
-        match common::connect(HOST, SIGNAL_PORT, session_id, *endpoint_id, peer_connection).await {
+    for (endpoint_id, peer_connection) in peer_connections.iter().enumerate() {
+        match common::connect(
+            HOST,
+            SIGNAL_PORT,
+            session_id,
+            endpoint_id as EndpointId,
+            peer_connection,
+        )
+        .await
+        {
             Ok(ok) => ok,
             Err(err) => {
                 error!("{}/{}: error {}", session_id, endpoint_id, err);

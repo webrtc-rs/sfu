@@ -39,7 +39,7 @@ fn pretty_sdp(input: &str) -> String {
 pub async fn setup_peer_connection(
     config: RTCConfiguration,
     endpoint_id: EndpointId,
-) -> Result<(EndpointId, Arc<RTCPeerConnection>)> {
+) -> Result<Arc<RTCPeerConnection>> {
     let _ = env_logger::Builder::new()
         .format(|buf, record| {
             writeln!(
@@ -99,18 +99,20 @@ pub async fn setup_peer_connection(
         Box::pin(async {})
     }));
 
-    Ok((endpoint_id, peer_connection))
+    Ok(peer_connection)
 }
 
 pub async fn setup_peer_connections(
     configs: Vec<RTCConfiguration>,
-    endpoint_ids: Vec<EndpointId>,
-) -> Result<Vec<(EndpointId, Arc<RTCPeerConnection>)>> {
+    endpoint_ids: &[usize],
+) -> Result<Vec<Arc<RTCPeerConnection>>> {
+    assert_eq!(configs.len(), endpoint_ids.len());
+
     let mut peer_connections = Vec::with_capacity(configs.len());
 
     for (config, endpoint_id) in configs.into_iter().zip(endpoint_ids) {
-        let (endpoint_id, peer_connection) = setup_peer_connection(config, endpoint_id).await?;
-        peer_connections.push((endpoint_id, peer_connection));
+        let peer_connection = setup_peer_connection(config, *endpoint_id as EndpointId).await?;
+        peer_connections.push(peer_connection);
     }
 
     Ok(peer_connections)
@@ -122,10 +124,8 @@ pub async fn teardown_peer_connection(pc: Arc<RTCPeerConnection>) -> Result<()> 
     Ok(())
 }
 
-pub async fn teardown_peer_connections(
-    pcs: Vec<(EndpointId, Arc<RTCPeerConnection>)>,
-) -> Result<()> {
-    for (_, pc) in pcs {
+pub async fn teardown_peer_connections(pcs: Vec<Arc<RTCPeerConnection>>) -> Result<()> {
+    for pc in pcs {
         teardown_peer_connection(pc).await?;
     }
 

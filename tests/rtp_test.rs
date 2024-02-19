@@ -2,7 +2,7 @@ use crate::common::{HOST, SIGNAL_PORT};
 use bytes::Bytes;
 use log::{error, info};
 use rand::random;
-use sfu::SessionId;
+use sfu::{EndpointId, SessionId};
 use shared::error::Error;
 use webrtc::api::media_engine::MIME_TYPE_VP8;
 use webrtc::ice_transport::ice_server::RTCIceServer;
@@ -18,6 +18,7 @@ mod common;
 #[tokio::test]
 async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
     // Prepare the configuration
+    let endpoint_count: usize = 2;
     let session_id: SessionId = random::<u64>();
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
@@ -27,32 +28,43 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let peer_connections =
-        match common::setup_peer_connections(vec![config.clone(), config], vec![0, 1]).await {
+    let mut configs = vec![];
+    let mut endpoint_ids = vec![];
+    for endpoint_id in 0..endpoint_count {
+        configs.push(config.clone());
+        endpoint_ids.push(endpoint_id);
+    }
+
+    let peer_connections = match common::setup_peer_connections(configs, &endpoint_ids).await {
+        Ok(ok) => ok,
+        Err(err) => {
+            error!("{}: error {}", session_id, err);
+            return Err(err.into());
+        }
+    };
+
+    let mut data_channels = vec![];
+    for (endpoint_id, peer_connection) in peer_connections.iter().enumerate() {
+        let (data_channel_tx, data_channel_rx) = match common::connect(
+            HOST,
+            SIGNAL_PORT,
+            session_id,
+            endpoint_id as EndpointId,
+            peer_connection,
+        )
+        .await
+        {
             Ok(ok) => ok,
             Err(err) => {
-                error!("{}: error {}", session_id, err);
+                error!("{}/{}: error {}", session_id, endpoint_id, err);
                 return Err(err.into());
             }
         };
-
-    let mut data_channels = vec![];
-    for (endpoint_id, peer_connection) in peer_connections.iter() {
-        let (data_channel_tx, data_channel_rx) =
-            match common::connect(HOST, SIGNAL_PORT, session_id, *endpoint_id, peer_connection)
-                .await
-            {
-                Ok(ok) => ok,
-                Err(err) => {
-                    error!("{}/{}: error {}", session_id, endpoint_id, err);
-                    return Err(err.into());
-                }
-            };
         data_channels.push((data_channel_tx, data_channel_rx));
     }
 
     let (rtp_sender, track_local) = match common::add_track(
-        &peer_connections[0].1,
+        &peer_connections[0],
         MIME_TYPE_VP8,
         "video_track",
         RTCRtpTransceiverDirection::Sendonly,
@@ -61,7 +73,7 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
     {
         Ok(ok) => ok,
         Err(err) => {
-            error!("{}/{}: error {}", session_id, peer_connections[0].0, err);
+            error!("{}/{}: error {}", session_id, endpoint_ids[0], err);
             return Err(err.into());
         }
     };
@@ -76,10 +88,10 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
         }
     });
 
-    let mut track_remote_rx = match common::on_track(&peer_connections[1].1).await {
+    let mut track_remote_rx = match common::on_track(&peer_connections[1]).await {
         Ok(ok) => ok,
         Err(err) => {
-            error!("{}/{}: error {}", session_id, peer_connections[1].0, err);
+            error!("{}/{}: error {}", session_id, endpoint_ids[1], err);
             return Err(err.into());
         }
     };
@@ -88,15 +100,15 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
         HOST,
         SIGNAL_PORT,
         session_id,
-        peer_connections[0].0,
-        &peer_connections[0].1,
+        endpoint_ids[0] as EndpointId,
+        &peer_connections[0],
         Some(&data_channels[0].0),
     )
     .await
     {
         Ok(ok) => ok,
         Err(err) => {
-            error!("{}/{}: error {}", session_id, peer_connections[0].0, err);
+            error!("{}/{}: error {}", session_id, endpoint_ids[0], err);
             return Err(err.into());
         }
     };
@@ -204,8 +216,7 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_rtp_bi_direction_sendrecv() -> anyhow::Result<()> {
+async fn test_rtp_bi_direction_sendrecv(endpoint_count: usize) -> anyhow::Result<()> {
     // Prepare the configuration
     let session_id: SessionId = random::<u64>();
     let config = RTCConfiguration {
@@ -216,33 +227,43 @@ async fn test_rtp_bi_direction_sendrecv() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let peer_connections =
-        match common::setup_peer_connections(vec![config.clone(), config], vec![0, 1]).await {
+    let mut configs = vec![];
+    let mut endpoint_ids = vec![];
+    for endpoint_id in 0..endpoint_count {
+        configs.push(config.clone());
+        endpoint_ids.push(endpoint_id);
+    }
+
+    let peer_connections = match common::setup_peer_connections(configs, &endpoint_ids).await {
+        Ok(ok) => ok,
+        Err(err) => {
+            error!("{}: error {}", session_id, err);
+            return Err(err.into());
+        }
+    };
+
+    let mut data_channels = vec![];
+    for (endpoint_id, peer_connection) in peer_connections.iter().enumerate() {
+        let (data_channel_tx, data_channel_rx) = match common::connect(
+            HOST,
+            SIGNAL_PORT,
+            session_id,
+            endpoint_id as EndpointId,
+            peer_connection,
+        )
+        .await
+        {
             Ok(ok) => ok,
             Err(err) => {
-                error!("{}: error {}", session_id, err);
+                error!("{}/{}: error {}", session_id, endpoint_id, err);
                 return Err(err.into());
             }
         };
-
-    let mut data_channels = vec![];
-    for (endpoint_id, peer_connection) in peer_connections.iter() {
-        let (data_channel_tx, data_channel_rx) =
-            match common::connect(HOST, SIGNAL_PORT, session_id, *endpoint_id, peer_connection)
-                .await
-            {
-                Ok(ok) => ok,
-                Err(err) => {
-                    error!("{}/{}: error {}", session_id, endpoint_id, err);
-                    return Err(err.into());
-                }
-            };
         data_channels.push((data_channel_tx, data_channel_rx));
     }
 
     let mut tracks = vec![];
-    for (index, (endpoint_id, peer_connection)) in peer_connections.iter().enumerate() {
-        let endpoint_id = *endpoint_id;
+    for (endpoint_id, peer_connection) in peer_connections.iter().enumerate() {
         let (rtp_sender, track_local) = match common::add_track(
             peer_connection,
             MIME_TYPE_VP8,
@@ -284,9 +305,9 @@ async fn test_rtp_bi_direction_sendrecv() -> anyhow::Result<()> {
             HOST,
             SIGNAL_PORT,
             session_id,
-            endpoint_id,
+            endpoint_id as EndpointId,
             peer_connection,
-            Some(&data_channels[index].0),
+            Some(&data_channels[endpoint_id].0),
         )
         .await
         {
@@ -297,20 +318,26 @@ async fn test_rtp_bi_direction_sendrecv() -> anyhow::Result<()> {
             }
         };
 
-        // waiting for answer SDP from data channel of endpoint_id index
-        let answer_sdp = data_channels[index].1.recv().await;
+        // waiting for answer SDP from data channel of endpoint_id
+        let answer_sdp = data_channels[endpoint_id].1.recv().await;
         if let Some(answer_sdp) = answer_sdp {
             assert_eq!(RTCSdpType::Answer, answer_sdp.sdp_type);
         } else {
             assert!(false);
         }
 
-        // waiting for offer SDP from data channel of endpoint_id 1-index
-        let offer_sdp = data_channels[1 - index].1.recv().await;
-        if let Some(offer_sdp) = offer_sdp {
-            assert_eq!(RTCSdpType::Offer, offer_sdp.sdp_type);
-        } else {
-            assert!(false);
+        // waiting for offer SDP from data channel of other endpoint_ids
+        for &other_endpoint_id in endpoint_ids.iter() {
+            if other_endpoint_id == endpoint_id {
+                continue;
+            }
+
+            let offer_sdp = data_channels[other_endpoint_id].1.recv().await;
+            if let Some(offer_sdp) = offer_sdp {
+                assert_eq!(RTCSdpType::Offer, offer_sdp.sdp_type);
+            } else {
+                assert!(false);
+            }
         }
     }
 
@@ -335,51 +362,28 @@ async fn test_rtp_bi_direction_sendrecv() -> anyhow::Result<()> {
         payload: Bytes::from_static(&[0x98, 0x36, 0xbe, 0x88, 0x9e]),
     };
 
-    for index in 0..2 {
-        if let Err(err) = tracks[index].0.write_rtp(&send_rtp_packet).await {
+    for &endpoint_id in endpoint_ids.iter() {
+        if let Err(err) = tracks[endpoint_id].0.write_rtp(&send_rtp_packet).await {
             error!("write_sample: {err}");
             assert!(false);
             return Err(err.into());
         }
 
-        // waiting for track_remote for endpoint 1
-        let track_remote = match tracks[1 - index].1.recv().await {
-            Some(track_remote) => track_remote,
-            None => {
-                assert!(false);
-                return Err(Error::Other("track remote rx close".to_string()).into());
-            }
-        };
-
-        match track_remote.read_rtp().await {
-            Ok((recv_rtp_packet, _)) => {
-                assert_eq!(
-                    send_rtp_packet.header.sequence_number,
-                    recv_rtp_packet.header.sequence_number
-                );
-                assert_eq!(send_rtp_packet.payload, recv_rtp_packet.payload);
-            }
-            Err(err) => {
-                error!("read_rtp error {:?}", err);
-                assert!(false);
-                return Err(err.into());
-            }
-        }
-
-        tracks[1 - index].2 = Some(track_remote);
-    }
-
-    // Verify track_local and track_remote match
-    for sequence_number in 1..100 {
-        send_rtp_packet.header.sequence_number = sequence_number;
-        for index in 0..2 {
-            if let Err(err) = tracks[index].0.write_rtp(&send_rtp_packet).await {
-                error!("write_sample: {err}");
-                assert!(false);
-                return Err(err.into());
+        for &other_endpoint_id in endpoint_ids.iter() {
+            if other_endpoint_id == endpoint_id {
+                continue;
             }
 
-            match tracks[1 - index].2.as_mut().unwrap().read_rtp().await {
+            // waiting for track_remote for other endpoint id
+            let track_remote = match tracks[other_endpoint_id].1.recv().await {
+                Some(track_remote) => track_remote,
+                None => {
+                    assert!(false);
+                    return Err(Error::Other("track remote rx close".to_string()).into());
+                }
+            };
+
+            match track_remote.read_rtp().await {
                 Ok((recv_rtp_packet, _)) => {
                     assert_eq!(
                         send_rtp_packet.header.sequence_number,
@@ -393,6 +397,46 @@ async fn test_rtp_bi_direction_sendrecv() -> anyhow::Result<()> {
                     return Err(err.into());
                 }
             }
+
+            tracks[other_endpoint_id].2 = Some(track_remote);
+        }
+    }
+
+    // Verify track_local and track_remote match
+    for sequence_number in 1..100 {
+        send_rtp_packet.header.sequence_number = sequence_number;
+        for &endpoint_id in endpoint_ids.iter() {
+            if let Err(err) = tracks[endpoint_id].0.write_rtp(&send_rtp_packet).await {
+                error!("write_sample: {err}");
+                assert!(false);
+                return Err(err.into());
+            }
+
+            for &other_endpoint_id in endpoint_ids.iter() {
+                if other_endpoint_id == endpoint_id {
+                    continue;
+                }
+                match tracks[other_endpoint_id]
+                    .2
+                    .as_mut()
+                    .unwrap()
+                    .read_rtp()
+                    .await
+                {
+                    Ok((recv_rtp_packet, _)) => {
+                        assert_eq!(
+                            send_rtp_packet.header.sequence_number,
+                            recv_rtp_packet.header.sequence_number
+                        );
+                        assert_eq!(send_rtp_packet.payload, recv_rtp_packet.payload);
+                    }
+                    Err(err) => {
+                        error!("read_rtp error {:?}", err);
+                        assert!(false);
+                        return Err(err.into());
+                    }
+                }
+            }
         }
     }
 
@@ -404,5 +448,20 @@ async fn test_rtp_bi_direction_sendrecv() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_rtp_2p_bi_direction_sendrecv() -> anyhow::Result<()> {
+    let endpoint_count: usize = 2;
+    test_rtp_bi_direction_sendrecv(endpoint_count).await?;
+    Ok(())
+}
+
+#[ignore]
+#[tokio::test]
+async fn test_rtp_3p_bi_direction_sendrecv() -> anyhow::Result<()> {
+    let endpoint_count: usize = 3;
+    test_rtp_bi_direction_sendrecv(endpoint_count).await?;
     Ok(())
 }
