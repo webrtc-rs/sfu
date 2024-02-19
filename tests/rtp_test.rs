@@ -299,7 +299,7 @@ async fn test_rtp_bi_direction_sendrecv(endpoint_count: usize) -> anyhow::Result
             }
         };
 
-        tracks.push((track_local, track_remote_rx, None));
+        tracks.push((track_local, track_remote_rx));
 
         match common::renegotiate(
             HOST,
@@ -362,6 +362,15 @@ async fn test_rtp_bi_direction_sendrecv(endpoint_count: usize) -> anyhow::Result
         payload: Bytes::from_static(&[0x98, 0x36, 0xbe, 0x88, 0x9e]),
     };
 
+    let mut track_remotes = vec![];
+    for _ in endpoint_ids.iter() {
+        let mut track_remote = vec![];
+        for _ in endpoint_ids.iter() {
+            track_remote.push(None);
+        }
+        track_remotes.push(track_remote);
+    }
+
     for &endpoint_id in endpoint_ids.iter() {
         if let Err(err) = tracks[endpoint_id].0.write_rtp(&send_rtp_packet).await {
             error!("write_sample: {err}");
@@ -398,7 +407,7 @@ async fn test_rtp_bi_direction_sendrecv(endpoint_count: usize) -> anyhow::Result
                 }
             }
 
-            tracks[other_endpoint_id].2 = Some(track_remote);
+            track_remotes[other_endpoint_id][endpoint_id] = Some(track_remote);
         }
     }
 
@@ -416,9 +425,8 @@ async fn test_rtp_bi_direction_sendrecv(endpoint_count: usize) -> anyhow::Result
                 if other_endpoint_id == endpoint_id {
                     continue;
                 }
-                match tracks[other_endpoint_id]
-                    .2
-                    .as_mut()
+                match track_remotes[other_endpoint_id][endpoint_id]
+                    .as_ref()
                     .unwrap()
                     .read_rtp()
                     .await
@@ -458,7 +466,6 @@ async fn test_rtp_2p_bi_direction_sendrecv() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[ignore]
 #[tokio::test]
 async fn test_rtp_3p_bi_direction_sendrecv() -> anyhow::Result<()> {
     let endpoint_count: usize = 3;
