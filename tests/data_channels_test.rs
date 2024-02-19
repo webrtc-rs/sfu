@@ -20,7 +20,7 @@ async fn test_data_channel() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let (endpoint_id, peer_connection) = match common::setup_peer_connection(config).await {
+    let (endpoint_id, peer_connection) = match common::setup_peer_connection(config, 0).await {
         Ok(ok) => ok,
         Err(err) => {
             error!("error: {}", err);
@@ -58,14 +58,18 @@ async fn test_data_channels() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let peer_connections =
-        match common::setup_peer_connections(vec![config.clone(), config.clone(), config]).await {
-            Ok(ok) => ok,
-            Err(err) => {
-                error!("{}: error {}", session_id, err);
-                return Err(err.into());
-            }
-        };
+    let peer_connections = match common::setup_peer_connections(
+        vec![config.clone(), config.clone(), config],
+        vec![0, 1, 2],
+    )
+    .await
+    {
+        Ok(ok) => ok,
+        Err(err) => {
+            error!("{}: error {}", session_id, err);
+            return Err(err.into());
+        }
+    };
 
     for (endpoint_id, peer_connection) in peer_connections.iter() {
         match common::connect(HOST, SIGNAL_PORT, session_id, *endpoint_id, peer_connection).await {

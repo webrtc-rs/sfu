@@ -608,9 +608,8 @@ pub(crate) fn get_msid(media: &MediaDescription) -> Option<MediaStreamId> {
     None
 }
 
-pub(crate) fn get_ssrc_groups(media: &MediaDescription) -> Result<(Vec<SsrcGroup>, HashSet<SSRC>)> {
+pub(crate) fn get_ssrc_groups(media: &MediaDescription) -> Result<Vec<SsrcGroup>> {
     let mut ssrc_groups = vec![];
-    let mut ssrc_set = HashSet::new();
 
     for a in &media.attributes {
         if a.key == "ssrc-group" {
@@ -621,7 +620,6 @@ pub(crate) fn get_ssrc_groups(media: &MediaDescription) -> Result<(Vec<SsrcGroup
                     for field in fields.iter().skip(1) {
                         let ssrc = field.parse::<u32>()?;
                         ssrcs.push(ssrc);
-                        ssrc_set.insert(ssrc);
                     }
                     ssrc_groups.push(SsrcGroup {
                         name: fields[0].to_string(),
@@ -632,7 +630,23 @@ pub(crate) fn get_ssrc_groups(media: &MediaDescription) -> Result<(Vec<SsrcGroup
         }
     }
 
-    Ok((ssrc_groups, ssrc_set))
+    Ok(ssrc_groups)
+}
+
+pub(crate) fn get_ssrcs(media: &MediaDescription) -> Result<HashSet<SSRC>> {
+    let mut ssrc_set = HashSet::new();
+    for a in &media.attributes {
+        if a.key == "ssrc" {
+            if let Some(value) = a.value.as_ref() {
+                let fields: Vec<&str> = value.split_whitespace().collect();
+                if fields.len() >= 1 {
+                    let ssrc = fields[0].parse::<u32>()?;
+                    ssrc_set.insert(ssrc);
+                }
+            }
+        }
+    }
+    Ok(ssrc_set)
 }
 
 pub(crate) fn extract_fingerprint(desc: &SessionDescription) -> Result<(String, String)> {

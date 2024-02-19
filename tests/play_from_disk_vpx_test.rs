@@ -2,6 +2,7 @@ use crate::common::{HOST, SIGNAL_PORT};
 use log::{error, info};
 use rand::random;
 use sfu::SessionId;
+//use shared::error::Error;
 use webrtc::api::media_engine::MIME_TYPE_VP8;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
@@ -23,14 +24,14 @@ async fn test_play_from_disk_vpx_1to1() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let peer_connections = match common::setup_peer_connections(vec![config.clone(), config]).await
-    {
-        Ok(ok) => ok,
-        Err(err) => {
-            error!("{}: error {}", session_id, err);
-            return Err(err.into());
-        }
-    };
+    let peer_connections =
+        match common::setup_peer_connections(vec![config.clone(), config], vec![0, 1]).await {
+            Ok(ok) => ok,
+            Err(err) => {
+                error!("{}: error {}", session_id, err);
+                return Err(err.into());
+            }
+        };
 
     let mut data_channels = vec![];
     for (endpoint_id, peer_connection) in peer_connections.iter() {
@@ -47,7 +48,7 @@ async fn test_play_from_disk_vpx_1to1() -> anyhow::Result<()> {
         data_channels.push((data_channel_tx, data_channel_rx));
     }
 
-    let rtp_transceiver = match common::add_track(
+    let (rtp_sender, _track_local) = match common::add_track(
         &peer_connections[0].1,
         MIME_TYPE_VP8,
         "video_track",
@@ -66,12 +67,19 @@ async fn test_play_from_disk_vpx_1to1() -> anyhow::Result<()> {
     // Before these packets are returned they are processed by interceptors. For things
     // like NACK this needs to be called.
     tokio::spawn(async move {
-        let rtp_sender = rtp_transceiver.sender().await;
         while let Ok((rtcp_packets, _)) = rtp_sender.read_rtcp().await {
             info!("received RTCP packets {:?}", rtcp_packets);
             //TODO: check RTCP report and handle cancel
         }
     });
+
+    let _track_remote_rx = match common::on_track(&peer_connections[1].1).await {
+        Ok(ok) => ok,
+        Err(err) => {
+            error!("{}/{}: error {}", session_id, peer_connections[1].0, err);
+            return Err(err.into());
+        }
+    };
 
     match common::renegotiate(
         HOST,
@@ -105,6 +113,17 @@ async fn test_play_from_disk_vpx_1to1() -> anyhow::Result<()> {
     } else {
         assert!(false);
     }
+
+    // waiting for track_remote for endpoint 1
+    /*let _track_remote = match track_remote_rx.recv().await {
+        Some(track_remote) => track_remote,
+        None => {
+            assert!(false);
+            return Err(Error::Other("track remote rx close".to_string()).into());
+        }
+    };*/
+
+    // Verify track_local and track_remote match
 
     match common::teardown_peer_connections(peer_connections).await {
         Ok(ok) => ok,

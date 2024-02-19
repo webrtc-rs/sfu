@@ -10,7 +10,7 @@ pub(crate) mod config;
 
 use crate::description::{
     codecs_from_media_description, get_cname, get_mid_value, get_msid, get_peer_direction,
-    get_rids, get_ssrc_groups, populate_sdp, rtp_extensions_from_media_description,
+    get_rids, get_ssrc_groups, get_ssrcs, populate_sdp, rtp_extensions_from_media_description,
     update_sdp_origin, MediaSection, RTCSessionDescription, MEDIA_SECTION_APPLICATION,
 };
 use crate::description::{
@@ -155,7 +155,8 @@ impl Session {
                 if !has_mid_value {
                     let cname = get_cname(media);
                     let msid = get_msid(media);
-                    let (ssrc_groups, ssrcs) = get_ssrc_groups(media)?;
+                    let ssrc_groups = get_ssrc_groups(media)?;
+                    let ssrcs = get_ssrcs(media)?;
                     let codecs = codecs_from_media_description(media)?;
                     let header_extensions = rtp_extensions_from_media_description(media)?;
                     let rtp_params = RTCRtpParameters {

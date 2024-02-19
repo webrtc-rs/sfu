@@ -4,7 +4,6 @@ use anyhow::Result;
 use hyper::{Body, Client, Method, Request};
 use log::LevelFilter::Debug;
 use log::{error, info};
-use rand::random;
 use sfu::{EndpointId, SessionId};
 use std::io::Write;
 use std::sync::Arc;
@@ -24,10 +23,12 @@ use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
-use webrtc::rtp_transceiver::{RTCRtpTransceiver, RTCRtpTransceiverInit};
+use webrtc::rtp_transceiver::RTCRtpTransceiverInit;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
+use webrtc::track::track_remote::TrackRemote;
 
 pub const HOST: &'static str = "127.0.0.1";
 pub const SIGNAL_PORT: u16 = 8080;
@@ -39,6 +40,7 @@ fn pretty_sdp(input: &str) -> String {
 
 pub async fn setup_peer_connection(
     config: RTCConfiguration,
+    endpoint_id: EndpointId,
 ) -> Result<(EndpointId, Arc<RTCPeerConnection>)> {
     let _ = env_logger::Builder::new()
         .format(|buf, record| {
@@ -54,8 +56,6 @@ pub async fn setup_peer_connection(
         })
         .filter(None, Debug)
         .try_init();
-
-    let endpoint_id = random::<u64>();
 
     // some setup code, like creating required files/directories, starting
     // servers, etc.
@@ -106,11 +106,12 @@ pub async fn setup_peer_connection(
 
 pub async fn setup_peer_connections(
     configs: Vec<RTCConfiguration>,
+    endpoint_ids: Vec<EndpointId>,
 ) -> Result<Vec<(EndpointId, Arc<RTCPeerConnection>)>> {
     let mut peer_connections = Vec::with_capacity(configs.len());
 
-    for config in configs {
-        let (endpoint_id, peer_connection) = setup_peer_connection(config).await?;
+    for (config, endpoint_id) in configs.into_iter().zip(endpoint_ids) {
+        let (endpoint_id, peer_connection) = setup_peer_connection(config, endpoint_id).await?;
         peer_connections.push((endpoint_id, peer_connection));
     }
 
@@ -276,6 +277,14 @@ pub async fn connect(
                         endpoint_id,
                         pretty_sdp(&answer_str)
                     );
+
+                    // Sets the LocalDescription, and starts our UDP listeners
+                    if let Err(err) = pc.set_local_description(answer).await {
+                        error!("create_answer error {:?}", err);
+                        assert!(false);
+                        return;
+                    }
+
                     if let Err(err) = dc.send_text(answer_str).await {
                         error!("data channel send answer error {:?}", err);
                         assert!(false);
@@ -340,7 +349,7 @@ pub async fn add_track(
     mime_type: &str,
     track_id: &str,
     direction: RTCRtpTransceiverDirection,
-) -> Result<Arc<RTCRtpTransceiver>> {
+) -> Result<(Arc<RTCRtpSender>, Arc<TrackLocalStaticSample>)> {
     // Create a video track
     let track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
@@ -362,5 +371,22 @@ pub async fn add_track(
         )
         .await?;
 
-    Ok(rtp_transceiver)
+    Ok((rtp_transceiver.sender().await, track))
+}
+
+pub async fn on_track(
+    peer_connection: &Arc<RTCPeerConnection>,
+) -> Result<UnboundedReceiver<Arc<TrackRemote>>> {
+    let (track_tx, track_rx) = tokio::sync::mpsc::unbounded_channel::<Arc<TrackRemote>>();
+    peer_connection.on_track(Box::new(move |track, _, _| {
+        let tx = track_tx.clone();
+        Box::pin(async move {
+            if let Err(err) = tx.send(track) {
+                error!("track_tx send error {}", err);
+                assert!(false);
+            }
+        })
+    }));
+
+    Ok(track_rx)
 }
