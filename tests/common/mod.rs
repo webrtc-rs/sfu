@@ -7,7 +7,6 @@ use log::{error, info};
 use sfu::{EndpointId, SessionId};
 use std::io::Write;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Notify;
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -26,13 +25,12 @@ use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use webrtc::rtp_transceiver::RTCRtpTransceiverInit;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_remote::TrackRemote;
 
 pub const HOST: &'static str = "127.0.0.1";
 pub const SIGNAL_PORT: u16 = 8080;
-pub const OGG_PAGE_DURATION: Duration = Duration::from_millis(20);
 
 fn pretty_sdp(input: &str) -> String {
     input.replace("\\r\\n", "\n")
@@ -349,9 +347,9 @@ pub async fn add_track(
     mime_type: &str,
     track_id: &str,
     direction: RTCRtpTransceiverDirection,
-) -> Result<(Arc<RTCRtpSender>, Arc<TrackLocalStaticSample>)> {
+) -> Result<(Arc<RTCRtpSender>, Arc<TrackLocalStaticRTP>)> {
     // Create a video track
-    let track = Arc::new(TrackLocalStaticSample::new(
+    let track = Arc::new(TrackLocalStaticRTP::new(
         RTCRtpCodecCapability {
             mime_type: mime_type.to_owned(),
             ..Default::default()
