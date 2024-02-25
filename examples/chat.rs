@@ -49,7 +49,7 @@ pub fn main() {
 
     // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
     // server socket. Clients are identified via their respective remote (UDP) socket address.
-    let socket = UdpSocket::bind(format!("{host_addr}:0")).expect("binding a random UDP port");
+    let socket = UdpSocket::bind(format!("{host_addr}:3478")).expect("binding a random UDP port");
     let addr = socket.local_addr().expect("a local socket adddress");
     info!("Bound UDP port: {}", addr);
 
