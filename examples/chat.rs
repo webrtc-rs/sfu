@@ -1,73 +1,26 @@
-use crate::signal::SignalingServer;
-use async_broadcast::broadcast;
-use clap::Parser;
-use log::{debug, info, warn};
-use std::collections::{HashMap, VecDeque};
+#[macro_use]
+extern crate tracing;
+
+use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::Deref;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Weak};
+use std::thread;
 use std::time::{Duration, Instant};
-use waitgroup::WaitGroup;
 
-use retty::executor::LocalExecutorBuilder;
+use rouille::Server;
+use rouille::{Request, Response};
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::{ChannelData, ChannelId};
 use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
 use str0m::media::{KeyframeRequestKind, MediaKind};
 use str0m::net::Protocol;
-use str0m::{net::Receive, Event, IceConnectionState, Input, Output, Rtc, RtcError};
+use str0m::{net::Receive, Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcError};
 
-mod signal;
-
-extern crate num_cpus;
-
-#[derive(Default, Debug, Copy, Clone, clap::ValueEnum)]
-enum Level {
-    Error,
-    Warn,
-    #[default]
-    Info,
-    Debug,
-    Trace,
-}
-
-impl From<Level> for log::LevelFilter {
-    fn from(level: Level) -> Self {
-        match level {
-            Level::Error => log::LevelFilter::Error,
-            Level::Warn => log::LevelFilter::Warn,
-            Level::Info => log::LevelFilter::Info,
-            Level::Debug => log::LevelFilter::Debug,
-            Level::Trace => log::LevelFilter::Trace,
-        }
-    }
-}
-
-#[derive(Parser)]
-#[command(name = "SFU Server")]
-#[command(author = "Rusty Rain <y@ngr.tc>")]
-#[command(version = "0.1.0")]
-#[command(about = "An example of SFU Server", long_about = None)]
-struct Cli {
-    #[arg(long, default_value_t = format!("127.0.0.1"))]
-    host: String,
-    #[arg(short, long, default_value_t = 8080)]
-    signal_port: u16,
-    #[arg(long, default_value_t = 3478)]
-    media_port_min: u16,
-    #[arg(long, default_value_t = 3495)]
-    media_port_max: u16,
-
-    #[arg(short, long)]
-    debug: bool,
-    #[arg(short, long, default_value_t = Level::Info)]
-    #[clap(value_enum)]
-    level: Level,
-}
+mod util;
 
 fn init_log() {
     use std::env;
@@ -83,79 +36,80 @@ fn init_log() {
         .init();
 }
 
-fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
+pub fn main() {
     init_log();
 
-    println!(
-        "listening {}:{}(signal)/[{}-{}](media)...",
-        cli.host, cli.signal_port, cli.media_port_min, cli.media_port_max
-    );
+    let certificate = include_bytes!("cer.pem").to_vec();
+    let private_key = include_bytes!("key.pem").to_vec();
 
-    let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
-    let (stop_tx, mut stop_rx) = broadcast::<()>(1);
-    let mut media_port_thread_map = HashMap::new();
+    // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
+    let host_addr = util::select_host_address();
 
-    //let core_num = num_cpus::get();
-    let wait_group = WaitGroup::new();
+    let (tx, rx) = mpsc::sync_channel(1);
 
-    for port in media_ports {
-        //let worker = wait_group.worker();
-        let host = cli.host.clone();
-        //let mut stop_rx = stop_rx.clone();
-        let (signaling_tx, signaling_rx) = mpsc::sync_channel(1);
-        media_port_thread_map.insert(port, signaling_tx);
+    // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
+    // server socket. Clients are identified via their respective remote (UDP) socket address.
+    let socket = UdpSocket::bind(format!("{host_addr}:0")).expect("binding a random UDP port");
+    let addr = socket.local_addr().expect("a local socket adddress");
+    info!("Bound UDP port: {}", addr);
 
-        // The run loop is on a separate thread to the web server.
-        std::thread::spawn(move || run(host, port, signaling_rx));
+    // The run loop is on a separate thread to the web server.
+    thread::spawn(move || run(socket, rx));
+
+    let server = Server::new_ssl(
+        "0.0.0.0:3000",
+        move |request| web_request(request, addr, tx.clone()),
+        certificate,
+        private_key,
+    )
+    .expect("starting the web server");
+
+    let port = server.server_addr().port();
+    info!("Connect a browser to https://{:?}:{:?}", addr.ip(), port);
+
+    server.run();
+}
+
+// Handle a web request.
+fn web_request(request: &Request, addr: SocketAddr, tx: SyncSender<Rtc>) -> Response {
+    if request.method() == "GET" {
+        return Response::html(include_str!("chat.html"));
     }
 
-    let signaling_addr = SocketAddr::from_str(&format!("{}:{}", cli.host, cli.signal_port))?;
-    let signaling_stop_rx = stop_rx.clone();
-    let signaling_handle = std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .enable_time()
-            .build()
-            .unwrap();
+    // Expected POST SDP Offers.
+    let mut data = request.data().expect("body to be available");
 
-        rt.block_on(async {
-            let signaling_server = SignalingServer::new(signaling_addr, media_port_thread_map);
-            let mut done_rx = signaling_server.run(signaling_stop_rx).await;
-            let _ = done_rx.recv().await;
-            wait_group.wait().await;
-            info!("signaling server is gracefully down");
-        })
-    });
+    let offer: SdpOffer = serde_json::from_reader(&mut data).expect("serialized offer");
+    let mut rtc = Rtc::builder()
+        // Uncomment this to see statistics
+        // .set_stats_interval(Some(Duration::from_secs(1)))
+        // .set_ice_lite(true)
+        .build();
 
-    LocalExecutorBuilder::default().run(async move {
-        println!("Press Ctrl-C to stop");
-        std::thread::spawn(move || {
-            let mut stop_tx = Some(stop_tx);
-            ctrlc::set_handler(move || {
-                if let Some(stop_tx) = stop_tx.take() {
-                    let _ = stop_tx.try_broadcast(());
-                }
-            })
-            .expect("Error setting Ctrl-C handler");
-        });
-        let _ = stop_rx.recv().await;
-        println!("Wait for Signaling Sever and Media Server Gracefully Shutdown...");
-    });
+    // Add the shared UDP socket as a host candidate
+    let candidate = Candidate::host(addr, "udp").expect("a host candidate");
+    rtc.add_local_candidate(candidate);
 
-    let _ = signaling_handle.join();
+    // Create an SDP Answer.
+    let answer = rtc
+        .sdp_api()
+        .accept_offer(offer)
+        .expect("offer to be accepted");
 
-    Ok(())
+    // The Rtc instance is shipped off to the main run loop.
+    tx.send(rtc).expect("to send Rtc instance");
+
+    let body = serde_json::to_vec(&answer).expect("answer to serialize");
+
+    Response::from_data("application/json", body)
 }
 
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.
-fn run(host: String, port: u16, rx: Receiver<Rtc>) -> Result<(), RtcError> {
+fn run(socket: UdpSocket, rx: Receiver<Rtc>) -> Result<(), RtcError> {
     let mut clients: Vec<Client> = vec![];
     let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
     let mut buf = vec![0; 2000];
-    let socket = UdpSocket::bind(format!("{host}:{port}")).expect("binding a random UDP port");
 
     loop {
         // Clean out disconnected clients
