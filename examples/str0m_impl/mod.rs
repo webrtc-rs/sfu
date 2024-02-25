@@ -10,6 +10,8 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use crate::sfu_impl::SignalingMessage;
+
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::{ChannelData, ChannelId};
 use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
@@ -21,7 +23,15 @@ use str0m::{net::Receive, Candidate, Event, IceConnectionState, Input, Output, R
 pub fn web_request(
     request: &Request,
     host: &str,
-    media_port_thread_map: Arc<HashMap<u16, SyncSender<Rtc>>>,
+    media_port_thread_map: Arc<
+        HashMap<
+            u16,
+            (
+                Option<SyncSender<Rtc>>,
+                Option<SyncSender<SignalingMessage>>,
+            ),
+        >,
+    >,
 ) -> Response {
     if request.method() == "GET" {
         return Response::html(include_str!("../chat.html"));
@@ -32,7 +42,7 @@ pub fn web_request(
     sorted_ports.sort();
     assert!(!sorted_ports.is_empty());
     let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
-    let tx = media_port_thread_map.get(&port).unwrap();
+    let (tx, _) = media_port_thread_map.get(&port).unwrap();
 
     // Expected POST SDP Offers.
     let mut data = request.data().expect("body to be available");
@@ -59,7 +69,9 @@ pub fn web_request(
         .expect("offer to be accepted");
 
     // The Rtc instance is shipped off to the main run loop.
-    tx.send(rtc).expect("to send Rtc instance");
+    if let Some(tx) = tx {
+        tx.send(rtc).expect("to send Rtc instance");
+    }
 
     let body = serde_json::to_vec(&answer).expect("answer to serialize");
 

@@ -39,26 +39,22 @@ data = { path = "rtc/data" }
 
 [dev-dependencies]
 webrtc = { path = "webrtc/webrtc" }
-futures = "0.3.30"
-smol = "2.0.0"
-tokio = { version = "1.36.0", features = ["full"] }
-tokio-util = "0.7.10"
-hyper = { version = "0.14.28", features = ["full"] }
-chrono = "0.4.31"
-env_logger = "0.10.1"
 clap = { version = "4.4.12", features = ["derive"] }
 anyhow = "1.0.78"
-ctrlc = "3.4.2"
-async-broadcast = "0.6.0"
 waitgroup = "0.1.2"
 thiserror = "1.0.53"
-core_affinity = "0.8.1"
-num_cpus = "1.16.0"
 
 str0m = { path = "str0m" }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std"] }
 tracing = "0.1.37"
 rouille = { version = "3.6.2", features = ["ssl"] }
+
+# tests
+tokio = { version = "1.36.0", features = ["full"] }
+tokio-util = "0.7.10"
+hyper = { version = "0.14.28", features = ["full"] }
+chrono = "0.4.31"
+env_logger = "0.10.1"
 
 [[example]]
 name = "chat"

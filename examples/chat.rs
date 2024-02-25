@@ -76,18 +76,19 @@ pub fn main() {
         let host = cli.host.clone();
         //let mut stop_rx = stop_rx.clone();
         let (signaling_tx, signaling_rx) = mpsc::sync_channel(1);
+        let (signaling_msg_tx, signaling_msg_rx) = mpsc::sync_channel(1);
 
         // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
         // server socket. Clients are identified via their respective remote (UDP) socket address.
         let socket =
             UdpSocket::bind(format!("{host}:{port}")).expect(&format!("binding to {host}:{port}"));
 
-        media_port_thread_map.insert(port, signaling_tx);
-
         if cli.sfu_impl {
+            media_port_thread_map.insert(port, (None, Some(signaling_msg_tx)));
             // The run loop is on a separate thread to the web server.
-            std::thread::spawn(move || run_sfu(socket, signaling_rx));
+            std::thread::spawn(move || run_sfu(socket, signaling_msg_rx));
         } else {
+            media_port_thread_map.insert(port, (Some(signaling_tx), None));
             // The run loop is on a separate thread to the web server.
             std::thread::spawn(move || run_str0m(socket, signaling_rx));
         }
