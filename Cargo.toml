@@ -36,6 +36,7 @@ srtp = { path = "rtc/srtp" }
 dtls = { path = "rtc/dtls" }
 sctp = { path = "rtc/sctp" }
 data = { path = "rtc/data" }
+futures = "0.3.30"
 
 [dev-dependencies]
 webrtc = { path = "webrtc/webrtc" }

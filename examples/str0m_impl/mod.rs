@@ -20,7 +20,7 @@ use str0m::net::Protocol;
 use str0m::{net::Receive, Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcError};
 
 // Handle a web request.
-pub fn web_request(
+pub fn web_request_str0m(
     request: &Request,
     host: &str,
     media_port_thread_map: Arc<

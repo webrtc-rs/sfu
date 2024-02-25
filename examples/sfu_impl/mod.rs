@@ -1,10 +1,93 @@
+#![allow(dead_code)]
+
 use bytes::Bytes;
+use rouille::{Request, Response, ResponseBody};
 use sfu::{RTCSessionDescription, ServerStates};
 use std::cell::RefCell;
-use std::io::{Error, ErrorKind};
+use std::collections::HashMap;
+use std::io::{Error, ErrorKind, Read};
 use std::net::UdpSocket;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::{mpsc, Arc};
+
+// Handle a web request.
+pub fn web_request_sfu(
+    request: &Request,
+    _host: &str,
+    media_port_thread_map: Arc<
+        HashMap<
+            u16,
+            (
+                Option<SyncSender<str0m::Rtc>>,
+                Option<SyncSender<SignalingMessage>>,
+            ),
+        >,
+    >,
+) -> Response {
+    if request.method() == "GET" {
+        return Response::html(include_str!("../chat.html"));
+    }
+
+    // "/offer/433774451/456773342" or "/leave/433774451/456773342"
+    let path: Vec<String> = request.url().split('/').map(|s| s.to_owned()).collect();
+    if path.len() != 4 || path[2].parse::<u64>().is_err() || path[3].parse::<u64>().is_err() {
+        return Response::empty_400();
+    }
+
+    let session_id = path[2].parse::<u64>().unwrap();
+    let mut sorted_ports: Vec<u16> = media_port_thread_map.keys().map(|x| *x).collect();
+    sorted_ports.sort();
+    assert!(!sorted_ports.is_empty());
+    let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
+    let (_, tx) = media_port_thread_map.get(&port).unwrap();
+
+    // Expected POST SDP Offers.
+    let mut offer_sdp = vec![];
+    request
+        .data()
+        .expect("body to be available")
+        .read_to_end(&mut offer_sdp)
+        .unwrap();
+
+    // The Rtc instance is shipped off to the main run loop.
+    if let Some(tx) = tx {
+        let endpoint_id = path[3].parse::<u64>().unwrap();
+        if path[1] == "offer" {
+            let (response_tx, response_rx) = mpsc::sync_channel(1);
+
+            tx.send(SignalingMessage {
+                request: SignalingProtocolMessage::Offer {
+                    session_id,
+                    endpoint_id,
+                    offer_sdp: Bytes::from(offer_sdp),
+                },
+                response_tx,
+            })
+            .expect("to send SignalingMessage instance");
+
+            let response = response_rx.recv().expect("receive answer offer");
+            match response {
+                SignalingProtocolMessage::Answer {
+                    session_id: _,
+                    endpoint_id: _,
+                    answer_sdp,
+                } => Response::from_data("application/json", answer_sdp),
+                _ => Response::empty_404(),
+            }
+        } else {
+            // leave
+            Response {
+                status_code: 200,
+                headers: vec![],
+                data: ResponseBody::empty(),
+                upgrade: None,
+            }
+        }
+    } else {
+        Response::empty_406()
+    }
+}
 
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.

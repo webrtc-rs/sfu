@@ -100,9 +100,16 @@ pub fn main() {
 
     let host = cli.host.clone();
     let signal_port = cli.signal_port;
+    let use_sfu_impl = cli.sfu_impl;
     let server = Server::new_ssl(
         format!("{host}:{signal_port}"),
-        move |request| web_request(request, &host, media_port_thread_map.clone()),
+        move |request| {
+            if use_sfu_impl {
+                web_request_sfu(request, &host, media_port_thread_map.clone())
+            } else {
+                web_request_str0m(request, &host, media_port_thread_map.clone())
+            }
+        },
         certificate,
         private_key,
     )
