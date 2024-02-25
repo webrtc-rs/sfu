@@ -1,14 +1,14 @@
 #[macro_use]
 extern crate tracing;
 
-use std::collections::VecDeque;
+use clap::Parser;
+use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Weak};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use rouille::Server;
@@ -21,6 +21,50 @@ use str0m::net::Protocol;
 use str0m::{net::Receive, Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcError};
 
 mod util;
+
+#[derive(Default, Debug, Copy, Clone, clap::ValueEnum)]
+enum Level {
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+
+impl From<Level> for log::LevelFilter {
+    fn from(level: Level) -> Self {
+        match level {
+            Level::Error => log::LevelFilter::Error,
+            Level::Warn => log::LevelFilter::Warn,
+            Level::Info => log::LevelFilter::Info,
+            Level::Debug => log::LevelFilter::Debug,
+            Level::Trace => log::LevelFilter::Trace,
+        }
+    }
+}
+
+#[derive(Parser)]
+#[command(name = "SFU Server")]
+#[command(author = "Rusty Rain <y@ngr.tc>")]
+#[command(version = "0.1.0")]
+#[command(about = "An example of SFU Server", long_about = None)]
+struct Cli {
+    #[arg(long, default_value_t = format!("127.0.0.1"))]
+    host: String,
+    #[arg(short, long, default_value_t = 8080)]
+    signal_port: u16,
+    #[arg(long, default_value_t = 3478)]
+    media_port_min: u16,
+    #[arg(long, default_value_t = 3495)]
+    media_port_max: u16,
+
+    #[arg(short, long)]
+    debug: bool,
+    #[arg(short, long, default_value_t = Level::Info)]
+    #[clap(value_enum)]
+    level: Level,
+}
 
 fn init_log() {
     use std::env;
@@ -37,6 +81,8 @@ fn init_log() {
 }
 
 pub fn main() {
+    let cli = Cli::parse();
+
     init_log();
 
     let certificate = include_bytes!("cer.pem").to_vec();
@@ -44,37 +90,62 @@ pub fn main() {
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = util::select_host_address();
+    let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
+    let mut media_port_thread_map = HashMap::new();
+    for port in media_ports {
+        //let worker = wait_group.worker();
+        //let host = cli.host.clone();
+        //let mut stop_rx = stop_rx.clone();
+        let (signaling_tx, signaling_rx) = mpsc::sync_channel(1);
+        //let (tx, rx) = mpsc::sync_channel(1);
 
-    let (tx, rx) = mpsc::sync_channel(1);
+        // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
+        // server socket. Clients are identified via their respective remote (UDP) socket address.
+        let socket = UdpSocket::bind(format!("{}:{}", host_addr.to_string(), port))
+            .expect("binding a random UDP port");
+        //let addr = socket.local_addr().expect("a local socket address");
+        //info!("Bound UDP port: {}", addr);
 
-    // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
-    // server socket. Clients are identified via their respective remote (UDP) socket address.
-    let socket = UdpSocket::bind(format!("{host_addr}:3478")).expect("binding a random UDP port");
-    let addr = socket.local_addr().expect("a local socket adddress");
-    info!("Bound UDP port: {}", addr);
+        media_port_thread_map.insert(port, signaling_tx);
+
+        // The run loop is on a separate thread to the web server.
+        std::thread::spawn(move || run(socket, signaling_rx));
+    }
 
     // The run loop is on a separate thread to the web server.
-    thread::spawn(move || run(socket, rx));
+    //thread::spawn(move || run(socket, rx));
+    let media_port_thread_map = Arc::new(media_port_thread_map);
 
     let server = Server::new_ssl(
         "0.0.0.0:3000",
-        move |request| web_request(request, addr, tx.clone()),
+        move |request| web_request(request, host_addr, media_port_thread_map.clone()),
         certificate,
         private_key,
     )
     .expect("starting the web server");
 
     let port = server.server_addr().port();
-    info!("Connect a browser to https://{:?}:{:?}", addr.ip(), port);
+    info!("Connect a browser to https://{:?}:{:?}", host_addr, port);
 
     server.run();
 }
 
 // Handle a web request.
-fn web_request(request: &Request, addr: SocketAddr, tx: SyncSender<Rtc>) -> Response {
+fn web_request(
+    request: &Request,
+    host_ip: IpAddr,
+    media_port_thread_map: Arc<HashMap<u16, SyncSender<Rtc>>>,
+) -> Response {
     if request.method() == "GET" {
         return Response::html(include_str!("chat.html"));
     }
+
+    let session_id = 0usize; //path[2].parse::<u64>().unwrap();
+    let mut sorted_ports: Vec<u16> = media_port_thread_map.keys().map(|x| *x).collect();
+    sorted_ports.sort();
+    assert!(!sorted_ports.is_empty());
+    let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
+    let tx = media_port_thread_map.get(&port).unwrap();
 
     // Expected POST SDP Offers.
     let mut data = request.data().expect("body to be available");
@@ -87,7 +158,8 @@ fn web_request(request: &Request, addr: SocketAddr, tx: SyncSender<Rtc>) -> Resp
         .build();
 
     // Add the shared UDP socket as a host candidate
-    let candidate = Candidate::host(addr, "udp").expect("a host candidate");
+    let candidate =
+        Candidate::host(SocketAddr::new(host_ip, port), "udp").expect("a host candidate");
     rtc.add_local_candidate(candidate);
 
     // Create an SDP Answer.
