@@ -1,10 +1,12 @@
-use std::collections::VecDeque;
+use rouille::{Request, Response};
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::io::ErrorKind;
-use std::net::UdpSocket;
+use std::net::{SocketAddr, UdpSocket};
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -13,7 +15,56 @@ use str0m::channel::{ChannelData, ChannelId};
 use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
 use str0m::media::{KeyframeRequestKind, MediaKind};
 use str0m::net::Protocol;
-use str0m::{net::Receive, Event, IceConnectionState, Input, Output, Rtc, RtcError};
+use str0m::{net::Receive, Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcError};
+
+// Handle a web request.
+pub fn web_request(
+    request: &Request,
+    host: &str,
+    media_port_thread_map: Arc<HashMap<u16, SyncSender<Rtc>>>,
+) -> Response {
+    if request.method() == "GET" {
+        return Response::html(include_str!("../chat.html"));
+    }
+
+    let session_id = 0usize; //path[2].parse::<u64>().unwrap();
+    let mut sorted_ports: Vec<u16> = media_port_thread_map.keys().map(|x| *x).collect();
+    sorted_ports.sort();
+    assert!(!sorted_ports.is_empty());
+    let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
+    let tx = media_port_thread_map.get(&port).unwrap();
+
+    // Expected POST SDP Offers.
+    let mut data = request.data().expect("body to be available");
+
+    let offer: SdpOffer = serde_json::from_reader(&mut data).expect("serialized offer");
+    let mut rtc = Rtc::builder()
+        // Uncomment this to see statistics
+        // .set_stats_interval(Some(Duration::from_secs(1)))
+        // .set_ice_lite(true)
+        .build();
+
+    // Add the shared UDP socket as a host candidate
+    let candidate = Candidate::host(
+        SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap(),
+        "udp",
+    )
+    .expect("a host candidate");
+    rtc.add_local_candidate(candidate);
+
+    // Create an SDP Answer.
+    let answer = rtc
+        .sdp_api()
+        .accept_offer(offer)
+        .expect("offer to be accepted");
+
+    // The Rtc instance is shipped off to the main run loop.
+    tx.send(rtc).expect("to send Rtc instance");
+
+    let body = serde_json::to_vec(&answer).expect("answer to serialize");
+
+    Response::from_data("application/json", body)
+}
 
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.

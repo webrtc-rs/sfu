@@ -2,16 +2,11 @@
 extern crate tracing;
 
 use clap::Parser;
-use std::collections::HashMap;
-use std::net::{SocketAddr, UdpSocket};
-use std::str::FromStr;
-use std::sync::mpsc::{self, SyncSender};
-use std::sync::Arc;
-
 use rouille::Server;
-use rouille::{Request, Response};
-use str0m::change::SdpOffer;
-use str0m::{Candidate, Rtc};
+use std::collections::HashMap;
+use std::net::UdpSocket;
+use std::sync::mpsc::{self};
+use std::sync::Arc;
 
 mod sfu_impl;
 mod str0m_impl;
@@ -130,53 +125,4 @@ fn init_log() {
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
-}
-
-// Handle a web request.
-fn web_request(
-    request: &Request,
-    host: &str,
-    media_port_thread_map: Arc<HashMap<u16, SyncSender<Rtc>>>,
-) -> Response {
-    if request.method() == "GET" {
-        return Response::html(include_str!("chat.html"));
-    }
-
-    let session_id = 0usize; //path[2].parse::<u64>().unwrap();
-    let mut sorted_ports: Vec<u16> = media_port_thread_map.keys().map(|x| *x).collect();
-    sorted_ports.sort();
-    assert!(!sorted_ports.is_empty());
-    let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
-    let tx = media_port_thread_map.get(&port).unwrap();
-
-    // Expected POST SDP Offers.
-    let mut data = request.data().expect("body to be available");
-
-    let offer: SdpOffer = serde_json::from_reader(&mut data).expect("serialized offer");
-    let mut rtc = Rtc::builder()
-        // Uncomment this to see statistics
-        // .set_stats_interval(Some(Duration::from_secs(1)))
-        // .set_ice_lite(true)
-        .build();
-
-    // Add the shared UDP socket as a host candidate
-    let candidate = Candidate::host(
-        SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap(),
-        "udp",
-    )
-    .expect("a host candidate");
-    rtc.add_local_candidate(candidate);
-
-    // Create an SDP Answer.
-    let answer = rtc
-        .sdp_api()
-        .accept_offer(offer)
-        .expect("offer to be accepted");
-
-    // The Rtc instance is shipped off to the main run loop.
-    tx.send(rtc).expect("to send Rtc instance");
-
-    let body = serde_json::to_vec(&answer).expect("answer to serialize");
-
-    Response::from_data("application/json", body)
 }
