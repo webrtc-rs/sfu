@@ -1,15 +1,24 @@
 #![allow(dead_code)]
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use dtls::config::HandshakeConfig;
+use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
+use retty::channel::{InboundPipeline, Pipeline};
+use retty::transport::{TaggedBytesMut, TransportContext};
 use rouille::{Request, Response, ResponseBody};
-use sfu::{RTCSessionDescription, ServerStates};
+use sfu::{
+    DataChannelHandler, DemuxerHandler, DtlsHandler, ExceptionHandler, GatewayHandler,
+    InterceptorHandler, RTCSessionDescription, SctpHandler, ServerConfig, ServerStates,
+    SrtpHandler, StunHandler,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind, Read};
-use std::net::UdpSocket;
+use std::net::{SocketAddr, UdpSocket};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 // Handle a web request.
 pub fn web_request_sfu(
@@ -91,66 +100,144 @@ pub fn web_request_sfu(
 
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.
-pub fn run_sfu(_socket: UdpSocket, _rx: Receiver<SignalingMessage>) -> anyhow::Result<()> {
-    //let mut clients: Vec<Client> = vec![];
-    //let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
-    //let mut buf = vec![0; 2000];
+pub fn run_sfu(
+    socket: UdpSocket,
+    rx: Receiver<SignalingMessage>,
+    server_config: Arc<ServerConfig>,
+) -> anyhow::Result<()> {
+    let dtls_handshake_config = dtls::config::ConfigBuilder::default()
+        .with_certificates(
+            server_config
+                .certificates
+                .iter()
+                .map(|c| c.dtls_certificate.clone())
+                .collect(),
+        )
+        .with_srtp_protection_profiles(vec![SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80])
+        .with_extended_master_secret(dtls::config::ExtendedMasterSecretType::Require)
+        .build(false, None)?;
+    let sctp_endpoint_config = sctp::EndpointConfig::default();
 
-    /*loop {
-        // Clean out disconnected clients
-        clients.retain(|c| c.rtc.is_alive());
+    let server_states = Rc::new(RefCell::new(ServerStates::new(
+        server_config,
+        socket.local_addr()?,
+    )?));
 
-        // Spawn new incoming clients from the web server thread.
-        if let Some(mut client) = spawn_new_client(&rx) {
-            // Add incoming tracks present in other already connected clients.
-            for track in clients.iter().flat_map(|c| c.tracks_in.iter()) {
-                let weak = Arc::downgrade(&track.id);
-                client.handle_track_open(weak);
+    info!("listening {}...", socket.local_addr()?);
+
+    let pipeline = build_pipeline(
+        socket.local_addr()?,
+        server_states.clone(),
+        dtls_handshake_config,
+        sctp_endpoint_config,
+    );
+
+    let mut buf = vec![0; 2000];
+
+    loop {
+        // Spawn new incoming signal message from the signaling server thread.
+        if let Ok(signal_message) = rx.try_recv() {
+            if let Err(err) = handle_signaling_message(&server_states, signal_message) {
+                error!("handle_signaling_message got error:{}", err);
+                continue;
             }
-
-            clients.push(client);
         }
 
         // Poll clients until they return timeout
-        let mut timeout = Instant::now() + Duration::from_millis(100);
-        for client in clients.iter_mut() {
-            let t = poll_until_timeout(client, &mut to_propagate, &socket);
-            timeout = timeout.min(t);
-        }
+        let mut eto = Instant::now() + Duration::from_millis(100);
+        pipeline.poll_timeout(&mut eto);
 
-        // If we have an item to propagate, do that
-        if let Some(p) = to_propagate.pop_front() {
-            propagate(&p, &mut clients);
+        let delay_from_now = eto
+            .checked_duration_since(Instant::now())
+            .unwrap_or(Duration::from_secs(0));
+        if delay_from_now.is_zero() {
+            pipeline.handle_timeout(Instant::now());
             continue;
         }
 
-        // The read timeout is not allowed to be 0. In case it is 0, we set 1 millisecond.
-        let duration = (timeout - Instant::now()).max(Duration::from_millis(1));
-
         socket
-            .set_read_timeout(Some(duration))
+            .set_read_timeout(Some(delay_from_now))
             .expect("setting socket read timeout");
 
         if let Some(input) = read_socket_input(&socket, &mut buf) {
-            // The rtc.accepts() call is how we demultiplex the incoming packet to know which
-            // Rtc instance the traffic belongs to.
-            if let Some(client) = clients.iter_mut().find(|c| c.accepts(&input)) {
-                // We found the client that accepts the input.
-                client.handle_input(input);
-            } else {
-                // This is quite common because we don't get the Rtc instance via the mpsc channel
-                // quickly enough before the browser send the first STUN.
-                debug!("No client accepts UDP input: {:?}", input);
-            }
+            pipeline.read(input);
         }
 
         // Drive time forward in all clients.
-        let now = Instant::now();
-        for client in &mut clients {
-            client.handle_input(Input::Timeout(now));
+        pipeline.handle_timeout(Instant::now());
+    }
+
+    //Ok(())
+}
+
+fn read_socket_input(socket: &UdpSocket, buf: &mut [u8]) -> Option<TaggedBytesMut> {
+    match socket.recv_from(buf) {
+        Ok((n, peer_addr)) => {
+            return Some(TaggedBytesMut {
+                now: Instant::now(),
+                transport: TransportContext {
+                    local_addr: socket.local_addr().unwrap(),
+                    peer_addr,
+                    ecn: None,
+                },
+                message: BytesMut::from(&buf[..n]),
+            });
         }
-    }*/
-    Ok(())
+
+        Err(e) => match e.kind() {
+            // Expected error for set_read_timeout(). One for windows, one for the rest.
+            ErrorKind::WouldBlock | ErrorKind::TimedOut => None,
+            _ => panic!("UdpSocket read failed: {e:?}"),
+        },
+    }
+}
+
+fn build_pipeline(
+    local_addr: SocketAddr,
+    server_states: Rc<RefCell<ServerStates>>,
+    dtls_handshake_config: HandshakeConfig,
+    sctp_endpoint_config: sctp::EndpointConfig,
+) -> Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>> {
+    let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
+
+    let demuxer_handler = DemuxerHandler::new();
+    let write_exception_handler = ExceptionHandler::new();
+    let stun_handler = StunHandler::new();
+    // DTLS
+    let dtls_handler = DtlsHandler::new(
+        local_addr,
+        Rc::clone(&server_states),
+        dtls_handshake_config.clone(),
+    );
+    let sctp_handler = SctpHandler::new(
+        local_addr,
+        Rc::clone(&server_states),
+        sctp_endpoint_config.clone(),
+    );
+    let data_channel_handler = DataChannelHandler::new();
+    // SRTP
+    let srtp_handler = SrtpHandler::new(Rc::clone(&server_states));
+    let interceptor_handler = InterceptorHandler::new(Rc::clone(&server_states));
+    // Gateway
+    let gateway_handler = GatewayHandler::new(Rc::clone(&server_states));
+    let read_exception_handler = ExceptionHandler::new();
+
+    //pipeline.add_back(async_transport_handler);
+    pipeline.add_back(demuxer_handler);
+    pipeline.add_back(write_exception_handler);
+    pipeline.add_back(stun_handler);
+    // DTLS
+    pipeline.add_back(dtls_handler);
+    pipeline.add_back(sctp_handler);
+    pipeline.add_back(data_channel_handler);
+    // SRTP
+    pipeline.add_back(srtp_handler);
+    pipeline.add_back(interceptor_handler);
+    // Gateway
+    pipeline.add_back(gateway_handler);
+    pipeline.add_back(read_exception_handler);
+
+    pipeline.finalize()
 }
 
 pub enum SignalingProtocolMessage {

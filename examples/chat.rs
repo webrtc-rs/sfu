@@ -3,6 +3,7 @@ extern crate tracing;
 
 use clap::Parser;
 use rouille::Server;
+use sfu::{RTCCertificate, ServerConfig};
 use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::sync::mpsc::{self};
@@ -60,7 +61,7 @@ struct Cli {
     level: Level,
 }
 
-pub fn main() {
+pub fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     init_log();
@@ -71,6 +72,11 @@ pub fn main() {
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
     let mut media_port_thread_map = HashMap::new();
+    let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
+    let server_config = Arc::new(ServerConfig::new(vec![RTCCertificate::from_key_pair(
+        key_pair,
+    )?]));
+
     for port in media_ports {
         //let worker = wait_group.worker();
         let host = cli.host.clone();
@@ -85,8 +91,9 @@ pub fn main() {
 
         if cli.sfu_impl {
             media_port_thread_map.insert(port, (None, Some(signaling_msg_tx)));
+            let server_config = server_config.clone();
             // The run loop is on a separate thread to the web server.
-            std::thread::spawn(move || run_sfu(socket, signaling_msg_rx));
+            std::thread::spawn(move || run_sfu(socket, signaling_msg_rx, server_config));
         } else {
             media_port_thread_map.insert(port, (Some(signaling_tx), None));
             // The run loop is on a separate thread to the web server.
@@ -119,6 +126,8 @@ pub fn main() {
     info!("Connect a browser to https://{}:{}", cli.host, port);
 
     server.run();
+
+    Ok(())
 }
 
 fn init_log() {
