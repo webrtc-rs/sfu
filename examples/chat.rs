@@ -4,8 +4,9 @@ extern crate tracing;
 use clap::Parser;
 use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Weak};
@@ -19,8 +20,6 @@ use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
 use str0m::media::{KeyframeRequestKind, MediaKind};
 use str0m::net::Protocol;
 use str0m::{net::Receive, Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcError};
-
-mod util;
 
 #[derive(Default, Debug, Copy, Clone, clap::ValueEnum)]
 enum Level {
@@ -89,22 +88,18 @@ pub fn main() {
     let private_key = include_bytes!("key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
-    let host_addr = util::select_host_address();
     let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
     let mut media_port_thread_map = HashMap::new();
     for port in media_ports {
         //let worker = wait_group.worker();
-        //let host = cli.host.clone();
+        let host = cli.host.clone();
         //let mut stop_rx = stop_rx.clone();
         let (signaling_tx, signaling_rx) = mpsc::sync_channel(1);
-        //let (tx, rx) = mpsc::sync_channel(1);
 
         // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
         // server socket. Clients are identified via their respective remote (UDP) socket address.
-        let socket = UdpSocket::bind(format!("{}:{}", host_addr.to_string(), port))
-            .expect("binding a random UDP port");
-        //let addr = socket.local_addr().expect("a local socket address");
-        //info!("Bound UDP port: {}", addr);
+        let socket =
+            UdpSocket::bind(format!("{host}:{port}")).expect(&format!("binding to {host}:{port}"));
 
         media_port_thread_map.insert(port, signaling_tx);
 
@@ -116,16 +111,18 @@ pub fn main() {
     //thread::spawn(move || run(socket, rx));
     let media_port_thread_map = Arc::new(media_port_thread_map);
 
+    let host = cli.host.clone();
+    let signal_port = cli.signal_port;
     let server = Server::new_ssl(
-        "0.0.0.0:3000",
-        move |request| web_request(request, host_addr, media_port_thread_map.clone()),
+        format!("{host}:{signal_port}"),
+        move |request| web_request(request, &host, media_port_thread_map.clone()),
         certificate,
         private_key,
     )
     .expect("starting the web server");
 
     let port = server.server_addr().port();
-    info!("Connect a browser to https://{:?}:{:?}", host_addr, port);
+    info!("Connect a browser to https://{}:{}", cli.host, port);
 
     server.run();
 }
@@ -133,7 +130,7 @@ pub fn main() {
 // Handle a web request.
 fn web_request(
     request: &Request,
-    host_ip: IpAddr,
+    host: &str,
     media_port_thread_map: Arc<HashMap<u16, SyncSender<Rtc>>>,
 ) -> Response {
     if request.method() == "GET" {
@@ -158,8 +155,11 @@ fn web_request(
         .build();
 
     // Add the shared UDP socket as a host candidate
-    let candidate =
-        Candidate::host(SocketAddr::new(host_ip, port), "udp").expect("a host candidate");
+    let candidate = Candidate::host(
+        SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap(),
+        "udp",
+    )
+    .expect("a host candidate");
     rtc.add_local_candidate(candidate);
 
     // Create an SDP Answer.

@@ -58,8 +58,7 @@ num_cpus = "1.16.0"
 str0m = { path = "str0m" }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std"] }
 tracing = "0.1.37"
-rouille = { version = "3.5.0", features = ["ssl"] }
-systemstat = "0.2.2"
+rouille = { version = "3.6.2", features = ["ssl"] }
 
 [[example]]
 name = "chat"
