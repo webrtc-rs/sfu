@@ -2,18 +2,21 @@
 
 use anyhow::Result;
 use async_broadcast::{broadcast, Receiver};
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures::channel::oneshot::Sender;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
-use log::{debug, error, info};
+use log::{error, info};
 use sfu::{RTCSessionDescription, ServerStates};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use str0m::change::SdpOffer;
+use str0m::{Candidate, Rtc};
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
@@ -58,13 +61,13 @@ pub struct SignalingMessage {
 
 pub struct SignalingServer {
     signal_addr: SocketAddr,
-    media_port_thread_map: Arc<HashMap<u16, smol::channel::Sender<SignalingMessage>>>,
+    media_port_thread_map: Arc<HashMap<u16, SyncSender<Rtc>>>,
 }
 
 impl SignalingServer {
     pub fn new(
         signal_addr: SocketAddr,
-        media_port_thread_map: HashMap<u16, smol::channel::Sender<SignalingMessage>>,
+        media_port_thread_map: HashMap<u16, SyncSender<Rtc>>,
     ) -> Self {
         Self {
             signal_addr,
@@ -76,15 +79,18 @@ impl SignalingServer {
     pub async fn run(&self, mut stop_rx: Receiver<()>) -> Receiver<()> {
         let (done_tx, done_rx) = broadcast(1);
         let signal_addr = self.signal_addr;
+        let host_ip = signal_addr.ip();
         let media_port_thread_map = self.media_port_thread_map.clone();
         tokio::spawn(async move {
             let service = make_service_fn(move |_| {
                 let media_port_thread_map = media_port_thread_map.clone();
+                let host_ip = host_ip.clone();
                 async move {
                     Ok::<_, hyper::Error>(service_fn(move |req| {
                         let media_port_thread_map = media_port_thread_map.clone();
+                        let host_ip = host_ip.clone();
                         async move {
-                            let resp = remote_handler(req, media_port_thread_map).await?;
+                            let resp = remote_handler(req, host_ip, media_port_thread_map).await?;
                             Ok::<_, hyper::Error>(resp)
                         }
                     }))
@@ -115,7 +121,8 @@ impl SignalingServer {
 // HTTP Listener to get sdp
 async fn remote_handler(
     req: Request<Body>,
-    media_port_thread_map: Arc<HashMap<u16, smol::channel::Sender<SignalingMessage>>>,
+    host_ip: IpAddr,
+    media_port_thread_map: Arc<HashMap<u16, SyncSender<Rtc>>>,
 ) -> Result<Response<Body>, hyper::Error> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/") | (&Method::GET, "/index.html") => {
@@ -149,188 +156,37 @@ async fn remote_handler(
     sorted_ports.sort();
     assert!(!sorted_ports.is_empty());
     let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
-    let event_base = media_port_thread_map.get(&port).unwrap();
-    let (response_tx, response_rx) =
-        futures::channel::oneshot::channel::<SignalingProtocolMessage>();
+    let tx = media_port_thread_map.get(&port).unwrap();
 
-    match (req.method(), path[1]) {
-        (&Method::POST, "join") => {
-            debug!("remote_handler receive from /join/session_id");
+    //let endpoint_id = path[3].parse::<u64>().unwrap();
+    let offer_sdp = hyper::body::to_bytes(req.into_body()).await?;
 
-            if event_base
-                .send(SignalingMessage {
-                    request: SignalingProtocolMessage::Join { session_id },
-                    response_tx,
-                })
-                .await
-                .is_ok()
-            {
-                if let Ok(response) = response_rx.await {
-                    match response {
-                        SignalingProtocolMessage::Ok {
-                            session_id: _,
-                            endpoint_id,
-                        } => {
-                            let mut response =
-                                Response::new(Body::from(format!("{}", endpoint_id)));
-                            *response.status_mut() = StatusCode::OK;
-                            return Ok(response);
-                        }
-                        SignalingProtocolMessage::Err {
-                            session_id: _,
-                            endpoint_id: _,
-                            reason,
-                        } => {
-                            let mut response = Response::new(Body::from(reason));
-                            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                            return Ok(response);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        (&Method::POST, "offer") => {
-            debug!("remote_handler receive from /offer/session_id/endpoint_id");
+    let offer: SdpOffer = serde_json::from_reader(offer_sdp.reader()).expect("serialized offer");
+    let mut rtc = Rtc::builder()
+        // Uncomment this to see statistics
+        // .set_stats_interval(Some(Duration::from_secs(1)))
+        // .set_ice_lite(true)
+        .build();
 
-            let endpoint_id = path[3].parse::<u64>().unwrap();
-            let offer_sdp = hyper::body::to_bytes(req.into_body()).await?;
+    // Add the shared UDP socket as a host candidate
+    let candidate =
+        Candidate::host(SocketAddr::new(host_ip, port), "udp").expect("a host candidate");
+    rtc.add_local_candidate(candidate);
 
-            if event_base
-                .send(SignalingMessage {
-                    request: SignalingProtocolMessage::Offer {
-                        session_id,
-                        endpoint_id,
-                        offer_sdp,
-                    },
-                    response_tx,
-                })
-                .await
-                .is_ok()
-            {
-                if let Ok(response) = response_rx.await {
-                    match response {
-                        SignalingProtocolMessage::Answer {
-                            session_id: _,
-                            endpoint_id: _,
-                            answer_sdp,
-                        } => {
-                            let mut response = Response::new(Body::from(answer_sdp));
-                            *response.status_mut() = StatusCode::OK;
-                            return Ok(response);
-                        }
-                        SignalingProtocolMessage::Err {
-                            session_id: _,
-                            endpoint_id: _,
-                            reason,
-                        } => {
-                            error!(
-                                "SignalingProtocolMessage::Err {}",
-                                String::from_utf8(reason.to_vec())
-                                    .unwrap_or("Unknown Error".to_string()),
-                            );
-                            let mut response = Response::new(Body::from(reason));
-                            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                            return Ok(response);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        (&Method::POST, "answer") => {
-            debug!("remote_handler receive from /answer/session_id/endpoint_id");
+    // Create an SDP Answer.
+    let answer = rtc
+        .sdp_api()
+        .accept_offer(offer)
+        .expect("offer to be accepted");
 
-            let endpoint_id = path[3].parse::<u64>().unwrap();
-            let answer_sdp = hyper::body::to_bytes(req.into_body()).await?;
+    // The Rtc instance is shipped off to the main run loop.
+    tx.send(rtc).expect("to send Rtc instance");
 
-            if event_base
-                .send(SignalingMessage {
-                    request: SignalingProtocolMessage::Answer {
-                        session_id,
-                        endpoint_id,
-                        answer_sdp,
-                    },
-                    response_tx,
-                })
-                .await
-                .is_ok()
-            {
-                if let Ok(response) = response_rx.await {
-                    match response {
-                        SignalingProtocolMessage::Ok {
-                            session_id: _,
-                            endpoint_id: _,
-                        } => {
-                            let mut response = Response::default();
-                            *response.status_mut() = StatusCode::OK;
-                            return Ok(response);
-                        }
-                        SignalingProtocolMessage::Err {
-                            session_id: _,
-                            endpoint_id: _,
-                            reason,
-                        } => {
-                            let mut response = Response::new(Body::from(reason));
-                            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                            return Ok(response);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        (&Method::POST, "leave") => {
-            debug!("remote_handler receive from /leave/session_id/endpoint_id");
+    let body = serde_json::to_vec(&answer).expect("answer to serialize");
 
-            let endpoint_id = path[3].parse::<u64>().unwrap();
-
-            if event_base
-                .send(SignalingMessage {
-                    request: SignalingProtocolMessage::Leave {
-                        session_id,
-                        endpoint_id,
-                    },
-                    response_tx,
-                })
-                .await
-                .is_ok()
-            {
-                if let Ok(response) = response_rx.await {
-                    match response {
-                        SignalingProtocolMessage::Ok {
-                            session_id: _,
-                            endpoint_id: _,
-                        } => {
-                            let mut response = Response::default();
-                            *response.status_mut() = StatusCode::OK;
-                            return Ok(response);
-                        }
-                        SignalingProtocolMessage::Err {
-                            session_id: _,
-                            endpoint_id: _,
-                            reason,
-                        } => {
-                            let mut response = Response::new(Body::from(reason));
-                            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                            return Ok(response);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        // Return the 404 Not Found for other routes.
-        _ => {
-            let mut not_found = Response::default();
-            *not_found.status_mut() = StatusCode::NOT_FOUND;
-            return Ok(not_found);
-        }
-    };
-
-    let mut response = Response::default();
-    *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-    Ok(response)
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = StatusCode::OK;
+    return Ok(response);
 }
 
 pub fn handle_signaling_message(
