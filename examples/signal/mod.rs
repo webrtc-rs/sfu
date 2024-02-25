@@ -124,24 +124,21 @@ async fn remote_handler(
     host_ip: IpAddr,
     media_port_thread_map: Arc<HashMap<u16, SyncSender<Rtc>>>,
 ) -> Result<Response<Body>, hyper::Error> {
-    match (req.method(), req.uri().path()) {
-        (&Method::GET, "/") | (&Method::GET, "/index.html") => {
-            // Open file for reading
-            if let Ok(file) = File::open("examples/chat.html").await {
-                let stream = FramedRead::new(file, BytesCodec::new());
-                let body = Body::wrap_stream(stream);
-                return Ok(Response::new(body));
-            } else {
-                eprintln!("ERROR: Unable to open file.");
-                let mut not_found = Response::default();
-                *not_found.status_mut() = StatusCode::NOT_FOUND;
-                return Ok(not_found);
-            }
+    if req.method() == Method::GET {
+        // Open file for reading
+        if let Ok(file) = File::open("examples/chat.html").await {
+            let stream = FramedRead::new(file, BytesCodec::new());
+            let body = Body::wrap_stream(stream);
+            return Ok(Response::new(body));
+        } else {
+            eprintln!("ERROR: Unable to open file.");
+            let mut not_found = Response::default();
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+            return Ok(not_found);
         }
-        _ => {}
-    };
+    }
 
-    let path: Vec<&str> = req.uri().path().split('/').collect();
+    /*let path: Vec<&str> = req.uri().path().split('/').collect();
     if path.len() < 3
         || path[2].parse::<u64>().is_err()
         || ((path[1] == "offer" || path[1] == "answer" || path[1] == "leave")
@@ -150,8 +147,8 @@ async fn remote_handler(
         let mut response = Response::new(Body::empty());
         *response.status_mut() = StatusCode::BAD_REQUEST;
         return Ok(response);
-    }
-    let session_id = path[2].parse::<u64>().unwrap();
+    }*/
+    let session_id = 0usize; //path[2].parse::<u64>().unwrap();
     let mut sorted_ports: Vec<u16> = media_port_thread_map.keys().map(|x| *x).collect();
     sorted_ports.sort();
     assert!(!sorted_ports.is_empty());
