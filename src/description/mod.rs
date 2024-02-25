@@ -639,7 +639,7 @@ pub(crate) fn get_ssrcs(media: &MediaDescription) -> Result<HashSet<SSRC>> {
         if a.key == "ssrc" {
             if let Some(value) = a.value.as_ref() {
                 let fields: Vec<&str> = value.split_whitespace().collect();
-                if fields.len() >= 1 {
+                if !fields.is_empty() {
                     let ssrc = fields[0].parse::<u32>()?;
                     ssrc_set.insert(ssrc);
                 }
