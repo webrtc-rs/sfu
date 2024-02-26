@@ -5,6 +5,7 @@ use clap::Parser;
 use rouille::Server;
 use sfu::{RTCCertificate, ServerConfig};
 use std::collections::HashMap;
+use std::io::Write;
 use std::net::UdpSocket;
 use std::sync::mpsc::{self};
 use std::sync::Arc;
@@ -65,7 +66,7 @@ struct Cli {
 pub fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    init_log();
+    init_log(cli.debug, cli.level);
 
     let certificate = include_bytes!("cer.pem").to_vec();
     let private_key = include_bytes!("key.pem").to_vec();
@@ -133,16 +134,33 @@ pub fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn init_log() {
+fn init_log(debug: bool, level: Level) {
     use std::env;
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-    if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "chat=info,str0m=info");
-    }
+    if debug {
+        env_logger::Builder::new()
+            .format(|buf, record| {
+                writeln!(
+                    buf,
+                    "{}:{} [{}] {} - {}",
+                    record.file().unwrap_or("unknown"),
+                    record.line().unwrap_or(0),
+                    record.level(),
+                    chrono::Local::now().format("%H:%M:%S.%6f"),
+                    record.args()
+                )
+            })
+            .filter(None, level.into())
+            .init();
+    } else {
+        if env::var("RUST_LOG").is_err() {
+            env::set_var("RUST_LOG", "chat=info,str0m=info");
+        }
 
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env())
+            .init();
+    }
 }
