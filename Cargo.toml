@@ -42,8 +42,10 @@ futures = "0.3.30"
 webrtc = { path = "webrtc/webrtc" }
 clap = { version = "4.4.12", features = ["derive"] }
 anyhow = "1.0.78"
-waitgroup = "0.1.2"
+wg = "0.7"
 thiserror = "1.0.53"
+crossbeam-channel = "0.5.11"
+ctrlc = "3.4.2"
 
 str0m = { path = "str0m" }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std"] }

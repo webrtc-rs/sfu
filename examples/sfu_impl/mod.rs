@@ -103,6 +103,7 @@ pub fn web_request_sfu(
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.
 pub fn run_sfu(
+    stop_rx: crossbeam_channel::Receiver<()>,
     socket: UdpSocket,
     rx: Receiver<SignalingMessage>,
     server_config: Arc<ServerConfig>,
@@ -125,7 +126,7 @@ pub fn run_sfu(
         socket.local_addr()?,
     )?));
 
-    info!("listening {}...", socket.local_addr()?);
+    println!("listening {}...", socket.local_addr()?);
 
     let outgoing_queue = Rc::new(RefCell::new(VecDeque::new()));
 
@@ -140,6 +141,15 @@ pub fn run_sfu(
     let mut buf = vec![0; 2000];
 
     loop {
+        match stop_rx.try_recv() {
+            Ok(_) => break,
+            Err(err) => {
+                if err.is_disconnected() {
+                    break;
+                }
+            }
+        };
+
         write_socket_output(&socket, &outgoing_queue);
 
         // Spawn new incoming signal message from the signaling server thread.
@@ -173,6 +183,12 @@ pub fn run_sfu(
         // Drive time forward in all clients.
         pipeline.handle_timeout(Instant::now());
     }
+
+    println!(
+        "media server on {} is gracefully down",
+        socket.local_addr()?
+    );
+    Ok(())
 }
 
 fn write_socket_output(socket: &UdpSocket, outgoing_queue: &Rc<RefCell<VecDeque<TaggedBytesMut>>>) {

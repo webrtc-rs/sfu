@@ -6,9 +6,11 @@ use rouille::Server;
 use sfu::{RTCCertificate, ServerConfig};
 use std::collections::HashMap;
 use std::io::Write;
-use std::net::UdpSocket;
+use std::net::{IpAddr, UdpSocket};
+use std::str::FromStr;
 use std::sync::mpsc::{self};
 use std::sync::Arc;
+use wg::WaitGroup;
 
 mod sfu_impl;
 mod str0m_impl;
@@ -45,8 +47,8 @@ impl From<Level> for log::LevelFilter {
 #[command(version = "0.1.0")]
 #[command(about = "An example of SFU Server", long_about = None)]
 struct Cli {
-    //#[arg(long, default_value_t = format!("127.0.0.1"))]
-    //host: String,
+    #[arg(long, default_value_t = format!("127.0.0.1"))]
+    host: String,
     #[arg(long, default_value_t = 8080)]
     signal_port: u16,
     #[arg(long, default_value_t = 3478)]
@@ -72,19 +74,25 @@ pub fn main() -> anyhow::Result<()> {
     let private_key = include_bytes!("key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
-    let host_addr = util::select_host_address();
+    let host_addr = if cli.host == "127.0.0.1" {
+        util::select_host_address()
+    } else {
+        IpAddr::from_str(&cli.host)?
+    };
 
     let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
+    let (stop_tx, stop_rx) = crossbeam_channel::bounded::<()>(1);
     let mut media_port_thread_map = HashMap::new();
+
     let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
     let server_config = Arc::new(ServerConfig::new(vec![RTCCertificate::from_key_pair(
         key_pair,
     )?]));
+    let wait_group = WaitGroup::new();
 
     for port in media_ports {
-        //let worker = wait_group.worker();
-        //let host = host_addr; //cli.host.clone();
-        //let mut stop_rx = stop_rx.clone();
+        let worker = wait_group.add(1);
+        let stop_rx = stop_rx.clone();
         let (signaling_tx, signaling_rx) = mpsc::sync_channel(1);
         let (signaling_msg_tx, signaling_msg_rx) = mpsc::sync_channel(1);
 
@@ -96,22 +104,29 @@ pub fn main() -> anyhow::Result<()> {
         if cli.str0m {
             media_port_thread_map.insert(port, (Some(signaling_tx), None));
             // The run loop is on a separate thread to the web server.
-            std::thread::spawn(move || run_str0m(socket, signaling_rx));
+            std::thread::spawn(move || {
+                if let Err(err) = run_str0m(stop_rx, socket, signaling_rx) {
+                    eprintln!("run_str0m got error: {}", err);
+                }
+                worker.done();
+            });
         } else {
             media_port_thread_map.insert(port, (None, Some(signaling_msg_tx)));
             let server_config = server_config.clone();
             // The run loop is on a separate thread to the web server.
-            std::thread::spawn(move || run_sfu(socket, signaling_msg_rx, server_config));
+            std::thread::spawn(move || {
+                if let Err(err) = run_sfu(stop_rx, socket, signaling_msg_rx, server_config) {
+                    eprintln!("run_sfu got error: {}", err);
+                }
+                worker.done();
+            });
         }
     }
 
-    // The run loop is on a separate thread to the web server.
-    //thread::spawn(move || run(socket, rx));
     let media_port_thread_map = Arc::new(media_port_thread_map);
-
     let signal_port = cli.signal_port;
     let use_str0m_impl = cli.str0m;
-    let server = Server::new_ssl(
+    let signal_server = Server::new_ssl(
         format!("{}:{}", host_addr, signal_port),
         move |request| {
             if use_str0m_impl {
@@ -123,12 +138,29 @@ pub fn main() -> anyhow::Result<()> {
         certificate,
         private_key,
     )
-    .expect("starting the web server");
+    .expect("starting the signal server");
 
-    let port = server.server_addr().port();
-    info!("Connect a browser to https://{}:{}", host_addr, port);
+    let port = signal_server.server_addr().port();
+    println!("Connect a browser to https://{}:{}", host_addr, port);
 
-    server.run();
+    let (signal_handle, signal_cancel_tx) = signal_server.stoppable();
+
+    println!("Press Ctrl-C to stop");
+    std::thread::spawn(move || {
+        let mut stop_tx = Some(stop_tx);
+        ctrlc::set_handler(move || {
+            if let Some(stop_tx) = stop_tx.take() {
+                let _ = stop_tx.send(());
+            }
+        })
+        .expect("Error setting Ctrl-C handler");
+    });
+    let _ = stop_rx.recv();
+    println!("Wait for Signaling Sever and Media Server Gracefully Shutdown...");
+    wait_group.wait();
+    let _ = signal_cancel_tx.send(());
+    println!("signaling server is gracefully down");
+    let _ = signal_handle.join();
 
     Ok(())
 }

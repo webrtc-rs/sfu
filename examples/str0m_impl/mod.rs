@@ -80,14 +80,27 @@ pub fn web_request_str0m(
 
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.
-pub fn run_str0m(socket: UdpSocket, rx: Receiver<Rtc>) -> Result<(), RtcError> {
+pub fn run_str0m(
+    stop_rx: crossbeam_channel::Receiver<()>,
+    socket: UdpSocket,
+    rx: Receiver<Rtc>,
+) -> Result<(), RtcError> {
     let mut clients: Vec<Client> = vec![];
     let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
     let mut buf = vec![0; 2000];
 
-    info!("listening {}...", socket.local_addr()?);
+    println!("listening {}...", socket.local_addr()?);
 
     loop {
+        match stop_rx.try_recv() {
+            Ok(_) => break,
+            Err(err) => {
+                if err.is_disconnected() {
+                    break;
+                }
+            }
+        };
+
         // Clean out disconnected clients
         clients.retain(|c| c.rtc.is_alive());
 
@@ -141,6 +154,12 @@ pub fn run_str0m(socket: UdpSocket, rx: Receiver<Rtc>) -> Result<(), RtcError> {
             client.handle_input(Input::Timeout(now));
         }
     }
+
+    println!(
+        "media server on {} is gracefully down",
+        socket.local_addr()?
+    );
+    Ok(())
 }
 
 /// Receive new clients from the receiver and create new Client instances.
