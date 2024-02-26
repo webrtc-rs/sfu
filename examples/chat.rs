@@ -72,8 +72,8 @@ pub fn main() -> anyhow::Result<()> {
 
     init_log(cli.debug, cli.level);
 
-    //let certificate = include_bytes!("str0m_impl/cer.pem").to_vec();
-    //let private_key = include_bytes!("str0m_impl/key.pem").to_vec();
+    let certificate = include_bytes!("str0m_impl/cer.pem").to_vec();
+    let private_key = include_bytes!("str0m_impl/key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = if cli.host == "127.0.0.1" && !cli.force_local_loop {
@@ -128,9 +128,9 @@ pub fn main() -> anyhow::Result<()> {
     let media_port_thread_map = Arc::new(media_port_thread_map);
     let signal_port = cli.signal_port;
     let use_str0m_impl = cli.str0m;
-    let signal_server = /*if cli.force_local_loop {*/
+    let (signal_handle, signal_cancel_tx) = if cli.force_local_loop {
         // for integration test, no ssl
-        Server::new(format!("{}:{}", host_addr, signal_port), move |request| {
+        let signal_server = Server::new(format!("{}:{}", host_addr, signal_port), move |request| {
             if use_str0m_impl {
                 web_request_str0m(request, host_addr, media_port_thread_map.clone())
             } else {
@@ -138,8 +138,13 @@ pub fn main() -> anyhow::Result<()> {
             }
         })
         .expect("starting the signal server");
-    /*} else {
-        Server::new_ssl(
+
+        let port = signal_server.server_addr().port();
+        println!("Connect a browser to https://{}:{}", host_addr, port);
+
+        signal_server.stoppable()
+    } else {
+        let signal_server = Server::new_ssl(
             format!("{}:{}", host_addr, signal_port),
             move |request| {
                 if use_str0m_impl {
@@ -151,13 +156,13 @@ pub fn main() -> anyhow::Result<()> {
             certificate,
             private_key,
         )
-        .expect("starting the signal server")
-    };*/
+        .expect("starting the signal server");
 
-    let port = signal_server.server_addr().port();
-    println!("Connect a browser to https://{}:{}", host_addr, port);
+        let port = signal_server.server_addr().port();
+        println!("Connect a browser to https://{}:{}", host_addr, port);
 
-    let (signal_handle, signal_cancel_tx) = signal_server.stoppable();
+        signal_server.stoppable()
+    };
 
     println!("Press Ctrl-C to stop");
     std::thread::spawn(move || {
