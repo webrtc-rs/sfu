@@ -2,7 +2,7 @@ use rouille::{Request, Response};
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::io::ErrorKind;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,7 +22,7 @@ use str0m::{net::Receive, Candidate, Event, IceConnectionState, Input, Output, R
 // Handle a web request.
 pub fn web_request_str0m(
     request: &Request,
-    host: &str,
+    host: IpAddr,
     media_port_thread_map: Arc<
         HashMap<
             u16,

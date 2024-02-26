@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 mod sfu_impl;
 mod str0m_impl;
+mod util;
 
 use sfu_impl::*;
 use str0m_impl::*;
@@ -43,8 +44,8 @@ impl From<Level> for log::LevelFilter {
 #[command(version = "0.1.0")]
 #[command(about = "An example of SFU Server", long_about = None)]
 struct Cli {
-    #[arg(long, default_value_t = format!("127.0.0.1"))]
-    host: String,
+    //#[arg(long, default_value_t = format!("127.0.0.1"))]
+    //host: String,
     #[arg(long, default_value_t = 8080)]
     signal_port: u16,
     #[arg(long, default_value_t = 3478)]
@@ -70,6 +71,9 @@ pub fn main() -> anyhow::Result<()> {
     let private_key = include_bytes!("key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
+    let host_addr = util::select_host_address();
+
+    // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
     let mut media_port_thread_map = HashMap::new();
     let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
@@ -79,15 +83,15 @@ pub fn main() -> anyhow::Result<()> {
 
     for port in media_ports {
         //let worker = wait_group.worker();
-        let host = cli.host.clone();
+        //let host = host_addr; //cli.host.clone();
         //let mut stop_rx = stop_rx.clone();
         let (signaling_tx, signaling_rx) = mpsc::sync_channel(1);
         let (signaling_msg_tx, signaling_msg_rx) = mpsc::sync_channel(1);
 
         // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
         // server socket. Clients are identified via their respective remote (UDP) socket address.
-        let socket =
-            UdpSocket::bind(format!("{host}:{port}")).expect(&format!("binding to {host}:{port}"));
+        let socket = UdpSocket::bind(format!("{host_addr}:{port}"))
+            .expect(&format!("binding to {host_addr}:{port}"));
 
         if cli.sfu_impl {
             media_port_thread_map.insert(port, (None, Some(signaling_msg_tx)));
@@ -105,16 +109,15 @@ pub fn main() -> anyhow::Result<()> {
     //thread::spawn(move || run(socket, rx));
     let media_port_thread_map = Arc::new(media_port_thread_map);
 
-    let host = cli.host.clone();
     let signal_port = cli.signal_port;
     let use_sfu_impl = cli.sfu_impl;
     let server = Server::new_ssl(
-        format!("{host}:{signal_port}"),
+        format!("{}:{}", host_addr, signal_port),
         move |request| {
             if use_sfu_impl {
-                web_request_sfu(request, &host, media_port_thread_map.clone())
+                web_request_sfu(request, media_port_thread_map.clone())
             } else {
-                web_request_str0m(request, &host, media_port_thread_map.clone())
+                web_request_str0m(request, host_addr, media_port_thread_map.clone())
             }
         },
         certificate,
@@ -123,7 +126,7 @@ pub fn main() -> anyhow::Result<()> {
     .expect("starting the web server");
 
     let port = server.server_addr().port();
-    info!("Connect a browser to https://{}:{}", cli.host, port);
+    info!("Connect a browser to https://{}:{}", host_addr, port);
 
     server.run();
 

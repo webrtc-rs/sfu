@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 // Handle a web request.
 pub fn web_request_sfu(
     request: &Request,
-    _host: &str,
     media_port_thread_map: Arc<
         HashMap<
             u16,
@@ -166,8 +165,6 @@ pub fn run_sfu(
         // Drive time forward in all clients.
         pipeline.handle_timeout(Instant::now());
     }
-
-    //Ok(())
 }
 
 fn read_socket_input(socket: &UdpSocket, buf: &mut [u8]) -> Option<TaggedBytesMut> {
