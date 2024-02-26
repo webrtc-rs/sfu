@@ -57,6 +57,8 @@ struct Cli {
     media_port_max: u16,
 
     #[arg(short, long)]
+    force_local_loop: bool,
+    #[arg(short, long)]
     str0m: bool,
     #[arg(short, long)]
     debug: bool,
@@ -74,7 +76,7 @@ pub fn main() -> anyhow::Result<()> {
     let private_key = include_bytes!("key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
-    let host_addr = if cli.host == "127.0.0.1" {
+    let host_addr = if cli.host == "127.0.0.1" && !cli.force_local_loop {
         util::select_host_address()
     } else {
         IpAddr::from_str(&cli.host)?
