@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+mod sync_transport;
+
+use crate::sfu_impl::sync_transport::SyncTransport;
 use bytes::{Bytes, BytesMut};
 use dtls::config::HandshakeConfig;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
@@ -12,7 +15,7 @@ use sfu::{
     SrtpHandler, StunHandler,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Error, ErrorKind, Read};
 use std::net::{SocketAddr, UdpSocket};
 use std::rc::Rc;
@@ -124,8 +127,11 @@ pub fn run_sfu(
 
     info!("listening {}...", socket.local_addr()?);
 
+    let outgoing_queue = Rc::new(RefCell::new(VecDeque::new()));
+
     let pipeline = build_pipeline(
         socket.local_addr()?,
+        outgoing_queue.clone(),
         server_states.clone(),
         dtls_handshake_config,
         sctp_endpoint_config,
@@ -134,6 +140,8 @@ pub fn run_sfu(
     let mut buf = vec![0; 2000];
 
     loop {
+        write_socket_output(&socket, &outgoing_queue);
+
         // Spawn new incoming signal message from the signaling server thread.
         if let Ok(signal_message) = rx.try_recv() {
             if let Err(err) = handle_signaling_message(&server_states, signal_message) {
@@ -167,6 +175,15 @@ pub fn run_sfu(
     }
 }
 
+fn write_socket_output(socket: &UdpSocket, outgoing_queue: &Rc<RefCell<VecDeque<TaggedBytesMut>>>) {
+    let mut queue = outgoing_queue.borrow_mut();
+    while let Some(transmit) = queue.pop_front() {
+        socket
+            .send_to(&transmit.message, transmit.transport.peer_addr)
+            .expect("sending UDP data");
+    }
+}
+
 fn read_socket_input(socket: &UdpSocket, buf: &mut [u8]) -> Option<TaggedBytesMut> {
     match socket.recv_from(buf) {
         Ok((n, peer_addr)) => {
@@ -191,12 +208,14 @@ fn read_socket_input(socket: &UdpSocket, buf: &mut [u8]) -> Option<TaggedBytesMu
 
 fn build_pipeline(
     local_addr: SocketAddr,
+    writer: Rc<RefCell<VecDeque<TaggedBytesMut>>>,
     server_states: Rc<RefCell<ServerStates>>,
     dtls_handshake_config: HandshakeConfig,
     sctp_endpoint_config: sctp::EndpointConfig,
 ) -> Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>> {
     let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
+    let sync_transport_handler = SyncTransport::new(writer);
     let demuxer_handler = DemuxerHandler::new();
     let write_exception_handler = ExceptionHandler::new();
     let stun_handler = StunHandler::new();
@@ -219,7 +238,7 @@ fn build_pipeline(
     let gateway_handler = GatewayHandler::new(Rc::clone(&server_states));
     let read_exception_handler = ExceptionHandler::new();
 
-    //pipeline.add_back(async_transport_handler);
+    pipeline.add_back(sync_transport_handler);
     pipeline.add_back(demuxer_handler);
     pipeline.add_back(write_exception_handler);
     pipeline.add_back(stun_handler);
