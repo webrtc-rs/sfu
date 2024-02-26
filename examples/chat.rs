@@ -55,7 +55,7 @@ struct Cli {
     media_port_max: u16,
 
     #[arg(short, long)]
-    sfu_impl: bool,
+    str0m: bool,
     #[arg(short, long)]
     debug: bool,
     #[arg(short, long, default_value_t = Level::Info)]
@@ -74,7 +74,6 @@ pub fn main() -> anyhow::Result<()> {
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = util::select_host_address();
 
-    // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
     let mut media_port_thread_map = HashMap::new();
     let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
@@ -94,15 +93,15 @@ pub fn main() -> anyhow::Result<()> {
         let socket = UdpSocket::bind(format!("{host_addr}:{port}"))
             .expect(&format!("binding to {host_addr}:{port}"));
 
-        if cli.sfu_impl {
+        if cli.str0m {
+            media_port_thread_map.insert(port, (Some(signaling_tx), None));
+            // The run loop is on a separate thread to the web server.
+            std::thread::spawn(move || run_str0m(socket, signaling_rx));
+        } else {
             media_port_thread_map.insert(port, (None, Some(signaling_msg_tx)));
             let server_config = server_config.clone();
             // The run loop is on a separate thread to the web server.
             std::thread::spawn(move || run_sfu(socket, signaling_msg_rx, server_config));
-        } else {
-            media_port_thread_map.insert(port, (Some(signaling_tx), None));
-            // The run loop is on a separate thread to the web server.
-            std::thread::spawn(move || run_str0m(socket, signaling_rx));
         }
     }
 
@@ -111,14 +110,14 @@ pub fn main() -> anyhow::Result<()> {
     let media_port_thread_map = Arc::new(media_port_thread_map);
 
     let signal_port = cli.signal_port;
-    let use_sfu_impl = cli.sfu_impl;
+    let use_str0m_impl = cli.str0m;
     let server = Server::new_ssl(
         format!("{}:{}", host_addr, signal_port),
         move |request| {
-            if use_sfu_impl {
-                web_request_sfu(request, media_port_thread_map.clone())
-            } else {
+            if use_str0m_impl {
                 web_request_str0m(request, host_addr, media_port_thread_map.clone())
+            } else {
+                web_request_sfu(request, media_port_thread_map.clone())
             }
         },
         certificate,

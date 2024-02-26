@@ -85,6 +85,8 @@ pub fn run_str0m(socket: UdpSocket, rx: Receiver<Rtc>) -> Result<(), RtcError> {
     let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
     let mut buf = vec![0; 2000];
 
+    info!("listening {}...", socket.local_addr()?);
+
     loop {
         // Clean out disconnected clients
         clients.retain(|c| c.rtc.is_alive());
@@ -142,7 +144,7 @@ pub fn run_str0m(socket: UdpSocket, rx: Receiver<Rtc>) -> Result<(), RtcError> {
 }
 
 /// Receive new clients from the receiver and create new Client instances.
-pub fn spawn_new_client(rx: &Receiver<Rtc>) -> Option<Client> {
+fn spawn_new_client(rx: &Receiver<Rtc>) -> Option<Client> {
     // try_recv here won't lock up the thread.
     match rx.try_recv() {
         Ok(rtc) => Some(Client::new(rtc)),
@@ -153,7 +155,7 @@ pub fn spawn_new_client(rx: &Receiver<Rtc>) -> Option<Client> {
 
 /// Poll all the output from the client until it returns a timeout.
 /// Collect any output in the queue, transmit data on the socket, return the timeout
-pub fn poll_until_timeout(
+fn poll_until_timeout(
     client: &mut Client,
     queue: &mut VecDeque<Propagated>,
     socket: &UdpSocket,
@@ -175,7 +177,7 @@ pub fn poll_until_timeout(
 }
 
 /// Sends one "propagated" to all clients, if relevant
-pub fn propagate(propagated: &Propagated, clients: &mut [Client]) {
+fn propagate(propagated: &Propagated, clients: &mut [Client]) {
     // Do not propagate to originating client.
     let Some(client_id) = propagated.client_id() else {
         // If the event doesn't have a client id, it can't be propagated,
@@ -203,7 +205,7 @@ pub fn propagate(propagated: &Propagated, clients: &mut [Client]) {
     }
 }
 
-pub fn read_socket_input<'a>(socket: &UdpSocket, buf: &'a mut Vec<u8>) -> Option<Input<'a>> {
+fn read_socket_input<'a>(socket: &UdpSocket, buf: &'a mut Vec<u8>) -> Option<Input<'a>> {
     buf.resize(2000, 0);
 
     match socket.recv_from(buf) {
@@ -236,18 +238,18 @@ pub fn read_socket_input<'a>(socket: &UdpSocket, buf: &'a mut Vec<u8>) -> Option
 }
 
 #[derive(Debug)]
-pub struct Client {
+struct Client {
     id: ClientId,
-    pub rtc: Rtc,
+    rtc: Rtc,
     pending: Option<SdpPendingOffer>,
     cid: Option<ChannelId>,
-    pub tracks_in: Vec<TrackInEntry>,
+    tracks_in: Vec<TrackInEntry>,
     tracks_out: Vec<TrackOut>,
     chosen_rid: Option<Rid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClientId(u64);
+struct ClientId(u64);
 
 impl Deref for ClientId {
     type Target = u64;
@@ -258,15 +260,15 @@ impl Deref for ClientId {
 }
 
 #[derive(Debug)]
-pub struct TrackIn {
+struct TrackIn {
     origin: ClientId,
     mid: Mid,
     kind: MediaKind,
 }
 
 #[derive(Debug)]
-pub struct TrackInEntry {
-    pub id: Arc<TrackIn>,
+struct TrackInEntry {
+    id: Arc<TrackIn>,
     last_keyframe_request: Option<Instant>,
 }
 
@@ -307,11 +309,11 @@ impl Client {
         }
     }
 
-    pub fn accepts(&self, input: &Input) -> bool {
+    fn accepts(&self, input: &Input) -> bool {
         self.rtc.accepts(input)
     }
 
-    pub fn handle_input(&mut self, input: Input) {
+    fn handle_input(&mut self, input: Input) {
         if !self.rtc.is_alive() {
             return;
         }
@@ -549,7 +551,7 @@ impl Client {
         }
     }
 
-    pub fn handle_track_open(&mut self, track_in: Weak<TrackIn>) {
+    fn handle_track_open(&mut self, track_in: Weak<TrackIn>) {
         let track_out = TrackOut {
             track_in,
             state: TrackOutState::ToOpen,
@@ -621,7 +623,7 @@ impl Client {
 
 /// Events propagated between client.
 #[allow(clippy::large_enum_variant)]
-pub enum Propagated {
+enum Propagated {
     /// When we have nothing to propagate.
     Noop,
 
