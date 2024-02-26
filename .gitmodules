@@ -4,6 +4,3 @@
 [submodule "webrtc"]
 	path = webrtc
 	url = https://github.com/webrtc-rs/webrtc
-[submodule "str0m"]
-	path = str0m
-	url = https://github.com/algesten/str0m
