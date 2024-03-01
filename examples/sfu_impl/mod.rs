@@ -121,7 +121,7 @@ pub fn run_sfu(
             .with_extended_master_secret(dtls::config::ExtendedMasterSecretType::Require)
             .build(false, None)?,
     );
-    let sctp_endpoint_config = sctp::EndpointConfig::default();
+    let sctp_endpoint_config = Arc::new(sctp::EndpointConfig::default());
 
     let server_states = Rc::new(RefCell::new(ServerStates::new(
         server_config,
@@ -229,7 +229,7 @@ fn build_pipeline(
     writer: Rc<RefCell<VecDeque<TaggedBytesMut>>>,
     server_states: Rc<RefCell<ServerStates>>,
     dtls_handshake_config: Arc<HandshakeConfig>,
-    sctp_endpoint_config: sctp::EndpointConfig,
+    sctp_endpoint_config: Arc<sctp::EndpointConfig>,
 ) -> Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>> {
     let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
@@ -240,11 +240,8 @@ fn build_pipeline(
     // DTLS
     let dtls_handler =
         DtlsHandler::new(local_addr, Rc::clone(&server_states), dtls_handshake_config);
-    let sctp_handler = SctpHandler::new(
-        local_addr,
-        Rc::clone(&server_states),
-        sctp_endpoint_config.clone(),
-    );
+    let sctp_handler =
+        SctpHandler::new(local_addr, Rc::clone(&server_states), sctp_endpoint_config);
     let data_channel_handler = DataChannelHandler::new();
     // SRTP
     let srtp_handler = SrtpHandler::new(Rc::clone(&server_states));

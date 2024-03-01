@@ -6,6 +6,7 @@ use std::time::Duration;
 pub struct ServerConfig {
     pub certificates: Vec<RTCCertificate>,
     pub dtls_handshake_config: Arc<dtls::config::HandshakeConfig>,
+    pub sctp_endpoint_config: Arc<sctp::EndpointConfig>,
     pub sctp_server_config: Arc<sctp::ServerConfig>,
     pub media_config: MediaConfig,
 
@@ -19,6 +20,7 @@ impl ServerConfig {
         Self {
             certificates,
             media_config: MediaConfig::default(),
+            sctp_endpoint_config: Arc::new(sctp::EndpointConfig::default()),
             sctp_server_config: Arc::new(sctp::ServerConfig::default()),
             dtls_handshake_config: Arc::new(dtls::config::HandshakeConfig::default()),
             endpoint_idle_timeout: Duration::from_secs(30),
@@ -33,6 +35,14 @@ impl ServerConfig {
 
     pub fn with_sctp_server_config(mut self, sctp_server_config: Arc<sctp::ServerConfig>) -> Self {
         self.sctp_server_config = sctp_server_config;
+        self
+    }
+
+    pub fn with_sctp_endpoint_config(
+        mut self,
+        sctp_endpoint_config: Arc<sctp::EndpointConfig>,
+    ) -> Self {
+        self.sctp_endpoint_config = sctp_endpoint_config;
         self
     }
 

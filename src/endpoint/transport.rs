@@ -13,6 +13,9 @@ pub(crate) struct Transport {
     // DTLS
     dtls_endpoint: dtls::endpoint::Endpoint,
 
+    // SCTP
+    sctp_endpoint: sctp::Endpoint,
+
     // DataChannel
     association_handle: Option<usize>,
     stream_id: Option<u16>,
@@ -27,6 +30,8 @@ impl Transport {
         four_tuple: FourTuple,
         candidate: Rc<Candidate>,
         dtls_handshake_config: Arc<dtls::config::HandshakeConfig>,
+        sctp_endpoint_config: Arc<sctp::EndpointConfig>,
+        sctp_server_config: Arc<sctp::ServerConfig>,
     ) -> Self {
         Self {
             four_tuple,
@@ -34,6 +39,8 @@ impl Transport {
             candidate,
 
             dtls_endpoint: dtls::endpoint::Endpoint::new(Some(dtls_handshake_config)),
+
+            sctp_endpoint: sctp::Endpoint::new(sctp_endpoint_config, Some(sctp_server_config)),
 
             association_handle: None,
             stream_id: None,

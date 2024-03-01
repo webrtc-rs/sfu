@@ -44,7 +44,7 @@ impl SctpHandler {
     pub fn new(
         local_addr: SocketAddr,
         server_states: Rc<RefCell<ServerStates>>,
-        sctp_endpoint_config: sctp::EndpointConfig,
+        sctp_endpoint_config: Arc<sctp::EndpointConfig>,
     ) -> Self {
         let sctp_server_config =
             Arc::clone(&server_states.borrow().server_config().sctp_server_config);
