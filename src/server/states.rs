@@ -7,6 +7,7 @@ use crate::endpoint::{
 use crate::server::config::ServerConfig;
 use crate::session::{config::SessionConfig, Session};
 use crate::types::{EndpointId, FourTuple, SessionId, UserName};
+use log::info;
 use shared::error::{Error, Result};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -180,6 +181,10 @@ impl ServerStates {
         endpoint_id: EndpointId,
     ) {
         self.endpoints.insert(four_tuple, (session_id, endpoint_id));
+        info!(
+            "endpoint {}/{} is connected via {:?}",
+            session_id, endpoint_id, four_tuple
+        )
     }
 
     pub(crate) fn remove_endpoint(&mut self, four_tuple: &FourTuple) {
