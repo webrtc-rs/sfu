@@ -1,6 +1,8 @@
 use crate::endpoint::candidate::Candidate;
 use crate::types::FourTuple;
+use sctp::{Association, AssociationHandle};
 use srtp::context::Context;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -15,6 +17,7 @@ pub(crate) struct Transport {
 
     // SCTP
     sctp_endpoint: sctp::Endpoint,
+    sctp_associations: HashMap<AssociationHandle, Association>,
 
     // DataChannel
     association_handle: Option<usize>,
@@ -41,6 +44,7 @@ impl Transport {
             dtls_endpoint: dtls::endpoint::Endpoint::new(Some(dtls_handshake_config)),
 
             sctp_endpoint: sctp::Endpoint::new(sctp_endpoint_config, Some(sctp_server_config)),
+            sctp_associations: HashMap::new(),
 
             association_handle: None,
             stream_id: None,
@@ -72,6 +76,25 @@ impl Transport {
 
     pub(crate) fn get_sctp_endpoint(&self) -> &sctp::Endpoint {
         &self.sctp_endpoint
+    }
+
+    pub(crate) fn get_mut_sctp_associations(
+        &mut self,
+    ) -> &mut HashMap<AssociationHandle, Association> {
+        &mut self.sctp_associations
+    }
+
+    pub(crate) fn get_mut_sctp_endpoint_associations(
+        &mut self,
+    ) -> (
+        &mut sctp::Endpoint,
+        &mut HashMap<AssociationHandle, Association>,
+    ) {
+        (&mut self.sctp_endpoint, &mut self.sctp_associations)
+    }
+
+    pub(crate) fn get_sctp_associations(&self) -> &HashMap<AssociationHandle, Association> {
+        &self.sctp_associations
     }
 
     pub(crate) fn local_srtp_context(&mut self) -> Option<&mut Context> {

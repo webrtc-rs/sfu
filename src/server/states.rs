@@ -7,7 +7,6 @@ use crate::endpoint::{
 use crate::server::config::ServerConfig;
 use crate::session::{config::SessionConfig, Session};
 use crate::types::{EndpointId, FourTuple, SessionId, UserName};
-use sctp::{Association, AssociationHandle};
 use shared::error::{Error, Result};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -24,7 +23,6 @@ pub struct ServerStates {
     //TODO: add idle timeout cleanup logic to remove idle endpoint and candidates
     candidates: HashMap<UserName, Rc<Candidate>>,
     endpoints: HashMap<FourTuple, (SessionId, EndpointId)>,
-    sctp_associations: HashMap<AssociationHandle, Association>,
 }
 
 impl ServerStates {
@@ -45,8 +43,6 @@ impl ServerStates {
 
             candidates: HashMap::new(),
             endpoints: HashMap::new(),
-
-            sctp_associations: HashMap::new(),
         })
     }
 
@@ -134,16 +130,6 @@ impl ServerStates {
 
     pub(crate) fn local_addr(&self) -> SocketAddr {
         self.local_addr
-    }
-
-    pub(crate) fn get_sctp_associations(&self) -> &HashMap<AssociationHandle, Association> {
-        &self.sctp_associations
-    }
-
-    pub(crate) fn get_mut_sctp_associations(
-        &mut self,
-    ) -> &mut HashMap<AssociationHandle, Association> {
-        &mut self.sctp_associations
     }
 
     pub(crate) fn create_or_get_mut_session(&mut self, session_id: SessionId) -> &mut Session {
