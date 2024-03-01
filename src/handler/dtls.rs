@@ -3,6 +3,7 @@ use retty::transport::TransportContext;
 use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::messages::{DTLSMessageEvent, MessageEvent, TaggedMessageEvent};
@@ -35,7 +36,7 @@ impl DtlsHandler {
     pub fn new(
         local_addr: SocketAddr,
         server_states: Rc<RefCell<ServerStates>>,
-        dtls_handshake_config: dtls::config::HandshakeConfig,
+        dtls_handshake_config: Arc<dtls::config::HandshakeConfig>,
     ) -> Self {
         let dtls_endpoint = Rc::new(RefCell::new(dtls::endpoint::Endpoint::new(Some(
             dtls_handshake_config,

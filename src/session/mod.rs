@@ -55,6 +55,11 @@ impl Session {
         candidate: &Rc<Candidate>,
         transport_context: &TransportContext,
     ) -> Result<bool> {
+        let dtls_handshake_config = self
+            .session_config
+            .server_config
+            .dtls_handshake_config
+            .clone();
         let endpoint_id = candidate.endpoint_id();
         let endpoint = self.get_mut_endpoint(&endpoint_id);
         let four_tuple = transport_context.into();
@@ -62,7 +67,8 @@ impl Session {
             if endpoint.has_transport(&four_tuple) {
                 Ok(true)
             } else {
-                let transport = Transport::new(four_tuple, Rc::clone(candidate));
+                let transport =
+                    Transport::new(four_tuple, Rc::clone(candidate), dtls_handshake_config);
                 endpoint.add_transport(transport);
                 Ok(true)
             }
@@ -70,7 +76,7 @@ impl Session {
             let registry = self.session_config.server_config.media_config.registry();
             let interceptor = registry.build(""); //TODO: use named registry id
             let mut endpoint = Endpoint::new(endpoint_id, interceptor);
-            let transport = Transport::new(four_tuple, Rc::clone(candidate));
+            let transport = Transport::new(four_tuple, Rc::clone(candidate), dtls_handshake_config);
             endpoint.add_transport(transport);
             endpoint.set_local_description(candidate.local_description().clone());
             endpoint.set_remote_description(candidate.remote_description().clone());

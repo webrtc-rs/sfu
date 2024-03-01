@@ -2,12 +2,16 @@ use crate::endpoint::candidate::Candidate;
 use crate::types::FourTuple;
 use srtp::context::Context;
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub(crate) struct Transport {
     four_tuple: FourTuple,
 
     // ICE
     candidate: Rc<Candidate>,
+
+    // DTLS
+    dtls_endpoint: dtls::endpoint::Endpoint,
 
     // DataChannel
     association_handle: Option<usize>,
@@ -19,10 +23,17 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-    pub(crate) fn new(four_tuple: FourTuple, candidate: Rc<Candidate>) -> Self {
+    pub(crate) fn new(
+        four_tuple: FourTuple,
+        candidate: Rc<Candidate>,
+        dtls_handshake_config: Arc<dtls::config::HandshakeConfig>,
+    ) -> Self {
         Self {
             four_tuple,
+
             candidate,
+
+            dtls_endpoint: dtls::endpoint::Endpoint::new(Some(dtls_handshake_config)),
 
             association_handle: None,
             stream_id: None,
@@ -38,6 +49,10 @@ impl Transport {
 
     pub(crate) fn candidate(&self) -> &Rc<Candidate> {
         &self.candidate
+    }
+
+    pub(crate) fn dtls_endpoint(&self) -> &dtls::endpoint::Endpoint {
+        &self.dtls_endpoint
     }
 
     pub(crate) fn local_srtp_context(&mut self) -> Option<&mut Context> {
