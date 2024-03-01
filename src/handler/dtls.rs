@@ -1,17 +1,17 @@
+use bytes::BytesMut;
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;
 use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::messages::{DTLSMessageEvent, MessageEvent, TaggedMessageEvent};
 use crate::server::states::ServerStates;
-use crate::types::FourTuple;
 use dtls::endpoint::EndpointEvent;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use dtls::state::State;
+use dtls::Transmit;
 use log::{debug, error, warn};
 use shared::error::{Error, Result};
 use srtp::context::Context;
@@ -21,36 +21,31 @@ use srtp::protection_profile::ProtectionProfile;
 struct DtlsInbound {
     local_addr: SocketAddr,
     server_states: Rc<RefCell<ServerStates>>,
-    dtls_endpoint: Rc<RefCell<dtls::endpoint::Endpoint>>,
 }
 struct DtlsOutbound {
     local_addr: SocketAddr,
-    dtls_endpoint: Rc<RefCell<dtls::endpoint::Endpoint>>,
+    server_states: Rc<RefCell<ServerStates>>,
 }
 pub struct DtlsHandler {
     dtls_inbound: DtlsInbound,
     dtls_outbound: DtlsOutbound,
 }
 
-impl DtlsHandler {
-    pub fn new(
-        local_addr: SocketAddr,
-        server_states: Rc<RefCell<ServerStates>>,
-        dtls_handshake_config: Arc<dtls::config::HandshakeConfig>,
-    ) -> Self {
-        let dtls_endpoint = Rc::new(RefCell::new(dtls::endpoint::Endpoint::new(Some(
-            dtls_handshake_config,
-        ))));
+enum DtlsMessage {
+    Inbound(BytesMut),
+    Outbound(Transmit),
+}
 
+impl DtlsHandler {
+    pub fn new(local_addr: SocketAddr, server_states: Rc<RefCell<ServerStates>>) -> Self {
         DtlsHandler {
             dtls_inbound: DtlsInbound {
                 local_addr,
-                server_states,
-                dtls_endpoint: Rc::clone(&dtls_endpoint),
+                server_states: Rc::clone(&server_states),
             },
             dtls_outbound: DtlsOutbound {
                 local_addr,
-                dtls_endpoint,
+                server_states,
             },
         }
     }
@@ -63,33 +58,35 @@ impl InboundHandler for DtlsInbound {
     fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
         if let MessageEvent::Dtls(DTLSMessageEvent::Raw(dtls_message)) = msg.message {
             debug!("recv dtls RAW {:?}", msg.transport.peer_addr);
-            let try_read = || -> Result<Vec<EndpointEvent>> {
-                let mut dtls_endpoint = self.dtls_endpoint.borrow_mut();
-                let messages = dtls_endpoint.read(
-                    msg.now,
-                    msg.transport.peer_addr,
-                    Some(msg.transport.local_addr.ip()),
-                    msg.transport.ecn,
-                    dtls_message,
-                )?;
-                Ok(messages)
-            };
-            match try_read() {
-                Ok(messages) => {
+            let four_tuple = (&msg.transport).into();
+
+            let try_read = || -> Result<Vec<DtlsMessage>> {
+                let mut server_states = self.server_states.borrow_mut();
+                let transport = server_states.get_mut_transport(&four_tuple)?;
+                let mut io_messages = vec![];
+                let mut contexts = vec![];
+
+                {
+                    let dtls_endpoint = transport.get_mut_dtls_endpoint();
+
+                    let messages = dtls_endpoint.read(
+                        msg.now,
+                        msg.transport.peer_addr,
+                        Some(msg.transport.local_addr.ip()),
+                        msg.transport.ecn,
+                        dtls_message,
+                    )?;
+
                     for message in messages {
                         match message {
                             EndpointEvent::HandshakeComplete => {
-                                debug!("recv dtls handshake complete");
-                                let dtls_endpoint = self.dtls_endpoint.borrow_mut();
                                 if let Some(state) =
                                     dtls_endpoint.get_connection_state(msg.transport.peer_addr)
                                 {
-                                    if let Err(err) =
-                                        self.update_srtp_contexts(state, (&msg.transport).into())
-                                    {
-                                        error!("try_read with error {}", err);
-                                        ctx.fire_read_exception(Box::new(err));
-                                    }
+                                    debug!("recv dtls handshake complete");
+                                    let (local_context, remote_context) =
+                                        DtlsInbound::update_srtp_contexts(state)?;
+                                    contexts.push((local_context, remote_context));
                                 } else {
                                     warn!(
                                         "Unable to find connection state for {}",
@@ -99,10 +96,47 @@ impl InboundHandler for DtlsInbound {
                             }
                             EndpointEvent::ApplicationData(message) => {
                                 debug!("recv dtls application RAW {:?}", msg.transport.peer_addr);
+                                io_messages.push(DtlsMessage::Inbound(message));
+                            }
+                        }
+                    }
+
+                    while let Some(transmit) = dtls_endpoint.poll_transmit() {
+                        io_messages.push(DtlsMessage::Outbound(transmit));
+                    }
+                }
+
+                for (local_context, remote_context) in contexts {
+                    transport.set_local_srtp_context(local_context);
+                    transport.set_remote_srtp_context(remote_context);
+                }
+
+                Ok(io_messages)
+            };
+
+            match try_read() {
+                Ok(messages) => {
+                    for message in messages {
+                        match message {
+                            DtlsMessage::Inbound(message) => {
+                                debug!("recv dtls application RAW {:?}", msg.transport.peer_addr);
                                 ctx.fire_read(TaggedMessageEvent {
                                     now: msg.now,
                                     transport: msg.transport,
                                     message: MessageEvent::Dtls(DTLSMessageEvent::Raw(message)),
+                                });
+                            }
+                            DtlsMessage::Outbound(transmit) => {
+                                ctx.fire_write(TaggedMessageEvent {
+                                    now: transmit.now,
+                                    transport: TransportContext {
+                                        local_addr: self.local_addr,
+                                        peer_addr: transmit.remote,
+                                        ecn: transmit.ecn,
+                                    },
+                                    message: MessageEvent::Dtls(DTLSMessageEvent::Raw(
+                                        transmit.payload,
+                                    )),
                                 });
                             }
                         }
@@ -113,7 +147,6 @@ impl InboundHandler for DtlsInbound {
                     ctx.fire_read_exception(Box::new(err))
                 }
             };
-            handle_outgoing(ctx, &self.dtls_endpoint, msg.transport.local_addr);
         } else {
             // Bypass
             debug!("bypass dtls read {:?}", msg.transport.peer_addr);
@@ -122,30 +155,63 @@ impl InboundHandler for DtlsInbound {
     }
 
     fn handle_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, now: Instant) {
-        let try_timeout = || -> Result<()> {
-            let mut dtls_endpoint = self.dtls_endpoint.borrow_mut();
-            let remotes: Vec<SocketAddr> = dtls_endpoint.get_connections_keys().copied().collect();
-            for remote in remotes {
-                let _ = dtls_endpoint.handle_timeout(remote, now);
-                //TODO: timeout errors
+        let try_timeout = || -> Result<Vec<Transmit>> {
+            let mut transmits = vec![];
+            let mut server_states = self.server_states.borrow_mut();
+            for session in server_states.get_mut_sessions().values_mut() {
+                for endpoint in session.get_mut_endpoints().values_mut() {
+                    for transport in endpoint.get_mut_transports().values_mut() {
+                        let dtls_endpoint = transport.get_mut_dtls_endpoint();
+                        let remotes: Vec<SocketAddr> =
+                            dtls_endpoint.get_connections_keys().copied().collect();
+                        for remote in remotes {
+                            let _ = dtls_endpoint.handle_timeout(remote, now);
+                        }
+                        while let Some(transmit) = dtls_endpoint.poll_transmit() {
+                            transmits.push(transmit);
+                        }
+                    }
+                }
             }
-            Ok(())
+
+            Ok(transmits)
         };
-        if let Err(err) = try_timeout() {
-            error!("try_timeout with error {}", err);
-            ctx.fire_read_exception(Box::new(err));
+        match try_timeout() {
+            Ok(transmits) => {
+                for transmit in transmits {
+                    ctx.fire_write(TaggedMessageEvent {
+                        now: transmit.now,
+                        transport: TransportContext {
+                            local_addr: self.local_addr,
+                            peer_addr: transmit.remote,
+                            ecn: transmit.ecn,
+                        },
+                        message: MessageEvent::Dtls(DTLSMessageEvent::Raw(transmit.payload)),
+                    });
+                }
+            }
+            Err(err) => {
+                error!("try_timeout with error {}", err);
+                ctx.fire_read_exception(Box::new(err));
+            }
         }
-        handle_outgoing(ctx, &self.dtls_endpoint, self.local_addr);
 
         ctx.fire_handle_timeout(now);
     }
 
     fn poll_timeout(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, eto: &mut Instant) {
         {
-            let dtls_endpoint = self.dtls_endpoint.borrow();
-            let remotes = dtls_endpoint.get_connections_keys();
-            for remote in remotes {
-                let _ = dtls_endpoint.poll_timeout(*remote, eto);
+            let server_states = self.server_states.borrow();
+            for session in server_states.get_sessions().values() {
+                for endpoint in session.get_endpoints().values() {
+                    for transport in endpoint.get_transports().values() {
+                        let dtls_endpoint = transport.get_dtls_endpoint();
+                        let remotes = dtls_endpoint.get_connections_keys();
+                        for remote in remotes {
+                            let _ = dtls_endpoint.poll_timeout(*remote, eto);
+                        }
+                    }
+                }
             }
         }
         ctx.fire_poll_timeout(eto);
@@ -159,33 +225,46 @@ impl OutboundHandler for DtlsOutbound {
     fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
         if let MessageEvent::Dtls(DTLSMessageEvent::Raw(dtls_message)) = msg.message {
             debug!("send dtls RAW {:?}", msg.transport.peer_addr);
-            let try_write = || -> Result<()> {
-                let mut dtls_endpoint = self.dtls_endpoint.borrow_mut();
-                dtls_endpoint.write(msg.transport.peer_addr, &dtls_message)
+            let four_tuple = (&msg.transport).into();
+
+            let try_write = || -> Result<Vec<Transmit>> {
+                let mut transmits = vec![];
+                let mut server_states = self.server_states.borrow_mut();
+                let transport = server_states.get_mut_transport(&four_tuple)?;
+                let dtls_endpoint = transport.get_mut_dtls_endpoint();
+
+                dtls_endpoint.write(msg.transport.peer_addr, &dtls_message)?;
+                while let Some(transmit) = dtls_endpoint.poll_transmit() {
+                    transmits.push(transmit);
+                }
+
+                Ok(transmits)
             };
-            if let Err(err) = try_write() {
-                error!("try_write with error {}", err);
-                ctx.fire_write_exception(Box::new(err));
+
+            match try_write() {
+                Ok(transmits) => {
+                    for transmit in transmits {
+                        ctx.fire_write(TaggedMessageEvent {
+                            now: transmit.now,
+                            transport: TransportContext {
+                                local_addr: self.local_addr,
+                                peer_addr: transmit.remote,
+                                ecn: transmit.ecn,
+                            },
+                            message: MessageEvent::Dtls(DTLSMessageEvent::Raw(transmit.payload)),
+                        });
+                    }
+                }
+                Err(err) => {
+                    error!("try_write with error {}", err);
+                    ctx.fire_write_exception(Box::new(err));
+                }
             }
-            handle_outgoing(ctx, &self.dtls_endpoint, msg.transport.local_addr);
         } else {
             // Bypass
             debug!("Bypass dtls write {:?}", msg.transport.peer_addr);
             ctx.fire_write(msg);
         }
-    }
-
-    fn close(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>) {
-        {
-            let mut dtls_endpoint = self.dtls_endpoint.borrow_mut();
-            let remotes: Vec<SocketAddr> = dtls_endpoint.get_connections_keys().copied().collect();
-            for remote in remotes {
-                let _ = dtls_endpoint.close(remote);
-            }
-        }
-        handle_outgoing(ctx, &self.dtls_endpoint, self.local_addr);
-
-        ctx.fire_close();
     }
 }
 
@@ -209,35 +288,10 @@ impl Handler for DtlsHandler {
     }
 }
 
-fn handle_outgoing(
-    ctx: &OutboundContext<TaggedMessageEvent, TaggedMessageEvent>,
-    dtls_endpoint: &Rc<RefCell<dtls::endpoint::Endpoint>>,
-    local_addr: SocketAddr,
-) {
-    let mut transmits = vec![];
-    {
-        let mut e = dtls_endpoint.borrow_mut();
-        while let Some(transmit) = e.poll_transmit() {
-            transmits.push(transmit);
-        }
-    };
-    for transmit in transmits {
-        ctx.fire_write(TaggedMessageEvent {
-            now: transmit.now,
-            transport: TransportContext {
-                local_addr,
-                peer_addr: transmit.remote,
-                ecn: transmit.ecn,
-            },
-            message: MessageEvent::Dtls(DTLSMessageEvent::Raw(transmit.payload)),
-        });
-    }
-}
-
 impl DtlsInbound {
     const DEFAULT_SESSION_SRTP_REPLAY_PROTECTION_WINDOW: usize = 64;
     const DEFAULT_SESSION_SRTCP_REPLAY_PROTECTION_WINDOW: usize = 64;
-    fn update_srtp_contexts(&self, state: &State, four_tuple: FourTuple) -> Result<()> {
+    pub(crate) fn update_srtp_contexts(state: &State) -> Result<(Context, Context)> {
         let profile = match state.srtp_protection_profile() {
             SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80 => {
                 ProtectionProfile::Aes128CmHmacSha1_80
@@ -288,17 +342,6 @@ impl DtlsInbound {
             },
         )?;
 
-        let mut server_states = self.server_states.borrow_mut();
-        match server_states.get_mut_transport(&four_tuple) {
-            Ok(transport) => {
-                transport.set_local_srtp_context(local_context);
-                transport.set_remote_srtp_context(remote_context);
-            }
-            Err(err) => {
-                warn!("can't find transport with {:?} due to {}", four_tuple, err);
-            }
-        }
-
-        Ok(())
+        Ok((local_context, remote_context))
     }
 }

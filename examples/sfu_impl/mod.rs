@@ -4,8 +4,6 @@ mod sync_transport;
 
 use crate::sfu_impl::sync_transport::SyncTransport;
 use bytes::{Bytes, BytesMut};
-use dtls::config::HandshakeConfig;
-use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use retty::channel::{InboundPipeline, Pipeline};
 use retty::transport::{TaggedBytesMut, TransportContext};
 use rouille::{Request, Response, ResponseBody};
@@ -108,19 +106,6 @@ pub fn run_sfu(
     rx: Receiver<SignalingMessage>,
     server_config: Arc<ServerConfig>,
 ) -> anyhow::Result<()> {
-    let dtls_handshake_config = Arc::new(
-        dtls::config::ConfigBuilder::default()
-            .with_certificates(
-                server_config
-                    .certificates
-                    .iter()
-                    .map(|c| c.dtls_certificate.clone())
-                    .collect(),
-            )
-            .with_srtp_protection_profiles(vec![SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80])
-            .with_extended_master_secret(dtls::config::ExtendedMasterSecretType::Require)
-            .build(false, None)?,
-    );
     let sctp_endpoint_config = Arc::new(sctp::EndpointConfig::default());
 
     let server_states = Rc::new(RefCell::new(ServerStates::new(
@@ -136,7 +121,6 @@ pub fn run_sfu(
         socket.local_addr()?,
         outgoing_queue.clone(),
         server_states.clone(),
-        dtls_handshake_config,
         sctp_endpoint_config,
     );
 
@@ -228,7 +212,6 @@ fn build_pipeline(
     local_addr: SocketAddr,
     writer: Rc<RefCell<VecDeque<TaggedBytesMut>>>,
     server_states: Rc<RefCell<ServerStates>>,
-    dtls_handshake_config: Arc<HandshakeConfig>,
     sctp_endpoint_config: Arc<sctp::EndpointConfig>,
 ) -> Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>> {
     let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
@@ -238,8 +221,7 @@ fn build_pipeline(
     let write_exception_handler = ExceptionHandler::new();
     let stun_handler = StunHandler::new();
     // DTLS
-    let dtls_handler =
-        DtlsHandler::new(local_addr, Rc::clone(&server_states), dtls_handshake_config);
+    let dtls_handler = DtlsHandler::new(local_addr, Rc::clone(&server_states));
     let sctp_handler =
         SctpHandler::new(local_addr, Rc::clone(&server_states), sctp_endpoint_config);
     let data_channel_handler = DataChannelHandler::new();

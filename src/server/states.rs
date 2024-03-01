@@ -162,6 +162,10 @@ impl ServerStates {
         &mut self.sessions
     }
 
+    pub(crate) fn get_sessions(&self) -> &HashMap<SessionId, Session> {
+        &self.sessions
+    }
+
     pub(crate) fn get_session(&self, session_id: &SessionId) -> Option<&Session> {
         self.sessions.get(session_id)
     }

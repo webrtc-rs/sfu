@@ -58,8 +58,20 @@ impl Transport {
         &self.candidate
     }
 
-    pub(crate) fn dtls_endpoint(&self) -> &dtls::endpoint::Endpoint {
+    pub(crate) fn get_mut_dtls_endpoint(&mut self) -> &mut dtls::endpoint::Endpoint {
+        &mut self.dtls_endpoint
+    }
+
+    pub(crate) fn get_dtls_endpoint(&self) -> &dtls::endpoint::Endpoint {
         &self.dtls_endpoint
+    }
+
+    pub(crate) fn get_mut_sctp_endpoint(&mut self) -> &mut sctp::Endpoint {
+        &mut self.sctp_endpoint
+    }
+
+    pub(crate) fn get_sctp_endpoint(&self) -> &sctp::Endpoint {
+        &self.sctp_endpoint
     }
 
     pub(crate) fn local_srtp_context(&mut self) -> Option<&mut Context> {
