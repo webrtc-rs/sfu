@@ -2,7 +2,6 @@ use crate::description::{
     rtp_codec::{RTCRtpParameters, RTPCodecType},
     rtp_transceiver_direction::RTCRtpTransceiverDirection,
 };
-use std::collections::HashSet;
 
 /// SSRC represents a synchronization source
 /// A synchronization source is a randomly chosen
@@ -63,7 +62,7 @@ pub(crate) struct SsrcGroup {
 pub(crate) struct RTCRtpSender {
     pub(crate) cname: String,
     pub(crate) msid: MediaStreamId,
-    pub(crate) ssrcs: HashSet<SSRC>,
+    pub(crate) ssrcs: Vec<SSRC>,
     pub(crate) ssrc_groups: Vec<SsrcGroup>,
 }
 

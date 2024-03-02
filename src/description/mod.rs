@@ -28,7 +28,7 @@ use sdp::util::ConnectionRole;
 use sdp::{MediaDescription, SessionDescription};
 use serde::{Deserialize, Serialize};
 use shared::error::{Error, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufReader, Cursor};
 use std::net::SocketAddr;
 use url::Url;
@@ -633,20 +633,22 @@ pub(crate) fn get_ssrc_groups(media: &MediaDescription) -> Result<Vec<SsrcGroup>
     Ok(ssrc_groups)
 }
 
-pub(crate) fn get_ssrcs(media: &MediaDescription) -> Result<HashSet<SSRC>> {
-    let mut ssrc_set = HashSet::new();
+pub(crate) fn get_ssrcs(media: &MediaDescription) -> Result<Vec<SSRC>> {
+    let mut ssrcs = Vec::new();
     for a in &media.attributes {
         if a.key == "ssrc" {
             if let Some(value) = a.value.as_ref() {
                 let fields: Vec<&str> = value.split_whitespace().collect();
                 if !fields.is_empty() {
                     let ssrc = fields[0].parse::<u32>()?;
-                    ssrc_set.insert(ssrc);
+                    if !ssrcs.iter().any(|&s| s == ssrc) {
+                        ssrcs.push(ssrc);
+                    };
                 }
             }
         }
     }
-    Ok(ssrc_set)
+    Ok(ssrcs)
 }
 
 pub(crate) fn extract_fingerprint(desc: &SessionDescription) -> Result<(String, String)> {
