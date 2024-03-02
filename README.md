@@ -62,10 +62,11 @@ To build sfu crate:
 cargo build [or clippy or test or fmt]
 ```
 
-To build sfu-based chat example:
+To build chat examples:
 
 ```
-cargo run --package sfu --example chat
+cargo run --package sfu --example sync_chat
+cargo run --package sfu --example async_chat
 ```
 
 ## Open Source License
