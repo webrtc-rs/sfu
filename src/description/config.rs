@@ -75,7 +75,7 @@ impl RTCRtpHeaderExtension {
 }
 
 /// A MediaConfig defines the codecs supported by a PeerConnection, and the
-/// configuration of those codecs. A MediaConfig must not be shared between
+/// configuration of those codecs. A MediaConfig must not be rtc-shared between
 /// PeerConnections.
 pub struct MediaConfig {
     registry: Registry,

@@ -2,7 +2,7 @@ use crate::messages::{
     ApplicationMessage, DTLSMessageEvent, DataChannelEvent, DataChannelMessage,
     DataChannelMessageParams, DataChannelMessageType, MessageEvent, TaggedMessageEvent,
 };
-use data::message::{message_channel_ack::*, message_channel_open::*, message_type::*, *};
+use datachannel::message::{message_channel_ack::*, message_channel_open::*, message_type::*, *};
 use log::{debug, error, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use shared::error::Result;

@@ -2,9 +2,9 @@ name: tests
 
 on:
   push:
-    branches: [master]
+    branches: [ master ]
   pull_request:
-    branches: [master]
+    branches: [ master ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,11 +20,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-        with:
-          submodules: recursive
 
       - name: Build and run chat server and tests in Docker
-        run: |          
+        run: |
           docker build -t chat-server .
           docker run -d --name chat-server -p 8080:8080 -p 3478-3495:3478-3495/udp chat-server
 
