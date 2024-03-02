@@ -1,6 +1,3 @@
 [submodule "rtc"]
 	path = rtc
 	url = https://github.com/webrtc-rs/rtc
-[submodule "webrtc"]
-	path = webrtc
-	url = https://github.com/webrtc-rs/webrtc
