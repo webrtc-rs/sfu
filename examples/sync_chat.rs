@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate tracing;
-
 use clap::Parser;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use rouille::Server;
@@ -13,12 +10,10 @@ use std::sync::mpsc::{self};
 use std::sync::Arc;
 use wg::WaitGroup;
 
-mod sfu_impl;
-mod str0m_impl;
+mod sync;
 mod util;
 
-use sfu_impl::*;
-use str0m_impl::*;
+use sync::*;
 
 #[derive(Default, Debug, Copy, Clone, clap::ValueEnum)]
 enum Level {
@@ -60,8 +55,6 @@ struct Cli {
     #[arg(short, long)]
     force_local_loop: bool,
     #[arg(short, long)]
-    str0m: bool,
-    #[arg(short, long)]
     debug: bool,
     #[arg(short, long, default_value_t = Level::Info)]
     #[clap(value_enum)]
@@ -70,11 +63,25 @@ struct Cli {
 
 pub fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if cli.debug {
+        env_logger::Builder::new()
+            .format(|buf, record| {
+                writeln!(
+                    buf,
+                    "{}:{} [{}] {} - {}",
+                    record.file().unwrap_or("unknown"),
+                    record.line().unwrap_or(0),
+                    record.level(),
+                    chrono::Local::now().format("%H:%M:%S.%6f"),
+                    record.args()
+                )
+            })
+            .filter(None, cli.level.into())
+            .init();
+    }
 
-    init_log(cli.debug, cli.level);
-
-    let certificate = include_bytes!("str0m_impl/cer.pem").to_vec();
-    let private_key = include_bytes!("str0m_impl/key.pem").to_vec();
+    let certificate = include_bytes!("util/cer.pem").to_vec();
+    let private_key = include_bytes!("util/key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = if cli.host == "127.0.0.1" && !cli.force_local_loop {
@@ -114,7 +121,6 @@ pub fn main() -> anyhow::Result<()> {
     for port in media_ports {
         let worker = wait_group.add(1);
         let stop_rx = stop_rx.clone();
-        let (signaling_tx, signaling_rx) = mpsc::sync_channel(1);
         let (signaling_msg_tx, signaling_msg_rx) = mpsc::sync_channel(1);
 
         // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
@@ -122,39 +128,23 @@ pub fn main() -> anyhow::Result<()> {
         let socket = UdpSocket::bind(format!("{host_addr}:{port}"))
             .expect(&format!("binding to {host_addr}:{port}"));
 
-        if cli.str0m {
-            media_port_thread_map.insert(port, (Some(signaling_tx), None));
-            // The run loop is on a separate thread to the web server.
-            std::thread::spawn(move || {
-                if let Err(err) = run_str0m(stop_rx, socket, signaling_rx) {
-                    eprintln!("run_str0m got error: {}", err);
-                }
-                worker.done();
-            });
-        } else {
-            media_port_thread_map.insert(port, (None, Some(signaling_msg_tx)));
-            let server_config = server_config.clone();
-            // The run loop is on a separate thread to the web server.
-            std::thread::spawn(move || {
-                if let Err(err) = run_sfu(stop_rx, socket, signaling_msg_rx, server_config) {
-                    eprintln!("run_sfu got error: {}", err);
-                }
-                worker.done();
-            });
-        }
+        media_port_thread_map.insert(port, signaling_msg_tx);
+        let server_config = server_config.clone();
+        // The run loop is on a separate thread to the web server.
+        std::thread::spawn(move || {
+            if let Err(err) = run_sfu(stop_rx, socket, signaling_msg_rx, server_config) {
+                eprintln!("run_sfu got error: {}", err);
+            }
+            worker.done();
+        });
     }
 
     let media_port_thread_map = Arc::new(media_port_thread_map);
     let signal_port = cli.signal_port;
-    let use_str0m_impl = cli.str0m;
     let (signal_handle, signal_cancel_tx) = if cli.force_local_loop {
         // for integration test, no ssl
         let signal_server = Server::new(format!("{}:{}", host_addr, signal_port), move |request| {
-            if use_str0m_impl {
-                web_request_str0m(request, host_addr, media_port_thread_map.clone())
-            } else {
-                web_request_sfu(request, media_port_thread_map.clone())
-            }
+            web_request_sfu(request, media_port_thread_map.clone())
         })
         .expect("starting the signal server");
 
@@ -165,13 +155,7 @@ pub fn main() -> anyhow::Result<()> {
     } else {
         let signal_server = Server::new_ssl(
             format!("{}:{}", host_addr, signal_port),
-            move |request| {
-                if use_str0m_impl {
-                    web_request_str0m(request, host_addr, media_port_thread_map.clone())
-                } else {
-                    web_request_sfu(request, media_port_thread_map.clone())
-                }
-            },
+            move |request| web_request_sfu(request, media_port_thread_map.clone()),
             certificate,
             private_key,
         )
@@ -201,35 +185,4 @@ pub fn main() -> anyhow::Result<()> {
     let _ = signal_handle.join();
 
     Ok(())
-}
-
-fn init_log(debug: bool, level: Level) {
-    use std::env;
-    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-    if debug {
-        env_logger::Builder::new()
-            .format(|buf, record| {
-                writeln!(
-                    buf,
-                    "{}:{} [{}] {} - {}",
-                    record.file().unwrap_or("unknown"),
-                    record.line().unwrap_or(0),
-                    record.level(),
-                    chrono::Local::now().format("%H:%M:%S.%6f"),
-                    record.args()
-                )
-            })
-            .filter(None, level.into())
-            .init();
-    } else {
-        if env::var("RUST_LOG").is_err() {
-            env::set_var("RUST_LOG", "chat=info,str0m=info");
-        }
-
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(EnvFilter::from_default_env())
-            .init();
-    }
 }

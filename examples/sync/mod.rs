@@ -2,8 +2,9 @@
 
 mod sync_transport;
 
-use crate::sfu_impl::sync_transport::SyncTransport;
+use crate::sync::sync_transport::SyncTransport;
 use bytes::{Bytes, BytesMut};
+use log::error;
 use retty::channel::{InboundPipeline, Pipeline};
 use retty::transport::{TaggedBytesMut, TransportContext};
 use rouille::{Request, Response, ResponseBody};
@@ -24,15 +25,7 @@ use std::time::{Duration, Instant};
 // Handle a web request.
 pub fn web_request_sfu(
     request: &Request,
-    media_port_thread_map: Arc<
-        HashMap<
-            u16,
-            (
-                Option<SyncSender<str0m::Rtc>>,
-                Option<SyncSender<SignalingMessage>>,
-            ),
-        >,
-    >,
+    media_port_thread_map: Arc<HashMap<u16, SyncSender<SignalingMessage>>>,
 ) -> Response {
     if request.method() == "GET" {
         return Response::html(include_str!("../chat.html"));
@@ -49,7 +42,7 @@ pub fn web_request_sfu(
     sorted_ports.sort();
     assert!(!sorted_ports.is_empty());
     let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
-    let (_, tx) = media_port_thread_map.get(&port).unwrap();
+    let tx = media_port_thread_map.get(&port);
 
     // Expected POST SDP Offers.
     let mut offer_sdp = vec![];

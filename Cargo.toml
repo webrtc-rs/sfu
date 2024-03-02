@@ -36,7 +36,6 @@ srtp = { path = "rtc/srtp" }
 dtls = { path = "rtc/dtls" }
 sctp = { path = "rtc/sctp" }
 data = { path = "rtc/data" }
-futures = "0.3.30"
 
 [dev-dependencies]
 # sfu impl
@@ -47,9 +46,6 @@ crossbeam-channel = "0.5.11"
 ctrlc = "3.4.2"
 
 # str0m impl
-str0m = "0.4.1"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std"] }
-tracing = "0.1.37"
 rouille = { version = "3.6.2", features = ["ssl"] }
 systemstat = "0.2.2"
 
