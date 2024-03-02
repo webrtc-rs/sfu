@@ -182,7 +182,7 @@ impl ServerStates {
     ) {
         self.endpoints.insert(four_tuple, (session_id, endpoint_id));
         info!(
-            "endpoint {}/{} is connected via {:?}",
+            "{}/{} is connected via {:?}",
             session_id, endpoint_id, four_tuple
         )
     }

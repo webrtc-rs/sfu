@@ -9,7 +9,7 @@ use crate::messages::{
 };
 use crate::server::states::ServerStates;
 use bytes::BytesMut;
-use log::{debug, warn};
+use log::{debug, info, trace, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
 use retty::transport::TransportContext;
 use shared::error::{Error, Result};
@@ -275,6 +275,12 @@ impl GatewayInbound {
             endpoint_id, four_tuple
         )))?;
         transport.set_association_handle_and_stream_id(association_handle, stream_id);
+        info!(
+            "{}/{}: data channel is ready for {:?}",
+            session_id,
+            endpoint_id,
+            transport.four_tuple()
+        );
         endpoint.set_renegotiation_needed(!new_transceivers.is_empty());
 
         let (mids, transceivers) = endpoint.get_mut_mids_and_transceivers();
@@ -336,7 +342,7 @@ impl GatewayInbound {
                 let answer_str =
                     serde_json::to_string(&answer).map_err(|err| Error::Other(err.to_string()))?;
 
-                let peers = GatewayInbound::get_other_transport_contexts(
+                let peers = GatewayInbound::get_other_datachannel_transport_contexts(
                     server_states,
                     &transport_context,
                 )?;
@@ -396,10 +402,10 @@ impl GatewayInbound {
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: Selective Forwarding RTP Packets
         let peers =
-            GatewayInbound::get_other_transport_contexts(server_states, &transport_context)?;
+            GatewayInbound::get_other_media_transport_contexts(server_states, &transport_context)?;
 
         let mut outgoing_messages = Vec::with_capacity(peers.len());
-        for (transport, _, _, _) in peers {
+        for transport in peers {
             outgoing_messages.push(TaggedMessageEvent {
                 now,
                 transport,
@@ -418,10 +424,10 @@ impl GatewayInbound {
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: Selective Forwarding RTCP Packets
         let peers =
-            GatewayInbound::get_other_transport_contexts(server_states, &transport_context)?;
+            GatewayInbound::get_other_media_transport_contexts(server_states, &transport_context)?;
 
         let mut outgoing_messages = Vec::with_capacity(peers.len());
-        for (transport, _, _, _) in peers {
+        for transport in peers {
             outgoing_messages.push(TaggedMessageEvent {
                 now,
                 transport,
@@ -483,7 +489,7 @@ impl GatewayInbound {
         }
     }
 
-    fn get_other_transport_contexts(
+    fn get_other_datachannel_transport_contexts(
         server_states: &mut ServerStates,
         transport_context: &TransportContext,
     ) -> Result<Vec<(TransportContext, usize, u16, bool)>> {
@@ -518,9 +524,56 @@ impl GatewayInbound {
                             other_endpoint.is_renegotiation_needed(),
                         ));
                     } else {
-                        warn!(
-                            "session id {}/endpoint id {}'s data channel is not ready",
-                            session_id, endpoint_id
+                        // data channel is not ready yet for other_endpoint_id's other_four_tuple.
+                        // this transport just joins, but data channel is still setup
+                        trace!(
+                            "{}/{}'s data channel is not ready yet for {:?} since it is still setup",
+                            session_id,
+                            other_endpoint_id,
+                            other_four_tuple,
+                        );
+                    }
+                }
+            }
+        }
+        Ok(peers)
+    }
+
+    fn get_other_media_transport_contexts(
+        server_states: &mut ServerStates,
+        transport_context: &TransportContext,
+    ) -> Result<Vec<TransportContext>> {
+        let four_tuple = transport_context.into();
+        let (session_id, endpoint_id) = server_states
+            .find_endpoint(&four_tuple)
+            .ok_or(Error::ErrClientTransportNotSet)?;
+        let session = server_states
+            .get_session(&session_id)
+            .ok_or(Error::Other(format!(
+                "can't find session id {}",
+                session_id
+            )))?;
+
+        let mut peers = vec![];
+        let endpoints = session.get_endpoints();
+        for (&other_endpoint_id, other_endpoint) in endpoints.iter() {
+            if other_endpoint_id != endpoint_id {
+                let transports = other_endpoint.get_transports();
+                for (other_four_tuple, other_transport) in transports.iter() {
+                    if other_transport.is_local_srtp_context_ready() {
+                        peers.push(TransportContext {
+                            local_addr: other_four_tuple.local_addr,
+                            peer_addr: other_four_tuple.peer_addr,
+                            ecn: transport_context.ecn,
+                        });
+                    } else {
+                        // local_srtp_context is not ready yet for other_endpoint_id's other_four_tuple.
+                        // this transport just joins, but local_srtp_context is still setup
+                        trace!(
+                            "{}/{}'s local_srtp_context is not ready yet for {:?} since it is still setup",
+                            session_id,
+                            other_endpoint_id,
+                            other_four_tuple,
                         );
                     }
                 }

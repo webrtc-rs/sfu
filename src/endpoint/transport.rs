@@ -125,4 +125,8 @@ impl Transport {
     pub(crate) fn association_handle_and_stream_id(&self) -> (Option<usize>, Option<u16>) {
         (self.association_handle, self.stream_id)
     }
+
+    pub(crate) fn is_local_srtp_context_ready(&self) -> bool {
+        self.local_srtp_context.is_some()
+    }
 }
