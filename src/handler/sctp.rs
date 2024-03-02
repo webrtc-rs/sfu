@@ -29,6 +29,8 @@ struct SctpOutbound {
     local_addr: SocketAddr,
     server_states: Rc<RefCell<ServerStates>>,
 }
+
+/// SctpHandler implements SCTP Protocol handling
 pub struct SctpHandler {
     sctp_inbound: SctpInbound,
     sctp_outbound: SctpOutbound,

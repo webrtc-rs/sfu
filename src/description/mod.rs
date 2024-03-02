@@ -36,7 +36,7 @@ use url::Url;
 pub(crate) const UNSPECIFIED_STR: &str = "Unspecified";
 pub(crate) const SDP_ATTRIBUTE_RID: &str = "rid";
 
-/// SessionDescription is used to expose local and remote session descriptions.
+/// RTCSessionDescription is used to expose local and remote session descriptions.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct RTCSessionDescription {
     #[serde(rename = "type")]

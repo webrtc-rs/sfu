@@ -41,7 +41,7 @@ impl TryFrom<&str> for RTCDtlsFingerprint {
     }
 }
 
-/// Certificate represents a X.509 certificate used to authenticate WebRTC communications.
+/// RTCCertificate represents a X.509 certificate used to authenticate WebRTC communications.
 #[derive(Clone, Debug)]
 pub struct RTCCertificate {
     /// DTLS certificate.
@@ -171,7 +171,7 @@ impl RTCCertificate {
     /// new one for each DTLS connection).
     ///
     /// NOTE: ID used for statistics will be different as it's neither derived from the given
-    /// certificate nor persisted along it when using [`serialize_pem`].
+    /// certificate nor persisted along it when using serialize_pem.
     pub fn from_existing(dtls_certificate: dtls::crypto::Certificate, expires: SystemTime) -> Self {
         Self {
             dtls_certificate,

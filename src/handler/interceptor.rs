@@ -15,6 +15,8 @@ struct InterceptorInbound {
 struct InterceptorOutbound {
     server_states: Rc<RefCell<ServerStates>>,
 }
+
+/// InterceptorHandler implements RTCP feedback handling
 pub struct InterceptorHandler {
     interceptor_inbound: InterceptorInbound,
     interceptor_outbound: InterceptorOutbound,

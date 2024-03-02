@@ -12,6 +12,8 @@ use shared::marshal::*;
 struct DataChannelInbound;
 #[derive(Default)]
 struct DataChannelOutbound;
+
+/// DataChannelHandler implements DataChannel Protocol handling
 #[derive(Default)]
 pub struct DataChannelHandler {
     data_channel_inbound: DataChannelInbound,

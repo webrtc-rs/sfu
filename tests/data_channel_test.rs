@@ -1,7 +1,6 @@
 use crate::common::{HOST, SIGNAL_PORT};
 use log::error;
 use rand::random;
-use sfu::{EndpointId, SessionId};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 
@@ -11,7 +10,7 @@ mod common;
 #[tokio::test]
 async fn test_data_channel() -> anyhow::Result<()> {
     // Prepare the configuration
-    let session_id: SessionId = random::<u64>();
+    let session_id: u64 = random::<u64>();
     let endpoint_id = 0;
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
@@ -51,7 +50,7 @@ async fn test_data_channel() -> anyhow::Result<()> {
 async fn test_data_channels() -> anyhow::Result<()> {
     // Prepare the configuration
     let endpoint_count: usize = 3;
-    let session_id: SessionId = random::<u64>();
+    let session_id: u64 = random::<u64>();
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
@@ -80,7 +79,7 @@ async fn test_data_channels() -> anyhow::Result<()> {
             HOST,
             SIGNAL_PORT,
             session_id,
-            endpoint_id as EndpointId,
+            endpoint_id as u64,
             peer_connection,
         )
         .await

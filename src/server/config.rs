@@ -3,13 +3,13 @@ use crate::server::certificate::RTCCertificate;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// ServerConfig provides customized parameters for SFU server
 pub struct ServerConfig {
-    pub certificates: Vec<RTCCertificate>,
-    pub dtls_handshake_config: Arc<dtls::config::HandshakeConfig>,
-    pub sctp_endpoint_config: Arc<sctp::EndpointConfig>,
-    pub sctp_server_config: Arc<sctp::ServerConfig>,
-    pub media_config: MediaConfig,
-
+    pub(crate) certificates: Vec<RTCCertificate>,
+    pub(crate) dtls_handshake_config: Arc<dtls::config::HandshakeConfig>,
+    pub(crate) sctp_endpoint_config: Arc<sctp::EndpointConfig>,
+    pub(crate) sctp_server_config: Arc<sctp::ServerConfig>,
+    pub(crate) media_config: MediaConfig,
     pub(crate) endpoint_idle_timeout: Duration,
     pub(crate) candidate_idle_timeout: Duration,
 }
@@ -28,16 +28,19 @@ impl ServerConfig {
         }
     }
 
+    /// build with provided MediaConfig
     pub fn with_media_config(mut self, media_config: MediaConfig) -> Self {
         self.media_config = media_config;
         self
     }
 
+    /// build with provided sctp::ServerConfig
     pub fn with_sctp_server_config(mut self, sctp_server_config: Arc<sctp::ServerConfig>) -> Self {
         self.sctp_server_config = sctp_server_config;
         self
     }
 
+    /// build with provided sctp::EndpointConfig
     pub fn with_sctp_endpoint_config(
         mut self,
         sctp_endpoint_config: Arc<sctp::EndpointConfig>,
@@ -46,6 +49,7 @@ impl ServerConfig {
         self
     }
 
+    /// build with provided dtls::config::HandshakeConfig
     pub fn with_dtls_handshake_config(
         mut self,
         dtls_handshake_config: Arc<dtls::config::HandshakeConfig>,
@@ -54,11 +58,13 @@ impl ServerConfig {
         self
     }
 
+    /// build with endpoint idle timeout
     pub fn with_endpoint_idle_timeout(mut self, endpoint_idle_timeout: Duration) -> Self {
         self.endpoint_idle_timeout = endpoint_idle_timeout;
         self
     }
 
+    /// build with candidate idle timeout
     pub fn with_candidate_idle_timeout(mut self, candidate_idle_timeout: Duration) -> Self {
         self.candidate_idle_timeout = candidate_idle_timeout;
         self

@@ -43,6 +43,8 @@ fn match_srtp(b: &[u8]) -> bool {
 struct DemuxerInbound;
 #[derive(Default)]
 struct DemuxerOutbound;
+
+/// DemuxerHandler implements demuxing of STUN/DTLS/RTP/RTCP Protocol packets
 #[derive(Default)]
 pub struct DemuxerHandler {
     demuxer_inbound: DemuxerInbound,

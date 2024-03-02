@@ -4,7 +4,6 @@ use anyhow::Result;
 use hyper::{Body, Client, Method, Request};
 use log::LevelFilter::Debug;
 use log::{error, info};
-use sfu::{EndpointId, SessionId};
 use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -38,7 +37,7 @@ fn pretty_sdp(input: &str) -> String {
 
 pub async fn setup_peer_connection(
     config: RTCConfiguration,
-    endpoint_id: EndpointId,
+    endpoint_id: u64,
 ) -> Result<Arc<RTCPeerConnection>> {
     let _ = env_logger::Builder::new()
         .format(|buf, record| {
@@ -111,7 +110,7 @@ pub async fn setup_peer_connections(
     let mut peer_connections = Vec::with_capacity(configs.len());
 
     for (config, endpoint_id) in configs.into_iter().zip(endpoint_ids) {
-        let peer_connection = setup_peer_connection(config, *endpoint_id as EndpointId).await?;
+        let peer_connection = setup_peer_connection(config, *endpoint_id as u64).await?;
         peer_connections.push(peer_connection);
     }
 
@@ -135,8 +134,8 @@ pub async fn teardown_peer_connections(pcs: Vec<Arc<RTCPeerConnection>>) -> Resu
 async fn signaling(
     host: &str,
     signal_port: u16,
-    session_id: SessionId,
-    endpoint_id: EndpointId,
+    session_id: u64,
+    endpoint_id: u64,
     offer_payload: String,
 ) -> Result<RTCSessionDescription> {
     info!("connecting to signaling server http://{host}:{signal_port}/offer/{session_id}/{endpoint_id}");
@@ -165,8 +164,8 @@ async fn signaling(
 pub async fn renegotiate(
     host: &str,
     signal_port: u16,
-    session_id: SessionId,
-    endpoint_id: EndpointId,
+    session_id: u64,
+    endpoint_id: u64,
     peer_connection: &Arc<RTCPeerConnection>,
     data_channel: Option<&Arc<RTCDataChannel>>,
 ) -> Result<()> {
@@ -199,8 +198,8 @@ pub async fn renegotiate(
 pub async fn connect(
     host: &str,
     signal_port: u16,
-    session_id: SessionId,
-    endpoint_id: EndpointId,
+    session_id: u64,
+    endpoint_id: u64,
     peer_connection: &Arc<RTCPeerConnection>,
 ) -> Result<(
     Arc<RTCDataChannel>,

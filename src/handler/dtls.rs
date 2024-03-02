@@ -26,6 +26,8 @@ struct DtlsOutbound {
     local_addr: SocketAddr,
     server_states: Rc<RefCell<ServerStates>>,
 }
+
+/// DtlsHandler implements DTLS Protocol handling
 pub struct DtlsHandler {
     dtls_inbound: DtlsInbound,
     dtls_outbound: DtlsOutbound,

@@ -33,6 +33,7 @@ struct GatewayOutbound {
     server_states: Rc<RefCell<ServerStates>>,
 }
 
+/// GatewayHandler implements Data/Media Selective Forward handling
 pub struct GatewayHandler {
     gateway_inbound: GatewayInbound,
     gateway_outbound: GatewayOutbound,

@@ -17,6 +17,8 @@ struct SrtpInbound {
 struct SrtpOutbound {
     server_states: Rc<RefCell<ServerStates>>, // for local_srtp_context
 }
+
+/// SrtpHandler implements SRTP/RTP/RTCP Protocols handling
 pub struct SrtpHandler {
     srtp_inbound: SrtpInbound,
     srtp_outbound: SrtpOutbound,

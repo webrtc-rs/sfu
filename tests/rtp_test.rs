@@ -2,7 +2,6 @@ use crate::common::{HOST, SIGNAL_PORT};
 use bytes::Bytes;
 use log::{error, info};
 use rand::random;
-use sfu::{EndpointId, SessionId};
 use shared::error::Error;
 use webrtc::api::media_engine::MIME_TYPE_VP8;
 use webrtc::ice_transport::ice_server::RTCIceServer;
@@ -19,7 +18,7 @@ mod common;
 async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
     // Prepare the configuration
     let endpoint_count: usize = 2;
-    let session_id: SessionId = random::<u64>();
+    let session_id: u64 = random::<u64>();
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
@@ -49,7 +48,7 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
             HOST,
             SIGNAL_PORT,
             session_id,
-            endpoint_id as EndpointId,
+            endpoint_id as u64,
             peer_connection,
         )
         .await
@@ -100,7 +99,7 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
         HOST,
         SIGNAL_PORT,
         session_id,
-        endpoint_ids[0] as EndpointId,
+        endpoint_ids[0] as u64,
         &peer_connections[0],
         Some(&data_channels[0].0),
     )
@@ -218,7 +217,7 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
 
 async fn test_rtp_bi_direction_sendrecv(endpoint_count: usize) -> anyhow::Result<()> {
     // Prepare the configuration
-    let session_id: SessionId = random::<u64>();
+    let session_id: u64 = random::<u64>();
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
@@ -248,7 +247,7 @@ async fn test_rtp_bi_direction_sendrecv(endpoint_count: usize) -> anyhow::Result
             HOST,
             SIGNAL_PORT,
             session_id,
-            endpoint_id as EndpointId,
+            endpoint_id as u64,
             peer_connection,
         )
         .await
@@ -305,7 +304,7 @@ async fn test_rtp_bi_direction_sendrecv(endpoint_count: usize) -> anyhow::Result
             HOST,
             SIGNAL_PORT,
             session_id,
-            endpoint_id as EndpointId,
+            endpoint_id as u64,
             peer_connection,
             Some(&data_channels[endpoint_id].0),
         )

@@ -8,6 +8,7 @@ struct ExceptionInbound;
 #[derive(Default)]
 struct ExceptionOutbound;
 
+/// ExceptionHandler implements exception handling for inbound or outbound directions
 #[derive(Default)]
 pub struct ExceptionHandler {
     exception_inbound: ExceptionInbound,

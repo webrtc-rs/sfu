@@ -16,6 +16,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// ServerStates maintains SFU internal states, such sessions, endpoints, etc.
 pub struct ServerStates {
     server_config: Arc<ServerConfig>,
     local_addr: SocketAddr,
