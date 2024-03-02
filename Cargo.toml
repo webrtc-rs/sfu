@@ -12,19 +12,19 @@ keywords = ["networking", "protocols"]
 categories = ["network-programming", "asynchronous"]
 
 [dependencies]
-retty = "0.24.0"
-bytes = "1.5.0"
-log = "0.4.20"
-base64 = "0.21.5"
-serde = "1.0.193"
-serde_json = { version = "1.0.111", features = [] }
-rand = "0.8.5"
-rcgen = { version = "0.11", features = ["pem", "x509-parser"] }
-ring = "0.17.7"
-sha2 = "0.10.8"
-rustls = "0.21.7"
+retty = "0.24"
+bytes = "1.5"
+log = "0.4"
+base64 = "0.22"
+serde = "1"
+serde_json = { version = "1", features = [] }
+rand = "0.8"
+rcgen = { version = "0.12", features = ["pem", "x509-parser"] }
+ring = "0.17"
+sha2 = "0.10"
+rustls = "0.21"
 url = { version = "2", features = [] }
-hex = { version = "0.4.3", features = [] }
+hex = { version = "0.4", features = [] }
 
 # RTC protocols
 shared = { path = "rtc/shared" }
@@ -41,23 +41,23 @@ data = { path = "rtc/data" }
 # common
 chrono = "0.4"
 env_logger = "0.11"
-clap = { version = "4.4.12", features = ["derive"] }
-anyhow = "1.0.78"
-rouille = { version = "3.6.2", features = ["ssl"] }
-systemstat = "0.2.2"
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1"
+rouille = { version = "3.6", features = ["ssl"] }
+systemstat = "0.2"
 
 # sync_chat
 wg = "0.7"
-crossbeam-channel = "0.5.11"
-ctrlc = "3.4.2"
+crossbeam-channel = "0.5"
+ctrlc = "3.4"
 
 # async_chat
-futures = "0.3.30"
-smol = "2.0.0"
-async-broadcast = "0.6.0"
-waitgroup = "0.1.2"
-core_affinity = "0.8.1"
-num_cpus = "1.16.0"
+futures = "0.3"
+smol = "2"
+async-broadcast = "0.7"
+waitgroup = "0.1"
+core_affinity = "0.8"
+num_cpus = "1.16"
 tokio = { version = "1.36", features = ["full"] }
 tokio-util = "0.7"
 
