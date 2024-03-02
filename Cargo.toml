@@ -38,23 +38,31 @@ sctp = { path = "rtc/sctp" }
 data = { path = "rtc/data" }
 
 [dev-dependencies]
-# sfu impl
+# common
+chrono = "0.4"
+env_logger = "0.11"
 clap = { version = "4.4.12", features = ["derive"] }
 anyhow = "1.0.78"
+rouille = { version = "3.6.2", features = ["ssl"] }
+systemstat = "0.2.2"
+
+# sync_chat
 wg = "0.7"
 crossbeam-channel = "0.5.11"
 ctrlc = "3.4.2"
 
-# str0m impl
-rouille = { version = "3.6.2", features = ["ssl"] }
-systemstat = "0.2.2"
+# async_chat
+futures = "0.3.30"
+smol = "2.0.0"
+async-broadcast = "0.6.0"
+waitgroup = "0.1.2"
+core_affinity = "0.8.1"
+num_cpus = "1.16.0"
+tokio = { version = "1.36", features = ["full"] }
+tokio-util = "0.7"
 
 # tests
 webrtc = { path = "webrtc/webrtc" }
-tokio = { version = "1.36", features = ["full"] }
-tokio-util = "0.7"
-chrono = "0.4"
-env_logger = "0.11"
 hyper = { version = "0.14.28", features = ["full"] }
 
 [[example]]
@@ -62,3 +70,10 @@ name = "sync_chat"
 path = "examples/sync_chat.rs"
 test = false
 bench = false
+
+[[example]]
+name = "async_chat"
+path = "examples/async_chat.rs"
+test = false
+bench = false
+

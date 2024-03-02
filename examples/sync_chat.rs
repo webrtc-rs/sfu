@@ -10,10 +10,10 @@ use std::sync::mpsc::{self};
 use std::sync::Arc;
 use wg::WaitGroup;
 
-mod sync;
+mod sync_signal;
 mod util;
 
-use sync::*;
+use sync_signal::*;
 
 #[derive(Default, Debug, Copy, Clone, clap::ValueEnum)]
 enum Level {
@@ -121,18 +121,18 @@ pub fn main() -> anyhow::Result<()> {
     for port in media_ports {
         let worker = wait_group.add(1);
         let stop_rx = stop_rx.clone();
-        let (signaling_msg_tx, signaling_msg_rx) = mpsc::sync_channel(1);
+        let (signaling_tx, signaling_rx) = mpsc::sync_channel(1);
 
         // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
         // server socket. Clients are identified via their respective remote (UDP) socket address.
         let socket = UdpSocket::bind(format!("{host_addr}:{port}"))
             .expect(&format!("binding to {host_addr}:{port}"));
 
-        media_port_thread_map.insert(port, signaling_msg_tx);
+        media_port_thread_map.insert(port, signaling_tx);
         let server_config = server_config.clone();
         // The run loop is on a separate thread to the web server.
         std::thread::spawn(move || {
-            if let Err(err) = run_sfu(stop_rx, socket, signaling_msg_rx, server_config) {
+            if let Err(err) = sync_run(stop_rx, socket, signaling_rx, server_config) {
                 eprintln!("run_sfu got error: {}", err);
             }
             worker.done();
@@ -144,7 +144,7 @@ pub fn main() -> anyhow::Result<()> {
     let (signal_handle, signal_cancel_tx) = if cli.force_local_loop {
         // for integration test, no ssl
         let signal_server = Server::new(format!("{}:{}", host_addr, signal_port), move |request| {
-            web_request_sfu(request, media_port_thread_map.clone())
+            web_request(request, media_port_thread_map.clone())
         })
         .expect("starting the signal server");
 
@@ -155,7 +155,7 @@ pub fn main() -> anyhow::Result<()> {
     } else {
         let signal_server = Server::new_ssl(
             format!("{}:{}", host_addr, signal_port),
-            move |request| web_request_sfu(request, media_port_thread_map.clone()),
+            move |request| web_request(request, media_port_thread_map.clone()),
             certificate,
             private_key,
         )

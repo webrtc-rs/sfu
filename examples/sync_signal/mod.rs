@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
 mod sync_transport;
+use sync_transport::SyncTransport;
 
-use crate::sync::sync_transport::SyncTransport;
 use bytes::{Bytes, BytesMut};
 use log::error;
 use retty::channel::{InboundPipeline, Pipeline};
@@ -23,7 +23,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 // Handle a web request.
-pub fn web_request_sfu(
+pub fn web_request(
     request: &Request,
     media_port_thread_map: Arc<HashMap<u16, SyncSender<SignalingMessage>>>,
 ) -> Response {
@@ -93,7 +93,7 @@ pub fn web_request_sfu(
 
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.
-pub fn run_sfu(
+pub fn sync_run(
     stop_rx: crossbeam_channel::Receiver<()>,
     socket: UdpSocket,
     rx: Receiver<SignalingMessage>,
