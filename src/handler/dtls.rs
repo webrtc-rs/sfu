@@ -62,7 +62,13 @@ impl InboundHandler for DtlsInbound {
 
             let try_read = || -> Result<Vec<DtlsMessage>> {
                 let mut server_states = self.server_states.borrow_mut();
-                let transport = server_states.get_mut_transport(&four_tuple)?;
+                let transport = match server_states.get_mut_transport(&four_tuple) {
+                    Ok(transport) => transport,
+                    Err(err) => {
+                        error!("get_mut_transport got error {}, it may be due to DTLS packet received earlier than STUN Binding Request", err);
+                        return Err(err);
+                    }
+                };
                 let mut io_messages = vec![];
                 let mut contexts = vec![];
 
