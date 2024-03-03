@@ -1,4 +1,4 @@
-pub(crate) mod data;
+pub(crate) mod datachannel;
 pub(crate) mod demuxer;
 pub(crate) mod dtls;
 pub(crate) mod exception;

@@ -12,7 +12,7 @@ pub(crate) mod types;
 
 pub use description::RTCSessionDescription;
 pub use handler::{
-    data::DataChannelHandler, demuxer::DemuxerHandler, dtls::DtlsHandler,
+    datachannel::DataChannelHandler, demuxer::DemuxerHandler, dtls::DtlsHandler,
     exception::ExceptionHandler, gateway::GatewayHandler, interceptor::InterceptorHandler,
     sctp::SctpHandler, srtp::SrtpHandler, stun::StunHandler,
 };
