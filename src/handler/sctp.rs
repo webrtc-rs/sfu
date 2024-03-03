@@ -9,7 +9,7 @@ use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, O
 use retty::transport::TransportContext;
 use sctp::{
     AssociationEvent, AssociationHandle, DatagramEvent, EndpointEvent, Event, Payload,
-    PayloadProtocolIdentifier, ReliabilityType, StreamEvent, Transmit,
+    PayloadProtocolIdentifier, StreamEvent, Transmit,
 };
 use shared::error::{Error, Result};
 use std::cell::RefCell;
@@ -124,9 +124,7 @@ impl InboundHandler for SctpInbound {
                                         association_handle: ch.0,
                                         stream_id: id,
                                         data_message_type: to_data_message_type(chunks.ppi),
-                                        params: DataChannelMessageParams::Inbound {
-                                            seq_num: chunks.ssn,
-                                        },
+                                        params: None,
                                         payload: BytesMut::from(&self.internal_buffer[0..n]),
                                     }));
                                 }
@@ -315,33 +313,26 @@ impl OutboundHandler for SctpOutbound {
                 if let Some(conn) =
                     sctp_associations.get_mut(&AssociationHandle(message.association_handle))
                 {
-                    if let DataChannelMessageParams::Outbound {
-                        ordered,
-                        reliable,
-                        max_rtx_count,
-                        max_rtx_millis,
-                    } = message.params
+                    let mut stream = conn.stream(message.stream_id)?;
+                    if let Some(DataChannelMessageParams {
+                        unordered,
+                        reliability_type,
+                        reliability_parameter,
+                    }) = message.params
                     {
-                        let mut stream = conn.stream(message.stream_id)?;
-                        let (rel_type, rel_val) = if !reliable {
-                            if max_rtx_millis == 0 {
-                                (ReliabilityType::Rexmit, max_rtx_count)
-                            } else {
-                                (ReliabilityType::Timed, max_rtx_millis)
-                            }
-                        } else {
-                            (ReliabilityType::Reliable, 0)
-                        };
-
-                        stream.set_reliability_params(!ordered, rel_type, rel_val)?;
-                        stream.write_with_ppi(
-                            &message.payload,
-                            to_ppid(message.data_message_type, message.payload.len()),
+                        stream.set_reliability_params(
+                            unordered,
+                            reliability_type,
+                            reliability_parameter,
                         )?;
+                    }
+                    stream.write_with_ppi(
+                        &message.payload,
+                        to_ppid(message.data_message_type, message.payload.len()),
+                    )?;
 
-                        while let Some(x) = conn.poll_transmit(msg.now) {
-                            transmits.extend(split_transmit(x));
-                        }
+                    while let Some(x) = conn.poll_transmit(msg.now) {
+                        transmits.extend(split_transmit(x));
                     }
                 } else {
                     return Err(Error::ErrAssociationNotExisted);
@@ -447,10 +438,6 @@ fn to_ppid(message_type: DataChannelMessageType, length: usize) -> PayloadProtoc
                 PayloadProtocolIdentifier::BinaryEmpty
             }
         }
-        _ =>
-        // case DataMessageType::CONTROL: // TODO: remove DataMessageType::NONE once DcSctp is landed
-        {
-            PayloadProtocolIdentifier::Dcep
-        }
+        _ => PayloadProtocolIdentifier::Dcep,
     }
 }

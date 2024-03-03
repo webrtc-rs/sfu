@@ -1,5 +1,6 @@
 use bytes::BytesMut;
 use retty::transport::TransportContext;
+use sctp::ReliabilityType;
 use std::time::Instant;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -11,16 +12,10 @@ pub(crate) enum DataChannelMessageType {
 }
 
 #[derive(Debug)]
-pub(crate) enum DataChannelMessageParams {
-    Inbound {
-        seq_num: u16,
-    },
-    Outbound {
-        ordered: bool,
-        reliable: bool,
-        max_rtx_count: u32,
-        max_rtx_millis: u32,
-    },
+pub(crate) struct DataChannelMessageParams {
+    pub(crate) unordered: bool,
+    pub(crate) reliability_type: ReliabilityType,
+    pub(crate) reliability_parameter: u32,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -35,7 +30,7 @@ pub struct DataChannelMessage {
     pub(crate) association_handle: usize,
     pub(crate) stream_id: u16,
     pub(crate) data_message_type: DataChannelMessageType,
-    pub(crate) params: DataChannelMessageParams,
+    pub(crate) params: Option<DataChannelMessageParams>,
     pub(crate) payload: BytesMut,
 }
 

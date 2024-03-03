@@ -5,6 +5,7 @@ use crate::messages::{
 use datachannel::message::{message_channel_ack::*, message_channel_open::*, message_type::*, *};
 use log::{debug, error, warn};
 use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
+use sctp::ReliabilityType;
 use shared::error::Result;
 use shared::marshal::*;
 
@@ -46,7 +47,9 @@ impl InboundHandler for DataChannelInbound {
                             message.stream_id,
                             message.data_message_type);
 
-                            let _open = DataChannelOpen::unmarshal(&mut buf)?;
+                            let data_channel_open = DataChannelOpen::unmarshal(&mut buf)?;
+                            let (unordered, reliability_type) =
+                                get_reliability_params(data_channel_open.channel_type);
 
                             let payload = Message::DataChannelAck(DataChannelAck {}).marshal()?;
                             Ok((
@@ -59,12 +62,12 @@ impl InboundHandler for DataChannelInbound {
                                     association_handle: message.association_handle,
                                     stream_id: message.stream_id,
                                     data_message_type: DataChannelMessageType::Control,
-                                    params: DataChannelMessageParams::Outbound {
-                                        ordered: true,
-                                        reliable: true,
-                                        max_rtx_count: 0,
-                                        max_rtx_millis: 0,
-                                    },
+                                    params: Some(DataChannelMessageParams {
+                                        unordered,
+                                        reliability_type,
+                                        reliability_parameter: data_channel_open
+                                            .reliability_parameter,
+                                    }),
                                     payload,
                                 }),
                             ))
@@ -138,12 +141,7 @@ impl OutboundHandler for DataChannelOutbound {
                         association_handle: message.association_handle,
                         stream_id: message.stream_id,
                         data_message_type: DataChannelMessageType::Text,
-                        params: DataChannelMessageParams::Outbound {
-                            ordered: true,
-                            reliable: true,
-                            max_rtx_count: 0,
-                            max_rtx_millis: 0,
-                        },
+                        params: None,
                         payload,
                     })),
                 });
@@ -182,4 +180,17 @@ impl Handler for DataChannelHandler {
             Box::new(self.data_channel_outbound),
         )
     }
+}
+
+fn get_reliability_params(channel_type: ChannelType) -> (bool, ReliabilityType) {
+    let (unordered, reliability_type) = match channel_type {
+        ChannelType::Reliable => (false, ReliabilityType::Reliable),
+        ChannelType::ReliableUnordered => (true, ReliabilityType::Reliable),
+        ChannelType::PartialReliableRexmit => (false, ReliabilityType::Rexmit),
+        ChannelType::PartialReliableRexmitUnordered => (true, ReliabilityType::Rexmit),
+        ChannelType::PartialReliableTimed => (false, ReliabilityType::Timed),
+        ChannelType::PartialReliableTimedUnordered => (true, ReliabilityType::Timed),
+    };
+
+    (unordered, reliability_type)
 }
