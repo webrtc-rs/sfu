@@ -4,34 +4,41 @@ use crate::messages::{
 };
 use datachannel::message::{message_channel_ack::*, message_channel_open::*, message_type::*, *};
 use log::{debug, error, warn};
-use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
+use retty::channel::{Context, Handler};
 use sctp::ReliabilityType;
 use shared::error::Result;
 use shared::marshal::*;
-
-#[derive(Default)]
-struct DataChannelInbound;
-#[derive(Default)]
-struct DataChannelOutbound;
+use std::collections::VecDeque;
 
 /// DataChannelHandler implements DataChannel Protocol handling
 #[derive(Default)]
 pub struct DataChannelHandler {
-    data_channel_inbound: DataChannelInbound,
-    data_channel_outbound: DataChannelOutbound,
+    transmits: VecDeque<TaggedMessageEvent>,
 }
 
 impl DataChannelHandler {
     pub fn new() -> Self {
-        DataChannelHandler::default()
+        Self {
+            transmits: VecDeque::new(),
+        }
     }
 }
 
-impl InboundHandler for DataChannelInbound {
+impl Handler for DataChannelHandler {
     type Rin = TaggedMessageEvent;
     type Rout = Self::Rin;
+    type Win = TaggedMessageEvent;
+    type Wout = Self::Win;
 
-    fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
+    fn name(&self) -> &str {
+        "DataChannelHandler"
+    }
+
+    fn handle_read(
+        &mut self,
+        ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
+        msg: Self::Rin,
+    ) {
         if let MessageEvent::Dtls(DTLSMessageEvent::Sctp(message)) = msg.message {
             debug!(
                 "recv SCTP DataChannelMessage from {:?}",
@@ -91,7 +98,7 @@ impl InboundHandler for DataChannelInbound {
                     // first outbound message
                     if let Some(data_channel_message) = outbound_message {
                         debug!("send DataChannelAck message {:?}", msg.transport.peer_addr);
-                        ctx.fire_write(TaggedMessageEvent {
+                        self.transmits.push_back(TaggedMessageEvent {
                             now: msg.now,
                             transport: msg.transport,
                             message: MessageEvent::Dtls(DTLSMessageEvent::Sctp(
@@ -114,7 +121,7 @@ impl InboundHandler for DataChannelInbound {
                 }
                 Err(err) => {
                     error!("try_read with error {}", err);
-                    ctx.fire_read_exception(Box::new(err))
+                    ctx.fire_exception(Box::new(err))
                 }
             };
         } else {
@@ -123,62 +130,41 @@ impl InboundHandler for DataChannelInbound {
             ctx.fire_read(msg);
         }
     }
-}
 
-impl OutboundHandler for DataChannelOutbound {
-    type Win = TaggedMessageEvent;
-    type Wout = Self::Win;
+    fn poll_write(
+        &mut self,
+        ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
+    ) -> Option<Self::Wout> {
+        if let Some(msg) = ctx.fire_poll_write() {
+            if let MessageEvent::Dtls(DTLSMessageEvent::DataChannel(message)) = msg.message {
+                debug!("send application message {:?}", msg.transport.peer_addr);
 
-    fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        if let MessageEvent::Dtls(DTLSMessageEvent::DataChannel(message)) = msg.message {
-            debug!("send application message {:?}", msg.transport.peer_addr);
-
-            if let DataChannelEvent::Message(payload) = message.data_channel_event {
-                ctx.fire_write(TaggedMessageEvent {
-                    now: msg.now,
-                    transport: msg.transport,
-                    message: MessageEvent::Dtls(DTLSMessageEvent::Sctp(DataChannelMessage {
-                        association_handle: message.association_handle,
-                        stream_id: message.stream_id,
-                        data_message_type: DataChannelMessageType::Text,
-                        params: None,
-                        payload,
-                    })),
-                });
+                if let DataChannelEvent::Message(payload) = message.data_channel_event {
+                    self.transmits.push_back(TaggedMessageEvent {
+                        now: msg.now,
+                        transport: msg.transport,
+                        message: MessageEvent::Dtls(DTLSMessageEvent::Sctp(DataChannelMessage {
+                            association_handle: message.association_handle,
+                            stream_id: message.stream_id,
+                            data_message_type: DataChannelMessageType::Text,
+                            params: None,
+                            payload,
+                        })),
+                    });
+                } else {
+                    warn!(
+                        "drop unsupported DATACHANNEL message to {}",
+                        msg.transport.peer_addr
+                    );
+                }
             } else {
-                warn!(
-                    "drop unsupported DATACHANNEL message to {}",
-                    msg.transport.peer_addr
-                );
+                // Bypass
+                debug!("bypass DataChannel write {:?}", msg.transport.peer_addr);
+                self.transmits.push_back(msg);
             }
-        } else {
-            // Bypass
-            debug!("bypass DataChannel write {:?}", msg.transport.peer_addr);
-            ctx.fire_write(msg);
         }
-    }
-}
 
-impl Handler for DataChannelHandler {
-    type Rin = TaggedMessageEvent;
-    type Rout = Self::Rin;
-    type Win = TaggedMessageEvent;
-    type Wout = Self::Win;
-
-    fn name(&self) -> &str {
-        "DataChannelHandler"
-    }
-
-    fn split(
-        self,
-    ) -> (
-        Box<dyn InboundHandler<Rin = Self::Rin, Rout = Self::Rout>>,
-        Box<dyn OutboundHandler<Win = Self::Win, Wout = Self::Wout>>,
-    ) {
-        (
-            Box::new(self.data_channel_inbound),
-            Box::new(self.data_channel_outbound),
-        )
+        self.transmits.pop_front()
     }
 }
 

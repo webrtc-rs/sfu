@@ -1,8 +1,5 @@
 #![allow(dead_code)]
 
-mod sync_transport;
-use sync_transport::SyncTransport;
-
 use bytes::{Bytes, BytesMut};
 use log::error;
 use retty::channel::{InboundPipeline, Pipeline};
@@ -14,7 +11,7 @@ use sfu::{
     SrtpHandler, StunHandler,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind, Read};
 use std::net::{SocketAddr, UdpSocket};
 use std::rc::Rc;
@@ -106,13 +103,7 @@ pub fn sync_run(
 
     println!("listening {}...", socket.local_addr()?);
 
-    let outgoing_queue = Rc::new(RefCell::new(VecDeque::new()));
-
-    let pipeline = build_pipeline(
-        socket.local_addr()?,
-        outgoing_queue.clone(),
-        server_states.clone(),
-    );
+    let pipeline = build_pipeline(socket.local_addr()?, server_states.clone());
 
     let mut buf = vec![0; 2000];
 
@@ -126,7 +117,7 @@ pub fn sync_run(
             }
         };
 
-        write_socket_output(&socket, &outgoing_queue);
+        write_socket_output(&socket, &pipeline);
 
         // Spawn new incoming signal message from the signaling server thread.
         if let Ok(signal_message) = rx.try_recv() {
@@ -167,9 +158,11 @@ pub fn sync_run(
     Ok(())
 }
 
-fn write_socket_output(socket: &UdpSocket, outgoing_queue: &Rc<RefCell<VecDeque<TaggedBytesMut>>>) {
-    let mut queue = outgoing_queue.borrow_mut();
-    while let Some(transmit) = queue.pop_front() {
+fn write_socket_output(
+    socket: &UdpSocket,
+    pipeline: &Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>>,
+) {
+    while let Some(transmit) = pipeline.poll_transmit() {
         socket
             .send_to(&transmit.message, transmit.transport.peer_addr)
             .expect("sending UDP data");
@@ -200,14 +193,11 @@ fn read_socket_input(socket: &UdpSocket, buf: &mut [u8]) -> Option<TaggedBytesMu
 
 fn build_pipeline(
     local_addr: SocketAddr,
-    writer: Rc<RefCell<VecDeque<TaggedBytesMut>>>,
     server_states: Rc<RefCell<ServerStates>>,
 ) -> Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>> {
     let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
-    let sync_transport_handler = SyncTransport::new(writer);
     let demuxer_handler = DemuxerHandler::new();
-    let write_exception_handler = ExceptionHandler::new();
     let stun_handler = StunHandler::new();
     // DTLS
     let dtls_handler = DtlsHandler::new(local_addr, Rc::clone(&server_states));
@@ -218,11 +208,9 @@ fn build_pipeline(
     let interceptor_handler = InterceptorHandler::new(Rc::clone(&server_states));
     // Gateway
     let gateway_handler = GatewayHandler::new(Rc::clone(&server_states));
-    let read_exception_handler = ExceptionHandler::new();
+    let exception_handler = ExceptionHandler::new();
 
-    pipeline.add_back(sync_transport_handler);
     pipeline.add_back(demuxer_handler);
-    pipeline.add_back(write_exception_handler);
     pipeline.add_back(stun_handler);
     // DTLS
     pipeline.add_back(dtls_handler);
@@ -233,7 +221,7 @@ fn build_pipeline(
     pipeline.add_back(interceptor_handler);
     // Gateway
     pipeline.add_back(gateway_handler);
-    pipeline.add_back(read_exception_handler);
+    pipeline.add_back(exception_handler);
 
     pipeline.finalize()
 }

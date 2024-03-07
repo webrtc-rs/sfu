@@ -2,7 +2,7 @@ use crate::messages::{
     DTLSMessageEvent, MessageEvent, RTPMessageEvent, STUNMessageEvent, TaggedMessageEvent,
 };
 use log::{debug, error};
-use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
+use retty::channel::{Context, Handler};
 use retty::transport::TaggedBytesMut;
 
 /// match_range is a MatchFunc that accepts packets with the first byte in [lower..upper]
@@ -39,17 +39,9 @@ fn match_srtp(b: &[u8]) -> bool {
     match_range(128, 191, b)
 }
 
-#[derive(Default)]
-struct DemuxerInbound;
-#[derive(Default)]
-struct DemuxerOutbound;
-
 /// DemuxerHandler implements demuxing of STUN/DTLS/RTP/RTCP Protocol packets
 #[derive(Default)]
-pub struct DemuxerHandler {
-    demuxer_inbound: DemuxerInbound,
-    demuxer_outbound: DemuxerOutbound,
-}
+pub struct DemuxerHandler;
 
 impl DemuxerHandler {
     pub fn new() -> Self {
@@ -57,11 +49,21 @@ impl DemuxerHandler {
     }
 }
 
-impl InboundHandler for DemuxerInbound {
+impl Handler for DemuxerHandler {
     type Rin = TaggedBytesMut;
     type Rout = TaggedMessageEvent;
+    type Win = TaggedMessageEvent;
+    type Wout = TaggedBytesMut;
 
-    fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
+    fn name(&self) -> &str {
+        "DemuxerHandler"
+    }
+
+    fn handle_read(
+        &mut self,
+        ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
+        msg: Self::Rin,
+    ) {
         if msg.message.is_empty() {
             error!("drop invalid packet due to zero length");
         } else if match_dtls(&msg.message) {
@@ -84,49 +86,27 @@ impl InboundHandler for DemuxerInbound {
             });
         }
     }
-}
 
-impl OutboundHandler for DemuxerOutbound {
-    type Win = TaggedMessageEvent;
-    type Wout = TaggedBytesMut;
-
-    fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        match msg.message {
-            MessageEvent::Stun(STUNMessageEvent::Raw(message))
-            | MessageEvent::Dtls(DTLSMessageEvent::Raw(message))
-            | MessageEvent::Rtp(RTPMessageEvent::Raw(message)) => {
-                ctx.fire_write(TaggedBytesMut {
+    fn poll_write(
+        &mut self,
+        ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
+    ) -> Option<Self::Wout> {
+        if let Some(msg) = ctx.fire_poll_write() {
+            match msg.message {
+                MessageEvent::Stun(STUNMessageEvent::Raw(message))
+                | MessageEvent::Dtls(DTLSMessageEvent::Raw(message))
+                | MessageEvent::Rtp(RTPMessageEvent::Raw(message)) => Some(TaggedBytesMut {
                     now: msg.now,
                     transport: msg.transport,
                     message,
-                });
+                }),
+                _ => {
+                    debug!("drop non-RAW packet {:?}", msg.message);
+                    None
+                }
             }
-            _ => {
-                debug!("drop non-RAW packet {:?}", msg.message);
-            }
+        } else {
+            None
         }
-    }
-}
-
-impl Handler for DemuxerHandler {
-    type Rin = TaggedBytesMut;
-    type Rout = TaggedMessageEvent;
-    type Win = TaggedMessageEvent;
-    type Wout = TaggedBytesMut;
-
-    fn name(&self) -> &str {
-        "DemuxerHandler"
-    }
-
-    fn split(
-        self,
-    ) -> (
-        Box<dyn InboundHandler<Rin = Self::Rin, Rout = Self::Rout>>,
-        Box<dyn OutboundHandler<Win = Self::Win, Wout = Self::Wout>>,
-    ) {
-        (
-            Box::new(self.demuxer_inbound),
-            Box::new(self.demuxer_outbound),
-        )
     }
 }

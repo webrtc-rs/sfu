@@ -15,7 +15,7 @@ use log::{error, info};
 use retty::bootstrap::BootstrapUdpServer;
 use retty::channel::Pipeline;
 use retty::executor::LocalExecutorBuilder;
-use retty::transport::{AsyncTransport, AsyncTransportWrite, TaggedBytesMut};
+use retty::transport::TaggedBytesMut;
 use waitgroup::WaitGroup;
 
 use sfu::{
@@ -148,13 +148,10 @@ fn main() -> anyhow::Result<()> {
                 let server_states_moved = server_states.clone();
                 let mut bootstrap = BootstrapUdpServer::new();
                 bootstrap.pipeline(Box::new(
-                    move |writer: AsyncTransportWrite<TaggedBytesMut>| {
+                    move || {
                         let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
 
-                        let local_addr = writer.get_local_addr();
-                        let async_transport_handler = AsyncTransport::new(writer);
                         let demuxer_handler = DemuxerHandler::new();
-                        let write_exception_handler = ExceptionHandler::new();
                         let stun_handler = StunHandler::new();
                         // DTLS
                         let dtls_handler = DtlsHandler::new(local_addr, Rc::clone(&server_states_moved));
@@ -165,11 +162,9 @@ fn main() -> anyhow::Result<()> {
                         let interceptor_handler = InterceptorHandler::new(Rc::clone(&server_states_moved));
                         // Gateway
                         let gateway_handler = GatewayHandler::new(Rc::clone(&server_states_moved));
-                        let read_exception_handler = ExceptionHandler::new();
+                        let exception_handler = ExceptionHandler::new();
 
-                        pipeline.add_back(async_transport_handler);
                         pipeline.add_back(demuxer_handler);
-                        pipeline.add_back(write_exception_handler);
                         pipeline.add_back(stun_handler);
                         // DTLS
                         pipeline.add_back(dtls_handler);
@@ -180,7 +175,7 @@ fn main() -> anyhow::Result<()> {
                         pipeline.add_back(interceptor_handler);
                         // Gateway
                         pipeline.add_back(gateway_handler);
-                        pipeline.add_back(read_exception_handler);
+                        pipeline.add_back(exception_handler);
 
                         pipeline.finalize()
                     },

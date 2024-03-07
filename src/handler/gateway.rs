@@ -10,10 +10,11 @@ use crate::messages::{
 use crate::server::states::ServerStates;
 use bytes::BytesMut;
 use log::{debug, info, trace, warn};
-use retty::channel::{Handler, InboundContext, InboundHandler, OutboundContext, OutboundHandler};
+use retty::channel::{Context, Handler};
 use retty::transport::TransportContext;
 use shared::error::{Error, Result};
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Instant;
 use stun::attributes::{
@@ -26,40 +27,41 @@ use stun::message::{Setter, TransactionId, BINDING_SUCCESS};
 use stun::textattrs::TextAttribute;
 use stun::xoraddr::XorMappedAddress;
 
-struct GatewayInbound {
-    server_states: Rc<RefCell<ServerStates>>,
-}
-struct GatewayOutbound {
-    server_states: Rc<RefCell<ServerStates>>,
-}
-
 /// GatewayHandler implements Data/Media Selective Forward handling
 pub struct GatewayHandler {
-    gateway_inbound: GatewayInbound,
-    gateway_outbound: GatewayOutbound,
+    server_states: Rc<RefCell<ServerStates>>,
+    transmits: VecDeque<TaggedMessageEvent>,
 }
 
 impl GatewayHandler {
     pub fn new(server_states: Rc<RefCell<ServerStates>>) -> Self {
         GatewayHandler {
-            gateway_inbound: GatewayInbound {
-                server_states: Rc::clone(&server_states),
-            },
-            gateway_outbound: GatewayOutbound { server_states },
+            server_states,
+            transmits: VecDeque::new(),
         }
     }
 }
 
-impl InboundHandler for GatewayInbound {
+impl Handler for GatewayHandler {
     type Rin = TaggedMessageEvent;
     type Rout = Self::Rin;
+    type Win = TaggedMessageEvent;
+    type Wout = Self::Win;
 
-    fn read(&mut self, ctx: &InboundContext<Self::Rin, Self::Rout>, msg: Self::Rin) {
+    fn name(&self) -> &str {
+        "GatewayHandler"
+    }
+
+    fn handle_read(
+        &mut self,
+        ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
+        msg: Self::Rin,
+    ) {
         let try_read = || -> Result<Vec<TaggedMessageEvent>> {
             let mut server_states = self.server_states.borrow_mut();
             match msg.message {
                 MessageEvent::Stun(STUNMessageEvent::Stun(message)) => {
-                    GatewayInbound::handle_stun_message(
+                    GatewayHandler::handle_stun_message(
                         &mut server_states,
                         msg.now,
                         msg.transport,
@@ -67,7 +69,7 @@ impl InboundHandler for GatewayInbound {
                     )
                 }
                 MessageEvent::Dtls(DTLSMessageEvent::DataChannel(message)) => {
-                    GatewayInbound::handle_dtls_message(
+                    GatewayHandler::handle_dtls_message(
                         &mut server_states,
                         msg.now,
                         msg.transport,
@@ -75,7 +77,7 @@ impl InboundHandler for GatewayInbound {
                     )
                 }
                 MessageEvent::Rtp(RTPMessageEvent::Rtp(message)) => {
-                    GatewayInbound::handle_rtp_message(
+                    GatewayHandler::handle_rtp_message(
                         &mut server_states,
                         msg.now,
                         msg.transport,
@@ -83,7 +85,7 @@ impl InboundHandler for GatewayInbound {
                     )
                 }
                 MessageEvent::Rtp(RTPMessageEvent::Rtcp(message)) => {
-                    GatewayInbound::handle_rtcp_message(
+                    GatewayHandler::handle_rtcp_message(
                         &mut server_states,
                         msg.now,
                         msg.transport,
@@ -100,64 +102,47 @@ impl InboundHandler for GatewayInbound {
         match try_read() {
             Ok(messages) => {
                 for message in messages {
-                    ctx.fire_write(message);
+                    self.transmits.push_back(message);
                 }
             }
             Err(err) => {
                 warn!("try_read got error {}", err);
-                ctx.fire_read_exception(Box::new(err));
+                ctx.fire_exception(Box::new(err));
             }
         }
     }
 
-    fn handle_timeout(&mut self, _ctx: &InboundContext<Self::Rin, Self::Rout>, _now: Instant) {
+    fn handle_timeout(
+        &mut self,
+        _ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
+        _now: Instant,
+    ) {
         // terminate timeout here, no more ctx.fire_handle_timeout(now);
     }
-}
 
-impl OutboundHandler for GatewayOutbound {
-    type Win = TaggedMessageEvent;
-    type Wout = Self::Win;
+    fn poll_write(
+        &mut self,
+        ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
+    ) -> Option<Self::Wout> {
+        if let Some(msg) = ctx.fire_poll_write() {
+            self.transmits.push_back(msg);
+        }
 
-    fn write(&mut self, ctx: &OutboundContext<Self::Win, Self::Wout>, msg: Self::Win) {
-        ctx.fire_write(msg);
+        self.transmits.pop_front()
     }
 }
 
-impl Handler for GatewayHandler {
-    type Rin = TaggedMessageEvent;
-    type Rout = Self::Rin;
-    type Win = TaggedMessageEvent;
-    type Wout = Self::Win;
-
-    fn name(&self) -> &str {
-        "GatewayHandler"
-    }
-
-    fn split(
-        self,
-    ) -> (
-        Box<dyn InboundHandler<Rin = Self::Rin, Rout = Self::Rout>>,
-        Box<dyn OutboundHandler<Win = Self::Win, Wout = Self::Wout>>,
-    ) {
-        (
-            Box::new(self.gateway_inbound),
-            Box::new(self.gateway_outbound),
-        )
-    }
-}
-
-impl GatewayInbound {
+impl GatewayHandler {
     fn handle_stun_message(
         server_states: &mut ServerStates,
         now: Instant,
         transport_context: TransportContext,
         mut request: stun::message::Message,
     ) -> Result<Vec<TaggedMessageEvent>> {
-        let candidate = match GatewayInbound::check_stun_message(server_states, &mut request)? {
+        let candidate = match GatewayHandler::check_stun_message(server_states, &mut request)? {
             Some(candidate) => candidate,
             None => {
-                return GatewayInbound::create_server_reflective_address_message_event(
+                return GatewayHandler::create_server_reflective_address_message_event(
                     now,
                     transport_context,
                     request.transaction_id,
@@ -165,7 +150,7 @@ impl GatewayInbound {
             }
         };
 
-        GatewayInbound::add_endpoint(server_states, &request, &candidate, &transport_context)?;
+        GatewayHandler::add_endpoint(server_states, &request, &candidate, &transport_context)?;
 
         let mut response = stun::message::Message::new();
         response.build(&[
@@ -203,14 +188,14 @@ impl GatewayInbound {
         message: ApplicationMessage,
     ) -> Result<Vec<TaggedMessageEvent>> {
         match message.data_channel_event {
-            DataChannelEvent::Open => GatewayInbound::handle_datachannel_open(
+            DataChannelEvent::Open => GatewayHandler::handle_datachannel_open(
                 server_states,
                 now,
                 transport_context,
                 message.association_handle,
                 message.stream_id,
             ),
-            DataChannelEvent::Message(payload) => GatewayInbound::handle_datachannel_message(
+            DataChannelEvent::Message(payload) => GatewayHandler::handle_datachannel_message(
                 server_states,
                 now,
                 transport_context,
@@ -218,7 +203,7 @@ impl GatewayInbound {
                 message.stream_id,
                 payload,
             ),
-            DataChannelEvent::Close => GatewayInbound::handle_datachannel_close(
+            DataChannelEvent::Close => GatewayHandler::handle_datachannel_close(
                 server_states,
                 now,
                 transport_context,
@@ -291,7 +276,7 @@ impl GatewayInbound {
         }
 
         if endpoint.is_renegotiation_needed() {
-            Ok(vec![GatewayInbound::create_offer_message_event(
+            Ok(vec![GatewayHandler::create_offer_message_event(
                 server_states,
                 now,
                 transport_context,
@@ -343,7 +328,7 @@ impl GatewayInbound {
                 let answer_str =
                     serde_json::to_string(&answer).map_err(|err| Error::Other(err.to_string()))?;
 
-                let peers = GatewayInbound::get_other_datachannel_transport_contexts(
+                let peers = GatewayHandler::get_other_datachannel_transport_contexts(
                     server_states,
                     &transport_context,
                 )?;
@@ -372,7 +357,7 @@ impl GatewayInbound {
                 ) in peers
                 {
                     if is_renegotiation_needed {
-                        messages.push(GatewayInbound::create_offer_message_event(
+                        messages.push(GatewayHandler::create_offer_message_event(
                             server_states,
                             now,
                             other_transport_context,
@@ -403,7 +388,7 @@ impl GatewayInbound {
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: Selective Forwarding RTP Packets
         let peers =
-            GatewayInbound::get_other_media_transport_contexts(server_states, &transport_context)?;
+            GatewayHandler::get_other_media_transport_contexts(server_states, &transport_context)?;
 
         let mut outgoing_messages = Vec::with_capacity(peers.len());
         for transport in peers {
@@ -425,7 +410,7 @@ impl GatewayInbound {
     ) -> Result<Vec<TaggedMessageEvent>> {
         //TODO: Selective Forwarding RTCP Packets
         let peers =
-            GatewayInbound::get_other_media_transport_contexts(server_states, &transport_context)?;
+            GatewayHandler::get_other_media_transport_contexts(server_states, &transport_context)?;
 
         let mut outgoing_messages = Vec::with_capacity(peers.len());
         for transport in peers {
