@@ -17,8 +17,8 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ops::{Add, Sub};
 use std::rc::Rc;
-use std::time::Instant;
 use std::time::Duration;
+use std::time::Instant;
 use stun::attributes::{
     ATTR_ICE_CONTROLLED, ATTR_ICE_CONTROLLING, ATTR_NETWORK_COST, ATTR_PRIORITY, ATTR_USERNAME,
     ATTR_USE_CANDIDATE,
@@ -163,7 +163,11 @@ impl Handler for GatewayHandler {
         }
     }
 
-    fn poll_timeout(&mut self, ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>, eto: &mut Instant) {
+    fn poll_timeout(
+        &mut self,
+        ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
+        eto: &mut Instant,
+    ) {
         if self.next_timeout < *eto {
             *eto = self.next_timeout;
         }
@@ -436,7 +440,9 @@ impl GatewayHandler {
         rtp_packet: rtp::packet::Packet,
     ) -> Result<Vec<TaggedMessageEvent>> {
         debug!("handle_rtp_message {}", transport_context.peer_addr);
-        server_states.get_mut_transport(&(&transport_context).into())?.keep_alive();
+        server_states
+            .get_mut_transport(&(&transport_context).into())?
+            .keep_alive();
 
         //TODO: Selective Forwarding RTP Packets
         let peers =
@@ -461,7 +467,9 @@ impl GatewayHandler {
         rtcp_packets: Vec<Box<dyn rtcp::packet::Packet>>,
     ) -> Result<Vec<TaggedMessageEvent>> {
         debug!("handle_rtcp_message {}", transport_context.peer_addr);
-        server_states.get_mut_transport(&(&transport_context).into())?.keep_alive();
+        server_states
+            .get_mut_transport(&(&transport_context).into())?
+            .keep_alive();
 
         //TODO: Selective Forwarding RTCP Packets
         let peers =
