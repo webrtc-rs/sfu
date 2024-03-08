@@ -6,8 +6,7 @@ use shared::error::{Error, Result};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-pub(crate) mod config;
-
+use crate::configs::session_config::SessionConfig;
 use crate::description::{
     codecs_from_media_description, get_cname, get_mid_value, get_msid, get_peer_direction,
     get_rids, get_ssrc_groups, get_ssrcs, populate_sdp, rtp_extensions_from_media_description,
@@ -24,7 +23,6 @@ use crate::endpoint::{
     transport::Transport,
     Endpoint,
 };
-use crate::session::config::SessionConfig;
 use crate::types::{EndpointId, Mid, SessionId};
 
 pub(crate) struct Session {

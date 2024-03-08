@@ -1,3 +1,5 @@
+use crate::configs::server_config::ServerConfig;
+use crate::configs::session_config::SessionConfig;
 use crate::description::RTCSessionDescription;
 use crate::endpoint::{
     candidate::{Candidate, ConnectionCredentials},
@@ -5,8 +7,7 @@ use crate::endpoint::{
     Endpoint,
 };
 use crate::metrics::Metrics;
-use crate::server::config::ServerConfig;
-use crate::session::{config::SessionConfig, Session};
+use crate::session::Session;
 use crate::types::{EndpointId, FourTuple, SessionId, UserName};
 use log::{debug, info};
 use opentelemetry::metrics::Meter;
@@ -22,12 +23,11 @@ use std::time::Instant;
 pub struct ServerStates {
     server_config: Arc<ServerConfig>,
     local_addr: SocketAddr,
-    sessions: HashMap<SessionId, Session>,
     metrics: Metrics,
 
-    //TODO: add idle timeout cleanup logic to remove idle endpoint and candidates
-    candidates: HashMap<UserName, Rc<Candidate>>,
+    sessions: HashMap<SessionId, Session>,
     endpoints: HashMap<FourTuple, (SessionId, EndpointId)>,
+    candidates: HashMap<UserName, Rc<Candidate>>,
 }
 
 impl ServerStates {
@@ -48,11 +48,10 @@ impl ServerStates {
         Ok(Self {
             server_config,
             local_addr,
-            sessions: HashMap::new(),
             metrics: Metrics::new(meter),
-
-            candidates: HashMap::new(),
+            sessions: HashMap::new(),
             endpoints: HashMap::new(),
+            candidates: HashMap::new(),
         })
     }
 

@@ -6,17 +6,16 @@ use crate::description::{
         RTPCodecType,
     },
     rtp_extensions_from_media_description,
-    rtp_transceiver::TYPE_RTCP_FB_TRANSPORT_CC,
+    rtp_transceiver::{PayloadType, RTCPFeedback, TYPE_RTCP_FB_TRANSPORT_CC},
     rtp_transceiver_direction::RTCRtpTransceiverDirection,
-    PayloadType, RTCPFeedback,
 };
 
 //TODO: use crate::stats::stats_collector::StatsCollector;
 //use crate::stats::CodecStats;
 //use crate::stats::StatsReportType::Codec;
-use crate::interceptor::report::receiver_report::ReceiverReport;
-use crate::interceptor::report::sender_report::SenderReport;
-use crate::interceptor::Registry;
+use crate::interceptors::report::receiver_report::ReceiverReport;
+use crate::interceptors::report::sender_report::SenderReport;
+use crate::interceptors::Registry;
 use sdp::description::session::SessionDescription;
 use shared::error::{Error, Result};
 use std::collections::HashMap;

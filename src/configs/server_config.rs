@@ -1,4 +1,4 @@
-use crate::description::config::MediaConfig;
+use crate::configs::media_config::MediaConfig;
 use crate::server::certificate::RTCCertificate;
 use std::sync::Arc;
 use std::time::Duration;

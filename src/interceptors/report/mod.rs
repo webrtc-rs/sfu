@@ -1,4 +1,4 @@
-use crate::interceptor::{Interceptor, InterceptorBuilder};
+use crate::interceptors::{Interceptor, InterceptorBuilder};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
