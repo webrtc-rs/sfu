@@ -9,7 +9,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_broadcast::{broadcast, Receiver};
 use clap::Parser;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use log::{error, info};
@@ -77,7 +76,10 @@ struct Cli {
     level: Level,
 }
 
-fn init_meter_provider(mut stop_rx: Receiver<()>, worker: Worker) -> SdkMeterProvider {
+fn init_meter_provider(
+    mut stop_rx: async_broadcast::Receiver<()>,
+    worker: Worker,
+) -> SdkMeterProvider {
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
@@ -138,7 +140,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let media_ports: Vec<u16> = (cli.media_port_min..=cli.media_port_max).collect();
-    let (stop_tx, mut stop_rx) = broadcast::<()>(1);
+    let (stop_tx, mut stop_rx) = async_broadcast::broadcast::<()>(1);
     let mut media_port_thread_map = HashMap::new();
 
     let key_pair = rcgen::KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;

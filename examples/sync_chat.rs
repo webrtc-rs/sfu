@@ -68,7 +68,7 @@ struct Cli {
 }
 
 fn init_meter_provider(
-    stop_rx: crossbeam_channel::Receiver<()>,
+    mut stop_rx: async_broadcast::Receiver<()>,
     wait_group: WaitGroup,
 ) -> SdkMeterProvider {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -96,7 +96,7 @@ fn init_meter_provider(
                 .build();
             let _ = tx.send(meter_provider.clone());
 
-            let _ = stop_rx.recv();
+            let _ = stop_rx.recv().await;
             let _ = meter_provider.shutdown();
             worker.done();
             info!("meter provider is gracefully down");
@@ -163,8 +163,9 @@ fn main() -> anyhow::Result<()> {
             .with_sctp_server_config(sctp_server_config)
             .with_idle_timeout(Duration::from_secs(30)),
     );
+    let (stop_meter_tx, stop_meter_rx) = async_broadcast::broadcast::<()>(1);
     let wait_group = WaitGroup::new();
-    let meter_provider = init_meter_provider(stop_rx.clone(), wait_group.clone());
+    let meter_provider = init_meter_provider(stop_meter_rx, wait_group.clone());
 
     for port in media_ports {
         let worker = wait_group.add(1);
@@ -220,7 +221,11 @@ fn main() -> anyhow::Result<()> {
     println!("Press Ctrl-C to stop");
     std::thread::spawn(move || {
         let mut stop_tx = Some(stop_tx);
+        let mut stop_meter_tx = Some(stop_meter_tx);
         ctrlc::set_handler(move || {
+            if let Some(stop_meter_tx) = stop_meter_tx.take() {
+                let _ = stop_meter_tx.try_broadcast(());
+            }
             if let Some(stop_tx) = stop_tx.take() {
                 let _ = stop_tx.send(());
             }
