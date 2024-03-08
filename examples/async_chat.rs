@@ -7,16 +7,21 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use async_broadcast::broadcast;
+use async_broadcast::{broadcast, Receiver};
 use clap::Parser;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use log::{error, info};
+use opentelemetry::{/*global,*/ metrics::MeterProvider, KeyValue};
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+use opentelemetry_sdk::{runtime, Resource};
+use opentelemetry_stdout::MetricsExporterBuilder;
 use retty::bootstrap::BootstrapUdpServer;
 use retty::channel::Pipeline;
 use retty::executor::LocalExecutorBuilder;
 use retty::transport::TaggedBytesMut;
-use waitgroup::WaitGroup;
+use waitgroup::{WaitGroup, Worker};
 
 use sfu::{
     DataChannelHandler, DemuxerHandler, DtlsHandler, ExceptionHandler, GatewayHandler,
@@ -72,6 +77,42 @@ struct Cli {
     level: Level,
 }
 
+fn init_meter_provider(mut stop_rx: Receiver<()>, worker: Worker) -> SdkMeterProvider {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .unwrap();
+
+        rt.block_on(async move {
+            let _worker = worker;
+            let exporter = MetricsExporterBuilder::default()
+                .with_encoder(|writer, data| {
+                    Ok(serde_json::to_writer_pretty(writer, &data).unwrap())
+                })
+                .build();
+            let reader = PeriodicReader::builder(exporter, runtime::TokioCurrentThread)
+                .with_interval(Duration::from_secs(30))
+                .build();
+            let meter_provider = SdkMeterProvider::builder()
+                .with_reader(reader)
+                .with_resource(Resource::new(vec![KeyValue::new("chat", "metrics")]))
+                .build();
+            let _ = tx.send(meter_provider.clone());
+
+            let _ = stop_rx.recv().await;
+            let _ = meter_provider.shutdown();
+            info!("meter provider is gracefully down");
+        });
+    });
+
+    let meter_provider = rx.recv().unwrap();
+    meter_provider
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if cli.debug {
@@ -124,10 +165,12 @@ fn main() -> anyhow::Result<()> {
     );
     let wait_group = WaitGroup::new();
     let core_num = num_cpus::get();
+    let meter_provider = init_meter_provider(stop_rx.clone(), wait_group.worker());
 
     for port in media_ports {
         let worker = wait_group.worker();
         let host = cli.host.clone();
+        let meter_provider = meter_provider.clone();
         let mut stop_rx = stop_rx.clone();
         let (signaling_tx, signaling_rx) = smol::channel::unbounded::<SignalingMessage>();
         media_port_thread_map.insert(port, signaling_tx);
@@ -141,7 +184,11 @@ fn main() -> anyhow::Result<()> {
             .spawn(move || async move {
                 let _worker = worker;
                 let local_addr = SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap();
-                let server_states = Rc::new(RefCell::new(ServerStates::new(server_config, local_addr).unwrap()));
+                let server_states = Rc::new(RefCell::new(
+						ServerStates::new(server_config, local_addr,
+						meter_provider.meter(format!("{}:{}", host, port)),
+						).unwrap()
+					));
 
                 info!("listening {}:{}...", host, port);
 

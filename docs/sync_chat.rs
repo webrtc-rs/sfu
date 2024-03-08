@@ -81,8 +81,8 @@ pub fn main() -> anyhow::Result<()> {
             .init();
     }
 
-    let certificate = include_bytes!("util/cer.pem").to_vec();
-    let private_key = include_bytes!("util/key.pem").to_vec();
+    let certificate = include_bytes!("../examples/util/cer.pem").to_vec();
+    let private_key = include_bytes!("../examples/util/key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = if cli.host == "127.0.0.1" && !cli.force_local_loop {

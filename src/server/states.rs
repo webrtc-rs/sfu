@@ -4,10 +4,12 @@ use crate::endpoint::{
     transport::Transport,
     Endpoint,
 };
+use crate::metrics::Metrics;
 use crate::server::config::ServerConfig;
 use crate::session::{config::SessionConfig, Session};
 use crate::types::{EndpointId, FourTuple, SessionId, UserName};
 use log::{debug, info};
+use opentelemetry::metrics::Meter;
 use shared::error::{Error, Result};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -21,6 +23,7 @@ pub struct ServerStates {
     server_config: Arc<ServerConfig>,
     local_addr: SocketAddr,
     sessions: HashMap<SessionId, Session>,
+    metrics: Metrics,
 
     //TODO: add idle timeout cleanup logic to remove idle endpoint and candidates
     candidates: HashMap<UserName, Rc<Candidate>>,
@@ -29,7 +32,11 @@ pub struct ServerStates {
 
 impl ServerStates {
     /// create new server states
-    pub fn new(server_config: Arc<ServerConfig>, local_addr: SocketAddr) -> Result<Self> {
+    pub fn new(
+        server_config: Arc<ServerConfig>,
+        local_addr: SocketAddr,
+        meter: Meter,
+    ) -> Result<Self> {
         let _ = server_config
             .certificates
             .first()
@@ -42,6 +49,7 @@ impl ServerStates {
             server_config,
             local_addr,
             sessions: HashMap::new(),
+            metrics: Metrics::new(meter),
 
             candidates: HashMap::new(),
             endpoints: HashMap::new(),
@@ -106,6 +114,10 @@ impl ServerStates {
         }
 
         Ok(answer)
+    }
+
+    pub(crate) fn metrics(&self) -> &Metrics {
+        &self.metrics
     }
 
     pub(crate) fn accept_answer(
