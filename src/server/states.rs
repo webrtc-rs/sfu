@@ -7,7 +7,7 @@ use crate::endpoint::{
 use crate::server::config::ServerConfig;
 use crate::session::{config::SessionConfig, Session};
 use crate::types::{EndpointId, FourTuple, SessionId, UserName};
-use log::info;
+use log::{debug, info};
 use shared::error::{Error, Result};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -101,7 +101,7 @@ impl ServerStates {
                 local_conn_cred,
                 offer,
                 answer.clone(),
-                Instant::now() + self.server_config.candidate_idle_timeout,
+                Instant::now() + self.server_config.idle_timeout,
             )));
         }
 
@@ -162,6 +162,10 @@ impl ServerStates {
         self.sessions.get_mut(session_id)
     }
 
+    pub(crate) fn remove_session(&mut self, session_id: &SessionId) -> Option<Session> {
+        self.sessions.remove(session_id)
+    }
+
     pub(crate) fn add_candidate(&mut self, candidate: Rc<Candidate>) -> Option<Rc<Candidate>> {
         let username = candidate.username();
         self.candidates.insert(username, candidate)
@@ -173,6 +177,14 @@ impl ServerStates {
 
     pub(crate) fn find_candidate(&self, username: &UserName) -> Option<&Rc<Candidate>> {
         self.candidates.get(username)
+    }
+
+    pub(crate) fn get_candidates(&self) -> &HashMap<UserName, Rc<Candidate>> {
+        &self.candidates
+    }
+
+    pub(crate) fn get_endpoints(&self) -> &HashMap<FourTuple, (SessionId, EndpointId)> {
+        &self.endpoints
     }
 
     pub(crate) fn add_endpoint(
@@ -241,5 +253,31 @@ impl ServerStates {
         )))?;
 
         Ok(transport)
+    }
+
+    pub(crate) fn remove_transport(&mut self, four_tuple: FourTuple) {
+        debug!("remove idle transport {:?}", four_tuple);
+
+        let Some((session_id, endpoint_id)) = self.find_endpoint(&four_tuple) else {
+            return;
+        };
+        let Some(session) = self.get_mut_session(&session_id) else {
+            return;
+        };
+        let Some(endpoint) = session.get_mut_endpoint(&endpoint_id) else {
+            return;
+        };
+
+        let transport = endpoint.remove_transport(&four_tuple);
+        if endpoint.get_transports().is_empty() {
+            session.remove_endpoint(&endpoint_id);
+            if session.get_endpoints().is_empty() {
+                self.remove_session(&session_id);
+            }
+            self.remove_endpoint(&four_tuple);
+        }
+        if let Some(transport) = transport {
+            self.remove_candidate(&transport.candidate().username());
+        }
     }
 }

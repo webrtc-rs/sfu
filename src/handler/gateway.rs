@@ -15,8 +15,10 @@ use retty::transport::TransportContext;
 use shared::error::{Error, Result};
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::ops::{Add, Sub};
 use std::rc::Rc;
 use std::time::Instant;
+use std::time::Duration;
 use stun::attributes::{
     ATTR_ICE_CONTROLLED, ATTR_ICE_CONTROLLING, ATTR_NETWORK_COST, ATTR_PRIORITY, ATTR_USERNAME,
     ATTR_USE_CANDIDATE,
@@ -31,13 +33,19 @@ use stun::xoraddr::XorMappedAddress;
 pub struct GatewayHandler {
     server_states: Rc<RefCell<ServerStates>>,
     transmits: VecDeque<TaggedMessageEvent>,
+    next_timeout: Instant,
+    idle_timeout: Duration,
 }
 
 impl GatewayHandler {
     pub fn new(server_states: Rc<RefCell<ServerStates>>) -> Self {
+        let idle_timeout = server_states.borrow().server_config().idle_timeout;
+
         GatewayHandler {
             server_states,
             transmits: VecDeque::new(),
+            next_timeout: Instant::now().add(idle_timeout),
+            idle_timeout,
         }
     }
 }
@@ -50,6 +58,23 @@ impl Handler for GatewayHandler {
 
     fn name(&self) -> &str {
         "GatewayHandler"
+    }
+
+    fn transport_inactive(&mut self, _ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>) {
+        let server_states = self.server_states.borrow();
+        let sessions = server_states.get_sessions();
+        let mut endpoint_count = 0;
+        for session in sessions.values() {
+            endpoint_count += session.get_endpoints().len();
+        }
+        info!(
+            "Still Active Sessions {}, Endpoints {}/{}, Candidates {} on {}",
+            sessions.len(),
+            endpoint_count,
+            server_states.get_endpoints().len(),
+            server_states.get_candidates().len(),
+            server_states.local_addr()
+        );
     }
 
     fn handle_read(
@@ -115,9 +140,34 @@ impl Handler for GatewayHandler {
     fn handle_timeout(
         &mut self,
         _ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>,
-        _now: Instant,
+        now: Instant,
     ) {
         // terminate timeout here, no more ctx.fire_handle_timeout(now);
+        if self.next_timeout <= now {
+            let mut four_tuples = vec![];
+            let mut server_states = self.server_states.borrow_mut();
+            for session in server_states.get_mut_sessions().values_mut() {
+                for endpoint in session.get_mut_endpoints().values_mut() {
+                    for transport in endpoint.get_mut_transports().values_mut() {
+                        if transport.last_activity() <= now.sub(self.idle_timeout) {
+                            four_tuples.push(*transport.four_tuple());
+                        }
+                    }
+                }
+            }
+            for four_tuple in four_tuples {
+                server_states.remove_transport(four_tuple);
+            }
+
+            self.next_timeout = self.next_timeout.add(self.idle_timeout);
+        }
+    }
+
+    fn poll_timeout(&mut self, ctx: &Context<Self::Rin, Self::Rout, Self::Win, Self::Wout>, eto: &mut Instant) {
+        if self.next_timeout < *eto {
+            *eto = self.next_timeout;
+        }
+        ctx.fire_poll_timeout(eto);
     }
 
     fn poll_write(
@@ -127,7 +177,6 @@ impl Handler for GatewayHandler {
         if let Some(msg) = ctx.fire_poll_write() {
             self.transmits.push_back(msg);
         }
-
         self.transmits.pop_front()
     }
 }
@@ -387,6 +436,7 @@ impl GatewayHandler {
         rtp_packet: rtp::packet::Packet,
     ) -> Result<Vec<TaggedMessageEvent>> {
         debug!("handle_rtp_message {}", transport_context.peer_addr);
+        server_states.get_mut_transport(&(&transport_context).into())?.keep_alive();
 
         //TODO: Selective Forwarding RTP Packets
         let peers =
@@ -411,6 +461,7 @@ impl GatewayHandler {
         rtcp_packets: Vec<Box<dyn rtcp::packet::Packet>>,
     ) -> Result<Vec<TaggedMessageEvent>> {
         debug!("handle_rtcp_message {}", transport_context.peer_addr);
+        server_states.get_mut_transport(&(&transport_context).into())?.keep_alive();
 
         //TODO: Selective Forwarding RTCP Packets
         let peers =

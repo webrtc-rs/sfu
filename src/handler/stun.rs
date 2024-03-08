@@ -11,7 +11,7 @@ pub struct StunHandler;
 
 impl StunHandler {
     pub fn new() -> Self {
-        StunHandler::default()
+        StunHandler
     }
 }
 

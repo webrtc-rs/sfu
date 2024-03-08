@@ -5,9 +5,11 @@ use srtp::context::Context;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 pub(crate) struct Transport {
     four_tuple: FourTuple,
+    last_activity: Instant,
 
     // ICE
     candidate: Rc<Candidate>,
@@ -38,6 +40,7 @@ impl Transport {
     ) -> Self {
         Self {
             four_tuple,
+            last_activity: Instant::now(),
 
             candidate,
 
@@ -128,5 +131,13 @@ impl Transport {
 
     pub(crate) fn is_local_srtp_context_ready(&self) -> bool {
         self.local_srtp_context.is_some()
+    }
+
+    pub(crate) fn keep_alive(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    pub(crate) fn last_activity(&self) -> Instant {
+        self.last_activity
     }
 }

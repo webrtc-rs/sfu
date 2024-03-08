@@ -46,8 +46,8 @@ impl Endpoint {
         self.transports.insert(*transport.four_tuple(), transport);
     }
 
-    pub(crate) fn remove_transport(&mut self, four_tuple: &FourTuple) {
-        self.transports.remove(four_tuple);
+    pub(crate) fn remove_transport(&mut self, four_tuple: &FourTuple) -> Option<Transport> {
+        self.transports.remove(four_tuple)
     }
 
     pub(crate) fn has_transport(&self, four_tuple: &FourTuple) -> bool {

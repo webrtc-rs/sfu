@@ -110,6 +110,10 @@ impl Session {
         self.endpoints.get_mut(endpoint_id)
     }
 
+    pub(crate) fn remove_endpoint(&mut self, endpoint_id: &EndpointId) -> Option<Endpoint> {
+        self.endpoints.remove(endpoint_id)
+    }
+
     pub(crate) fn has_endpoint(&self, endpoint_id: &EndpointId) -> bool {
         self.endpoints.contains_key(endpoint_id)
     }

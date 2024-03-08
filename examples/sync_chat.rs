@@ -8,6 +8,7 @@ use std::net::{IpAddr, UdpSocket};
 use std::str::FromStr;
 use std::sync::mpsc::{self};
 use std::sync::Arc;
+use std::time::Duration;
 use wg::WaitGroup;
 
 mod sync_signal;
@@ -114,7 +115,8 @@ pub fn main() -> anyhow::Result<()> {
         ServerConfig::new(certificates)
             .with_dtls_handshake_config(dtls_handshake_config)
             .with_sctp_endpoint_config(sctp_endpoint_config)
-            .with_sctp_server_config(sctp_server_config),
+            .with_sctp_server_config(sctp_server_config)
+            .with_idle_timeout(Duration::from_secs(30)),
     );
     let wait_group = WaitGroup::new();
 

@@ -10,8 +10,7 @@ pub struct ServerConfig {
     pub(crate) sctp_endpoint_config: Arc<sctp::EndpointConfig>,
     pub(crate) sctp_server_config: Arc<sctp::ServerConfig>,
     pub(crate) media_config: MediaConfig,
-    pub(crate) endpoint_idle_timeout: Duration,
-    pub(crate) candidate_idle_timeout: Duration,
+    pub(crate) idle_timeout: Duration,
 }
 
 impl ServerConfig {
@@ -23,8 +22,7 @@ impl ServerConfig {
             sctp_endpoint_config: Arc::new(sctp::EndpointConfig::default()),
             sctp_server_config: Arc::new(sctp::ServerConfig::default()),
             dtls_handshake_config: Arc::new(dtls::config::HandshakeConfig::default()),
-            endpoint_idle_timeout: Duration::from_secs(30),
-            candidate_idle_timeout: Duration::from_secs(30),
+            idle_timeout: Duration::from_secs(30),
         }
     }
 
@@ -58,15 +56,9 @@ impl ServerConfig {
         self
     }
 
-    /// build with endpoint idle timeout
-    pub fn with_endpoint_idle_timeout(mut self, endpoint_idle_timeout: Duration) -> Self {
-        self.endpoint_idle_timeout = endpoint_idle_timeout;
-        self
-    }
-
-    /// build with candidate idle timeout
-    pub fn with_candidate_idle_timeout(mut self, candidate_idle_timeout: Duration) -> Self {
-        self.candidate_idle_timeout = candidate_idle_timeout;
+    /// build with idle timeout
+    pub fn with_idle_timeout(mut self, idle_timeout: Duration) -> Self {
+        self.idle_timeout = idle_timeout;
         self
     }
 }

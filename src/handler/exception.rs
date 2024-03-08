@@ -9,7 +9,7 @@ pub struct ExceptionHandler;
 
 impl ExceptionHandler {
     pub fn new() -> Self {
-        ExceptionHandler::default()
+        ExceptionHandler
     }
 }
 

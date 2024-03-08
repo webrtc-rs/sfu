@@ -107,6 +107,7 @@ pub fn sync_run(
 
     let mut buf = vec![0; 2000];
 
+    pipeline.transport_active();
     loop {
         match stop_rx.try_recv() {
             Ok(_) => break,
@@ -150,6 +151,7 @@ pub fn sync_run(
         // Drive time forward in all clients.
         pipeline.handle_timeout(Instant::now());
     }
+    pipeline.transport_inactive();
 
     println!(
         "media server on {} is gracefully down",
@@ -161,10 +163,9 @@ pub fn sync_run(
 fn write_socket_output(
     socket: &UdpSocket,
     pipeline: &Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>>,
-)  -> anyhow::Result<()>{
+) -> anyhow::Result<()> {
     while let Some(transmit) = pipeline.poll_transmit() {
-        socket
-            .send_to(&transmit.message, transmit.transport.peer_addr)?;
+        socket.send_to(&transmit.message, transmit.transport.peer_addr)?;
     }
 
     Ok(())

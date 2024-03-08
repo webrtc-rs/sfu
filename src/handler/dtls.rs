@@ -132,7 +132,12 @@ impl Handler for DtlsHandler {
                 }
                 Err(err) => {
                     error!("try_read with error {}", err);
-                    ctx.fire_exception(Box::new(err))
+                    if err == Error::ErrAlertFatalOrClose {
+                        let mut server_states = self.server_states.borrow_mut();
+                        server_states.remove_transport(four_tuple);
+                    } else {
+                        ctx.fire_exception(Box::new(err))
+                    }
                 }
             };
         } else {

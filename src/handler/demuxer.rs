@@ -45,7 +45,7 @@ pub struct DemuxerHandler;
 
 impl DemuxerHandler {
     pub fn new() -> Self {
-        DemuxerHandler::default()
+        DemuxerHandler
     }
 }
 
