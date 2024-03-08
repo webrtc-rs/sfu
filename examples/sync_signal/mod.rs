@@ -2,6 +2,8 @@
 
 use bytes::{Bytes, BytesMut};
 use log::error;
+use opentelemetry::metrics::MeterProvider;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use retty::channel::{InboundPipeline, Pipeline};
 use retty::transport::{TaggedBytesMut, TransportContext};
 use rouille::{Request, Response, ResponseBody};
@@ -95,10 +97,12 @@ pub fn sync_run(
     socket: UdpSocket,
     rx: Receiver<SignalingMessage>,
     server_config: Arc<ServerConfig>,
+    meter_provider: SdkMeterProvider,
 ) -> anyhow::Result<()> {
     let server_states = Rc::new(RefCell::new(ServerStates::new(
         server_config,
         socket.local_addr()?,
+        meter_provider.meter(format!("{}", socket.local_addr()?)),
     )?));
 
     println!("listening {}...", socket.local_addr()?);

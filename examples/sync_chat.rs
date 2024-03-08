@@ -1,5 +1,10 @@
 use clap::Parser;
 use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
+use log::info;
+use opentelemetry::{/*global,*/ KeyValue};
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+use opentelemetry_sdk::{runtime, Resource};
+use opentelemetry_stdout::MetricsExporterBuilder;
 use rouille::Server;
 use sfu::{RTCCertificate, ServerConfig};
 use std::collections::HashMap;
@@ -46,7 +51,7 @@ impl From<Level> for log::LevelFilter {
 struct Cli {
     #[arg(long, default_value_t = format!("127.0.0.1"))]
     host: String,
-    #[arg(long, default_value_t = 8080)]
+    #[arg(short, long, default_value_t = 8080)]
     signal_port: u16,
     #[arg(long, default_value_t = 3478)]
     media_port_min: u16,
@@ -62,7 +67,47 @@ struct Cli {
     level: Level,
 }
 
-pub fn main() -> anyhow::Result<()> {
+fn init_meter_provider(
+    stop_rx: crossbeam_channel::Receiver<()>,
+    wait_group: WaitGroup,
+) -> SdkMeterProvider {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .unwrap();
+
+        rt.block_on(async move {
+            let worker = wait_group.add(1);
+            let exporter = MetricsExporterBuilder::default()
+                .with_encoder(|writer, data| {
+                    Ok(serde_json::to_writer_pretty(writer, &data).unwrap())
+                })
+                .build();
+            let reader = PeriodicReader::builder(exporter, runtime::TokioCurrentThread)
+                .with_interval(Duration::from_secs(30))
+                .build();
+            let meter_provider = SdkMeterProvider::builder()
+                .with_reader(reader)
+                .with_resource(Resource::new(vec![KeyValue::new("chat", "metrics")]))
+                .build();
+            let _ = tx.send(meter_provider.clone());
+
+            let _ = stop_rx.recv();
+            let _ = meter_provider.shutdown();
+            worker.done();
+            info!("meter provider is gracefully down");
+        });
+    });
+
+    let meter_provider = rx.recv().unwrap();
+    meter_provider
+}
+
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if cli.debug {
         env_logger::Builder::new()
@@ -81,8 +126,8 @@ pub fn main() -> anyhow::Result<()> {
             .init();
     }
 
-    let certificate = include_bytes!("../examples/util/cer.pem").to_vec();
-    let private_key = include_bytes!("../examples/util/key.pem").to_vec();
+    let certificate = include_bytes!("util/cer.pem").to_vec();
+    let private_key = include_bytes!("util/key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = if cli.host == "127.0.0.1" && !cli.force_local_loop {
@@ -119,6 +164,7 @@ pub fn main() -> anyhow::Result<()> {
             .with_idle_timeout(Duration::from_secs(30)),
     );
     let wait_group = WaitGroup::new();
+    let meter_provider = init_meter_provider(stop_rx.clone(), wait_group.clone());
 
     for port in media_ports {
         let worker = wait_group.add(1);
@@ -132,9 +178,11 @@ pub fn main() -> anyhow::Result<()> {
 
         media_port_thread_map.insert(port, signaling_tx);
         let server_config = server_config.clone();
+        let meter_provider = meter_provider.clone();
         // The run loop is on a separate thread to the web server.
         std::thread::spawn(move || {
-            if let Err(err) = sync_run(stop_rx, socket, signaling_rx, server_config) {
+            if let Err(err) = sync_run(stop_rx, socket, signaling_rx, server_config, meter_provider)
+            {
                 eprintln!("run_sfu got error: {}", err);
             }
             worker.done();

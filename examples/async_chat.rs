@@ -31,7 +31,7 @@ use sfu::{
 
 mod async_signal;
 
-use async_signal::{handle_signaling_message, SignalingMessage, SignalingServer};
+use async_signal::*;
 
 #[derive(Default, Debug, Copy, Clone, clap::ValueEnum)]
 enum Level {
@@ -163,8 +163,8 @@ fn main() -> anyhow::Result<()> {
             .with_sctp_endpoint_config(sctp_endpoint_config)
             .with_sctp_server_config(sctp_server_config),
     );
-    let wait_group = WaitGroup::new();
     let core_num = num_cpus::get();
+    let wait_group = WaitGroup::new();
     let meter_provider = init_meter_provider(stop_rx.clone(), wait_group.worker());
 
     for port in media_ports {
