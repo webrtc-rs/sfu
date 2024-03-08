@@ -58,7 +58,7 @@ impl Handler for StunHandler {
                 }
             }
         } else {
-            debug!("bypass StunInbound for {}", msg.transport.peer_addr);
+            debug!("bypass StunHandler read for {}", msg.transport.peer_addr);
             ctx.fire_read(msg);
         }
     }
@@ -81,7 +81,7 @@ impl Handler for StunHandler {
                     message: MessageEvent::Stun(STUNMessageEvent::Raw(message)),
                 })
             } else {
-                debug!("bypass StunOutbound for {}", msg.transport.peer_addr);
+                debug!("bypass StunHandler write for {}", msg.transport.peer_addr);
                 Some(msg)
             }
         } else {

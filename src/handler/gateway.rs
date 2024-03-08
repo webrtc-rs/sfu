@@ -386,6 +386,8 @@ impl GatewayHandler {
         transport_context: TransportContext,
         rtp_packet: rtp::packet::Packet,
     ) -> Result<Vec<TaggedMessageEvent>> {
+        debug!("handle_rtp_message {}", transport_context.peer_addr);
+
         //TODO: Selective Forwarding RTP Packets
         let peers =
             GatewayHandler::get_other_media_transport_contexts(server_states, &transport_context)?;
@@ -408,6 +410,8 @@ impl GatewayHandler {
         transport_context: TransportContext,
         rtcp_packets: Vec<Box<dyn rtcp::packet::Packet>>,
     ) -> Result<Vec<TaggedMessageEvent>> {
+        debug!("handle_rtcp_message {}", transport_context.peer_addr);
+
         //TODO: Selective Forwarding RTCP Packets
         let peers =
             GatewayHandler::get_other_media_transport_contexts(server_states, &transport_context)?;

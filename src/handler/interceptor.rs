@@ -2,7 +2,7 @@ use crate::interceptor::InterceptorEvent;
 use crate::messages::{MessageEvent, RTPMessageEvent, TaggedMessageEvent};
 use crate::types::FourTuple;
 use crate::ServerStates;
-use log::error;
+use log::{debug, error};
 use retty::channel::{Context, Handler};
 use shared::error::Result;
 use std::cell::RefCell;
@@ -56,6 +56,7 @@ impl Handler for InterceptorHandler {
                     for event in events {
                         match event {
                             InterceptorEvent::Inbound(inbound) => {
+                                debug!("interceptor forward Rtcp {:?}", msg.transport.peer_addr);
                                 ctx.fire_read(inbound);
                             }
                             InterceptorEvent::Outbound(outbound) => {
@@ -77,10 +78,12 @@ impl Handler for InterceptorHandler {
             if let MessageEvent::Rtp(RTPMessageEvent::Rtcp(_)) = &msg.message {
                 // RTCP message read must end here in SFU case. If any rtcp packet needs to be forwarded to other Endpoints,
                 // just add a new interceptor to forward it.
+                debug!("interceptor terminates Rtcp {:?}", msg.transport.peer_addr);
                 return;
             }
         }
 
+        debug!("interceptor read bypass {:?}", msg.transport.peer_addr);
         ctx.fire_read(msg);
     }
 
@@ -197,6 +200,9 @@ impl Handler for InterceptorHandler {
                     }
                 };
             }
+
+            debug!("interceptor write {:?}", msg.transport.peer_addr);
+            self.transmits.push_back(msg);
         }
 
         self.transmits.pop_front()

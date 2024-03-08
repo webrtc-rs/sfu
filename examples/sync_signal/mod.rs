@@ -117,7 +117,7 @@ pub fn sync_run(
             }
         };
 
-        write_socket_output(&socket, &pipeline);
+        write_socket_output(&socket, &pipeline)?;
 
         // Spawn new incoming signal message from the signaling server thread.
         if let Ok(signal_message) = rx.try_recv() {
@@ -161,12 +161,13 @@ pub fn sync_run(
 fn write_socket_output(
     socket: &UdpSocket,
     pipeline: &Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>>,
-) {
+)  -> anyhow::Result<()>{
     while let Some(transmit) = pipeline.poll_transmit() {
         socket
-            .send_to(&transmit.message, transmit.transport.peer_addr)
-            .expect("sending UDP data");
+            .send_to(&transmit.message, transmit.transport.peer_addr)?;
     }
+
+    Ok(())
 }
 
 fn read_socket_input(socket: &UdpSocket, buf: &mut [u8]) -> Option<TaggedBytesMut> {
