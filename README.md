@@ -55,13 +55,13 @@ To build sfu crate:
 cargo build [or clippy or test or fmt]
 ```
 
-To build sync version chat examples:
+To build sync version chat examples (preferred):
 
 ```
 cargo run --package sfu --example sync_chat
 ```
 
-To build async version chat examples:
+To build async version chat examples (caveat: its performance is much worse than sync version, maybe due to async runtime):
 
 ```
 cargo run --package sfu --example async_chat
