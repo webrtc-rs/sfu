@@ -38,7 +38,7 @@ jobs:
           docker cp chat-server:/usr/src/app/logs/. .
 
       - name: Upload logs as artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: logs
           path: |
