@@ -23,7 +23,7 @@
  </a>
 </p>
 <p align="center">
- WebRTC Selective Forwarding Unit (SFU) in Rust with Sans-IO
+ SFU in Rust with Sans-IO
 </p>
 
 #
