@@ -30,6 +30,7 @@ The current codebase uses:
 - `src/driver/` — the future socket/runtime driver layer
 - `apprtc/` — the Rust AppRTC signaling / Collider development crate
 - `examples/sfu.rs` — the sfu runtime example
+- `examples/sfu-probe.rs` — the one-client RTP echo probe example
 
 The new root crate is the active implementation target, with additional repo
 artifacts such as `docs/`, `scripts/`, and `todo_tests/` still present alongside
@@ -42,7 +43,8 @@ sfu/
 ├── Cargo.toml              # root sfu package manifest
 ├── apprtc/                 # apprtc submodule
 ├── examples/
-│   └── sfu.rs              # sfu runtime example
+│   ├── sfu.rs              # sfu runtime example
+│   └── sfu-probe.rs        # one-client echo probe
 ├── src/
 │   ├── driver/             # driver scaffold
 │   ├── engine/             # sans-IO SFU core scaffold
@@ -86,6 +88,20 @@ The temporary M2 signaling path accepts a raw `RTCSessionDescription` JSON offer
 `POST /offer` and returns the JSON answer body. The example currently drives one
 client end-to-end on a single UDP socket for bring-up, while the library crate
 stays free of runtime/HTTP dependencies.
+
+### Probe the temporary M2 runtime
+
+```bash
+# terminal 1
+cargo run --example sfu
+
+# terminal 2
+cargo run --example sfu-probe
+```
+
+`sfu-probe` exits successfully only after offer/answer completes, ICE/DTLS
+connect, a remote track opens, and one RTP packet is echoed back. Set
+`SFU_SIGNALING_URL` to target a different `/offer` endpoint if needed.
 
 ## Notes for Contributors
 
