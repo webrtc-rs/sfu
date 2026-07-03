@@ -1,0 +1,14 @@
+[package]
+name = "sfu-bin"
+version = "0.20.0-rc.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Runnable SFU binary wiring apprtc and driver together"
+
+[dependencies]
+apprtc.workspace = true
+sfu-driver = { path = "../sfu-driver" }
+sfu-engine = { path = "../sfu-engine" }

@@ -2,9 +2,9 @@ name: cargo
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,23 +15,32 @@ env:
 
 jobs:
   build:
-    name: Build and test
+    name: Build
     strategy:
       matrix:
-        os: [ 'ubuntu-latest', 'macos-latest' ] #, 'windows-latest'
+        os: ['ubuntu-latest', 'macos-latest', 'windows-latest']
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Build
         run: cargo build --verbose
+
+  test:
+    name: Test
+    strategy:
+      matrix:
+        os: [ 'ubuntu-latest' ] #, 'macos-latest', 'windows-latest' ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
       - name: Run tests
-        run: cargo test --verbose --lib
+        run: cargo test --verbose
 
   rustfmt_and_clippy:
     name: Check rustfmt style && run clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -39,7 +48,7 @@ jobs:
           components: clippy, rustfmt
           override: true
       - name: Cache cargo registry
-        uses: actions/cache@v1
+        uses: actions/cache@v3
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}

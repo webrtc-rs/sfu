@@ -3,96 +3,90 @@
  <br>
 </h1>
 <p align="center">
- <a href="https://github.com/webrtc-rs/sfu/actions"> 
-  <img src="https://github.com/webrtc-rs/sfu/workflows/cargo/badge.svg">
- </a> 
- <a href="https://codecov.io/gh/webrtc-rs/sfu"> 
-  <img src="https://codecov.io/gh/webrtc-rs/sfu/branch/master/graph/badge.svg">
+ <a href="https://github.com/webrtc-rs/sfu/actions">
+  <img src="https://github.com/webrtc-rs/sfu/workflows/cargo/badge.svg" alt="CI">
  </a>
- <a href="https://deps.rs/repo/github/webrtc-rs/sfu"> 
-  <img src="https://deps.rs/repo/github/webrtc-rs/sfu/status.svg">
+ <a href="https://codecov.io/gh/webrtc-rs/sfu">
+  <img src="https://codecov.io/gh/webrtc-rs/sfu/branch/master/graph/badge.svg" alt="Coverage">
  </a>
- <a href="https://crates.io/crates/sfu"> 
-  <img src="https://img.shields.io/crates/v/sfu.svg">
- </a> 
- <a href="https://docs.rs/sfu"> 
-  <img src="https://docs.rs/sfu/badge.svg">
+ <a href="https://deps.rs/repo/github/webrtc-rs/sfu">
+  <img src="https://deps.rs/repo/github/webrtc-rs/sfu/status.svg" alt="Dependencies">
  </a>
  <a href="https://doc.rust-lang.org/1.6.0/complement-project-faq.html#why-dual-mitasl2-license">
-  <img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue" alt="License: MIT/Apache 2.0">
+  <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License: MIT OR Apache-2.0">
  </a>
 </p>
 <p align="center">
  SFU in Rust with Sans-IO
 </p>
 
-<p align="center">
-<strong>Sponsored with 💖 by</strong><br>
-</p>
-<p align="center">
-<strong>Gold Sponsors:</strong><br>
-<a href="https://www.recall.ai" target="_blank">
-<img src="https://raw.githubusercontent.com/webrtc-rs/webrtc/master/doc/recall.svg"
-alt="Recall.ai">
-</a><br>
-<p align="center">
-<strong>Silver Sponsors:</strong><br>
-<a href="https://getstream.io/video/voice-calling/?utm_source=https://github.com/webrtc-rs/webrtc&utm_medium=sponsorship&utm_content=&utm_campaign=webrtcRepo_July2023_video_klmh22" target="_blank">
-<img src="https://raw.githubusercontent.com/webrtc-rs/webrtc/master/doc/stream-logo.png" height="50" alt="Stream Chat">
-</a><br>
-<a href="https://channel.io/" target="_blank">
-<img src="https://raw.githubusercontent.com/webrtc-rs/webrtc/master/doc/ChannelTalk_logo.png" alt="ChannelTalk">
-</a><br>
-<strong>Bronze Sponsors:</strong><br>
-<a href="https://github.com/AdrianEddy" target="_blank">AdrianEddy</a><br>
-</p>
+## Overview
 
-<details>
-<summary><b>Table of Content</b></summary>
+This repository is being re-architected around the modern sans-IO `rtc` core.
 
-- [Building](#building)
-    - [Toolchain](#toolchain)
-    - [Build](#build)
-- [Open Source License](#open-source-license)
-- [Contributing](#contributing)
+The current codebase has completed the workspace split for the new design:
 
-</details>
+- `crates/sfu-engine` — the new sans-IO SFU core boundary
+- `crates/sfu-driver` — the future socket/runtime driver layer
+- `apprtc` — the Rust AppRTC signaling / Collider development crate
+- `crates/sfu-bin` — the runnable binary entrypoint
 
-#
+The new workspace is the active implementation target, with additional repo
+artifacts such as `docs/`, `scripts/`, and `todo_tests/` still present alongside
+it during the migration.
+
+## Repository Layout
+
+```text
+sfu/
+├── Cargo.toml              # workspace root
+├── apprtc/                 # apprtc submodule
+├── crates/
+│   ├── sfu-bin/            # binary scaffold
+│   ├── sfu-driver/         # driver scaffold
+│   └── sfu-engine/         # sans-IO SFU core scaffold
+├── rtc/                    # rtc submodule
+├── scripts/                # helper scripts
+├── docs/                   # project documentation
+└── todo_tests/             # migration/reference tests and examples
+```
 
 ## Building
 
 ### Toolchain
 
-SFU.rs currently requires Rust 1.75.0+ to build.
+Use a Rust toolchain with Edition 2024 support.
 
-### Build
+### Build the workspace
 
-To build sfu crate:
-
-```
-cargo build [or clippy or test or fmt]
+```bash
+cargo build --workspace
 ```
 
-To build sync version chat examples (preferred):
+### Format the workspace
 
-```
-cargo run --package sfu --example sync_chat
+```bash
+cargo fmt --all
 ```
 
-To build async version chat examples (caveat: its performance is much worse than sync version, maybe due to async runtime):
+### Run the current binary scaffold
 
+```bash
+cargo run -p sfu-bin
 ```
-cargo run --package sfu --example async_chat
-```
+
+## Notes for Contributors
+
+- The active implementation now lives under `crates/`.
+- The `apprtc/` directory is where Rust-based Collider/signaling development now lives.
+- The `rtc/` directory is the local `rtc` workspace used during the migration.
+- The new architecture is intentionally landing in phases; the absence of full SFU
+  behavior in `crates/` is expected at this stage.
 
 ## Open Source License
 
-Dual licensing under both MIT and Apache-2.0 is the currently accepted standard by the Rust language community and has
-been used for both the compiler and many public libraries since (
-see https://doc.rust-lang.org/1.6.0/complement-project-faq.html#why-dual-mitasl2-license). In order to match the
-community standards, SFU.rs is using the dual MIT+Apache-2.0 license.
+This project uses dual licensing under MIT or Apache-2.0.
 
 ## Contributing
 
-Contributors or Pull Requests are Welcome!!!
+Contributors and pull requests are welcome.

@@ -1,0 +1,6 @@
+[submodule "rtc"]
+	path = rtc
+	url = https://github.com/webrtc-rs/rtc
+[submodule "apprtc"]
+	path = apprtc
+	url = https://github.com/webrtc-rs/apprtc

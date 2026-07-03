@@ -1,0 +1,16 @@
+[package]
+name = "sfu-engine"
+version = "0.20.0-rc.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Sans-IO SFU core"
+
+[dependencies]
+rtc = { path = "../../rtc/rtc", version = "0.20.0-rc.1" }
+sansio = "1.0.1"
+bytes = "1.12.0"
+log = "0.4.33"
+
