@@ -8,7 +8,7 @@ pub mod router;
 
 pub use client::{Client, ClientPeerConnection};
 pub use command::{SfuCommand, SfuEvent};
-pub use core::SfuEngine;
+pub use core::SfuCore;
 pub use forward::{ForwardEntry, ForwardKey, ForwardTable};
 pub use ids::{ClientId, RoomId};
 pub use room::Room;

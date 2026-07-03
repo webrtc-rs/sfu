@@ -1,6 +1,6 @@
-use crate::engine::SfuEngine;
+use crate::engine::SfuCore;
 
 #[derive(Default)]
 pub struct UdpDriver {
-    pub engine: SfuEngine,
+    pub engine: SfuCore,
 }

@@ -12,7 +12,7 @@ use std::convert::Infallible;
 use std::time::Instant;
 
 #[derive(Default)]
-pub struct SfuEngine {
+pub struct SfuCore {
     pub router: Router,
     pub rooms: HashMap<RoomId, Room>,
     pub clients: HashMap<ClientId, Client>,
@@ -23,7 +23,7 @@ pub struct SfuEngine {
     next_timeout: Option<Instant>,
 }
 
-impl SfuEngine {
+impl SfuCore {
     pub fn new() -> Self {
         Self::default()
     }
@@ -39,7 +39,7 @@ impl SfuEngine {
     }
 }
 
-impl Protocol<TaggedBytesMut, Infallible, SfuCommand> for SfuEngine {
+impl Protocol<TaggedBytesMut, Infallible, SfuCommand> for SfuCore {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
     type Eout = SfuEvent;

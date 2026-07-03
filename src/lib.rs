@@ -6,5 +6,5 @@ pub mod engine;
 pub use driver::{ShardDriver, SignalAdapter, UdpDriver};
 pub use engine::{
     Client, ClientId, ClientPeerConnection, ForwardEntry, ForwardKey, ForwardTable, Room, RoomId,
-    Router, SfuCommand, SfuEngine, SfuEvent,
+    Router, SfuCommand, SfuCore, SfuEvent,
 };
