@@ -88,7 +88,7 @@ impl SfuCore {
         }
     }
 
-    pub fn client_timeout(&mut self, client_id: ClientId) -> Option<Instant> {
+    pub fn poll_client_timeout(&mut self, client_id: ClientId) -> Option<Instant> {
         self.client_mut(client_id)
             .and_then(|client| client.pc.as_mut())
             .and_then(|pc| pc.poll_timeout())

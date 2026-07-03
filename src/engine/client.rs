@@ -21,7 +21,7 @@ use sansio::Protocol;
 use std::collections::HashMap;
 use std::time::Instant;
 
-pub trait ClientPeerConnection: Send {
+pub trait PeerConnection: Send {
     fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()>;
     fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()>;
     fn create_answer(&mut self, options: Option<RTCAnswerOptions>)
@@ -40,7 +40,7 @@ pub trait ClientPeerConnection: Send {
     fn handle_timeout(&mut self, now: Instant) -> Result<()>;
 }
 
-impl<I> ClientPeerConnection for RTCPeerConnection<I>
+impl<I> PeerConnection for RTCPeerConnection<I>
 where
     I: Interceptor + Send + 'static,
 {
@@ -122,7 +122,7 @@ pub struct Client {
     pub id: ClientId,
     pub room_id: RoomId,
     pub pending_request: Option<u64>,
-    pub pc: Option<Box<dyn ClientPeerConnection>>,
+    pub pc: Option<Box<dyn PeerConnection>>,
     pub inbound: HashMap<RTCRtpReceiverId, InboundTrack>,
     pub outbound: HashMap<ForwardKey, RTCRtpSenderId>,
 }

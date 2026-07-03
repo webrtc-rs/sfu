@@ -68,7 +68,7 @@ impl UdpDriver {
             .clients_with_peer_connections()
             .collect::<Vec<_>>()
             .into_iter()
-            .filter_map(|client_id| self.core.client_timeout(client_id))
+            .filter_map(|client_id| self.core.poll_client_timeout(client_id))
             .min()
     }
 

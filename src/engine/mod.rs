@@ -6,7 +6,7 @@ pub mod ids;
 pub mod room;
 pub mod router;
 
-pub use client::{Client, ClientBuilder, ClientPeerConnection};
+pub use client::{Client, ClientBuilder, PeerConnection};
 pub use command::{SfuCommand, SfuEvent};
 pub use core::SfuCore;
 pub use forward::{ForwardEntry, ForwardKey, ForwardTable};
