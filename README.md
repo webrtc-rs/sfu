@@ -40,8 +40,9 @@ The current codebase uses:
 
 - `src/engine/` — the sans-IO SFU core boundary
 - `src/driver/` — the future socket/runtime driver layer
-- `apprtc/` — the Rust AppRTC signaling / Collider development crate
-- `examples/sfu.rs` — the sfu runtime example
+- `signaling/` — the WebSocket hub submodule scaffold (`room_table`, `ws`, `route`, `proto`)
+- `apprtc/` — the HTTP front-door submodule scaffold (`http`, `webapp`, `ws_client`, `params`, `config`)
+- `examples/sfu.rs` — the temporary one-client M2 runtime
 - `examples/sfu-probe.rs` — the one-client RTP echo probe example
 
 The new root crate is the active implementation target, with additional repo
@@ -54,11 +55,12 @@ it during the migration.
 sfu/
 ├── Cargo.toml              # root sfu package manifest
 ├── apprtc/                 # apprtc submodule
+├── signaling/              # signaling submodule
 ├── examples/
-│   ├── sfu.rs              # sfu runtime example
+│   ├── sfu.rs              # temporary M2 runtime example
 │   └── sfu-probe.rs        # one-client echo probe
 ├── src/
-│   ├── driver/             # driver scaffold
+│   ├── driver/             # driver scaffold / media-plane runtime helpers
 │   ├── engine/             # sans-IO SFU core scaffold
 │   └── lib.rs              # root sfu crate
 ├── rtc/                    # rtc submodule
@@ -100,6 +102,10 @@ The temporary M2 signaling path accepts a raw `RTCSessionDescription` JSON offer
 client end-to-end on a single UDP socket for bring-up, while the library crate
 stays free of runtime/HTTP dependencies.
 
+At the library boundary, the M0–M2 scaffolding now follows the new plan names:
+`SFUCore`, `SFUCommand`, `SFUEvent`, `Client`, `Room`, `Demuxer`, and
+`ForwardTable`.
+
 ### Probe the temporary M2 runtime
 
 ```bash
@@ -118,6 +124,7 @@ connect, a remote track opens, and one RTP packet is echoed back. Set
 
 - The active implementation now lives under the root `sfu` crate.
 - The `apprtc/` directory is a separate Rust crate used as a path dependency for Collider/signaling development.
+- The current split follows the new plan direction: `signaling` owns room-model / WS hub scaffolding, while `apprtc` owns HTTP/webapp/control-client scaffolding.
 - The `rtc/` directory is the local `rtc` repo used during the migration.
 - The new architecture is intentionally landing in phases; the absence of full SFU
   behavior in `src/` is expected at this stage.

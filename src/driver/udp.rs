@@ -1,4 +1,4 @@
-use crate::engine::{Client, ClientBuilder, ClientId, RoomId, SfuCommand, SfuCore, SfuEvent};
+use crate::engine::{Client, ClientBuilder, ClientId, RoomId, SFUCommand, SFUCore, SFUEvent};
 use bytes::BytesMut;
 use rtc::interceptor::Interceptor;
 use rtc::interceptor::Registry;
@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 pub struct UdpDriver {
-    pub core: SfuCore,
+    pub core: SFUCore,
     outbound: VecDeque<TaggedBytesMut>,
     peer_events: VecDeque<RTCPeerConnectionEvent>,
     reads: VecDeque<RTCMessage>,
@@ -26,12 +26,12 @@ pub struct UdpDriver {
 
 impl Default for UdpDriver {
     fn default() -> Self {
-        Self::new(SfuCore::default())
+        Self::new(SFUCore::default())
     }
 }
 
 impl UdpDriver {
-    pub fn new(core: SfuCore) -> Self {
+    pub fn new(core: SFUCore) -> Self {
         Self {
             core,
             outbound: VecDeque::new(),
@@ -84,7 +84,7 @@ impl UdpDriver {
         self.reads.pop_front()
     }
 
-    pub fn poll_sfu_event(&mut self) -> Option<SfuEvent> {
+    pub fn poll_sfu_event(&mut self) -> Option<SFUEvent> {
         self.core.poll_event()
     }
 
@@ -135,9 +135,9 @@ impl UdpDriver {
         Ok(())
     }
 
-    pub fn handle_command(&mut self, command: SfuCommand, client_id: ClientId) -> Result<bool> {
+    pub fn handle_command(&mut self, command: SFUCommand, client_id: ClientId) -> Result<bool> {
         let should_stop =
-            matches!(command, SfuCommand::CloseClient { client } if client == client_id);
+            matches!(command, SFUCommand::CloseClient { client } if client == client_id);
         self.core.handle_event(command)?;
         self.drain_client(client_id);
         Ok(should_stop)
@@ -259,7 +259,7 @@ mod tests {
             .expect("client creation should succeed");
 
         let should_stop = driver
-            .handle_command(SfuCommand::CloseClient { client: 200 }, 200)
+            .handle_command(SFUCommand::CloseClient { client: 200 }, 200)
             .expect("close command should succeed");
 
         assert!(should_stop);

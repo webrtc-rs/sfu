@@ -7,12 +7,12 @@ use rtc::stun::textattrs::Username;
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
-pub struct Router {
+pub struct Demuxer {
     by_ufrag: HashMap<String, ClientId>,
     by_tuple: HashMap<FourTuple, ClientId>,
 }
 
-impl Router {
+impl Demuxer {
     pub fn bind_ufrag(&mut self, local_ufrag: impl Into<String>, client_id: ClientId) {
         self.by_ufrag.insert(local_ufrag.into(), client_id);
     }
@@ -80,33 +80,33 @@ mod tests {
 
     #[test]
     fn routes_by_four_tuple_before_stun_parsing() {
-        let mut router = Router::default();
+        let mut demuxer = Demuxer::default();
         let packet = tagged_packet(vec![0u8; 4], 5000, 6000);
-        router.bind_tuple(FourTuple::from(&packet.transport), 7);
-        router.bind_ufrag("local", 9);
+        demuxer.bind_tuple(FourTuple::from(&packet.transport), 7);
+        demuxer.bind_ufrag("local", 9);
 
-        assert_eq!(router.route(&packet), Some(7));
+        assert_eq!(demuxer.route(&packet), Some(7));
     }
 
     #[test]
     fn routes_stun_by_local_ufrag_from_username() {
-        let mut router = Router::default();
-        router.bind_ufrag("localufrag", 42);
+        let mut demuxer = Demuxer::default();
+        demuxer.bind_ufrag("localufrag", 42);
 
         let packet = tagged_packet(build_stun_binding("localufrag:remoteufrag"), 5001, 6001);
 
-        assert_eq!(router.route(&packet), Some(42));
+        assert_eq!(demuxer.route(&packet), Some(42));
     }
 
     #[test]
     fn returns_none_for_unknown_or_invalid_packets() {
-        let mut router = Router::default();
-        router.bind_ufrag("known", 11);
+        let mut demuxer = Demuxer::default();
+        demuxer.bind_ufrag("known", 11);
 
         let unknown = tagged_packet(build_stun_binding("other:remote"), 5002, 6002);
         let invalid = tagged_packet(vec![1, 2, 3, 4, 5], 5003, 6003);
 
-        assert_eq!(router.route(&unknown), None);
-        assert_eq!(router.route(&invalid), None);
+        assert_eq!(demuxer.route(&unknown), None);
+        assert_eq!(demuxer.route(&invalid), None);
     }
 }

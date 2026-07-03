@@ -3,7 +3,7 @@ use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::transport::RTCIceCandidateInit;
 
 #[derive(Debug)]
-pub enum SfuCommand {
+pub enum SFUCommand {
     AcceptOffer {
         request_id: u64,
         room: RoomId,
@@ -25,7 +25,7 @@ pub enum SfuCommand {
 }
 
 #[derive(Debug)]
-pub enum SfuEvent {
+pub enum SFUEvent {
     Answer {
         request_id: u64,
         client: ClientId,

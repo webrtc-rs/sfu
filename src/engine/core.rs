@@ -1,9 +1,9 @@
 use crate::engine::client::Client;
-use crate::engine::command::{SfuCommand, SfuEvent};
+use crate::engine::command::{SFUCommand, SFUEvent};
+use crate::engine::demuxer::Demuxer;
 use crate::engine::forward::ForwardTable;
 use crate::engine::ids::{ClientId, RoomId};
 use crate::engine::room::Room;
-use crate::engine::router::Router;
 use rtc::peer_connection::event::RTCPeerConnectionEvent;
 use rtc::peer_connection::message::RTCMessage;
 use rtc::shared::TaggedBytesMut;
@@ -14,18 +14,18 @@ use std::convert::Infallible;
 use std::time::Instant;
 
 #[derive(Default)]
-pub struct SfuCore {
-    pub router: Router,
+pub struct SFUCore {
+    pub demuxer: Demuxer,
     pub rooms: HashMap<RoomId, Room>,
     pub clients: HashMap<ClientId, Client>,
     pub forward: ForwardTable,
     transmits: VecDeque<TaggedBytesMut>,
-    events: VecDeque<SfuEvent>,
+    events: VecDeque<SFUEvent>,
     dirty: HashSet<ClientId>,
     next_timeout: Option<Instant>,
 }
 
-impl SfuCore {
+impl SFUCore {
     pub fn new() -> Self {
         Self::default()
     }
@@ -109,10 +109,10 @@ impl SfuCore {
     }
 }
 
-impl Protocol<TaggedBytesMut, Infallible, SfuCommand> for SfuCore {
+impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for SFUCore {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
-    type Eout = SfuEvent;
+    type Eout = SFUEvent;
     type Error = Error;
     type Time = Instant;
 
@@ -132,9 +132,9 @@ impl Protocol<TaggedBytesMut, Infallible, SfuCommand> for SfuCore {
         self.transmits.pop_front()
     }
 
-    fn handle_event(&mut self, evt: SfuCommand) -> Result<(), Self::Error> {
+    fn handle_event(&mut self, evt: SFUCommand) -> Result<(), Self::Error> {
         match evt {
-            SfuCommand::AcceptOffer {
+            SFUCommand::AcceptOffer {
                 request_id,
                 room,
                 client,
@@ -147,34 +147,34 @@ impl Protocol<TaggedBytesMut, Infallible, SfuCommand> for SfuCore {
                     .entry(client)
                     .or_insert_with(|| Client::new(client, room));
                 client_ref.pending_request = Some(request_id);
-                self.events.push_back(SfuEvent::Offer { client, offer });
+                self.events.push_back(SFUEvent::Offer { client, offer });
                 self.mark_dirty(client);
             }
-            SfuCommand::AcceptAnswer {
+            SFUCommand::AcceptAnswer {
                 request_id,
                 client,
                 answer,
             } => {
-                self.events.push_back(SfuEvent::Answer {
+                self.events.push_back(SFUEvent::Answer {
                     request_id,
                     client,
                     answer,
                 });
                 self.mark_dirty(client);
             }
-            SfuCommand::AddLocalCandidate { client, candidate } => {
+            SFUCommand::AddLocalCandidate { client, candidate } => {
                 self.events
-                    .push_back(SfuEvent::LocalCandidate { client, candidate });
+                    .push_back(SFUEvent::LocalCandidate { client, candidate });
                 self.mark_dirty(client);
             }
-            SfuCommand::CloseClient { client } => {
+            SFUCommand::CloseClient { client } => {
                 if let Some(existing) = self.clients.remove(&client)
                     && let Some(room) = self.rooms.get_mut(&existing.room_id)
                 {
                     room.clients.remove(&client);
                 }
                 self.events
-                    .push_back(SfuEvent::ClientDisconnected { client });
+                    .push_back(SFUEvent::ClientDisconnected { client });
                 self.dirty.remove(&client);
             }
         }
