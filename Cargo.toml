@@ -12,6 +12,7 @@ categories = ["network-programming", "asynchronous", "multimedia"]
 
 [dependencies]
 apprtc = { version = "0.20.0-rc.1", path = "apprtc" }
+signaling = { version = "0.20.0-rc.1", path = "signaling" }
 rtc = { version = "0.20.0-rc.1", path = "rtc/rtc" }
 sansio = "1"
 bytes = "1.12.0"
