@@ -10,12 +10,18 @@ description = "SFU in Rust with Sans-IO"
 keywords = ["networking", "protocols", "webrtc", "sans-io", "sfu"]
 categories = ["network-programming", "asynchronous", "multimedia"]
 
-[[bin]]
+[[example]]
 name = "sfu"
-path = "bin/sfu.rs"
+path = "examples/sfu.rs"
 
 [dependencies]
 apprtc = { version = "0.20.0-rc.1", path = "apprtc" }
 rtc = { version = "0.20.0-rc.1", path = "rtc/rtc" }
 sansio = "1"
 bytes = "1.12.0"
+
+[dev-dependencies]
+hyper = { version = "0.14.32", features = ["full"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.52.3", features = ["full"] }

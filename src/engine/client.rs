@@ -1,6 +1,7 @@
 use crate::engine::forward::ForwardKey;
 use crate::engine::ids::{ClientId, RoomId};
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
+use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
 use rtc::peer_connection::RTCPeerConnectionBuilder;
 use rtc::peer_connection::configuration::RTCAnswerOptions;
@@ -11,9 +12,11 @@ use rtc::peer_connection::event::RTCPeerConnectionEvent;
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::transport::RTCIceCandidateInit;
+use rtc::rtp::packet::Packet;
+use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
 use rtc::rtp_transceiver::{RTCRtpReceiverId, RTCRtpSenderId};
 use rtc::shared::TaggedBytesMut;
-use rtc::shared::error::Result;
+use rtc::shared::error::{Error, Result};
 use sansio::Protocol;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -26,6 +29,10 @@ pub trait ClientPeerConnection: Send {
     fn set_local_description(&mut self, local_description: RTCSessionDescription) -> Result<()>;
     fn local_description(&self) -> Option<RTCSessionDescription>;
     fn add_local_candidate(&mut self, local_candidate: RTCIceCandidateInit) -> Result<()>;
+    fn add_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId>;
+    fn rtp_receiver_kind(&mut self, receiver_id: RTCRtpReceiverId) -> Option<RtpCodecKind>;
+    fn rtp_sender_ssrc(&mut self, sender_id: RTCRtpSenderId) -> Option<u32>;
+    fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: Packet) -> Result<()>;
     fn poll_write(&mut self) -> Option<TaggedBytesMut>;
     fn poll_event(&mut self) -> Option<RTCPeerConnectionEvent>;
     fn poll_read(&mut self) -> Option<RTCMessage>;
@@ -62,6 +69,27 @@ where
 
     fn add_local_candidate(&mut self, local_candidate: RTCIceCandidateInit) -> Result<()> {
         RTCPeerConnection::add_local_candidate(self, local_candidate)
+    }
+
+    fn add_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId> {
+        RTCPeerConnection::add_track(self, track)
+    }
+
+    fn rtp_receiver_kind(&mut self, receiver_id: RTCRtpReceiverId) -> Option<RtpCodecKind> {
+        self.rtp_receiver(receiver_id)
+            .map(|receiver| receiver.track().kind())
+    }
+
+    fn rtp_sender_ssrc(&mut self, sender_id: RTCRtpSenderId) -> Option<u32> {
+        self.rtp_sender(sender_id)
+            .and_then(|sender| sender.track().ssrcs().last())
+    }
+
+    fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: Packet) -> Result<()> {
+        let mut sender = self
+            .rtp_sender(sender_id)
+            .ok_or(Error::ErrRTPSenderNotExisted)?;
+        sender.write_rtp(packet)
     }
 
     fn poll_write(&mut self) -> Option<TaggedBytesMut> {

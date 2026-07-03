@@ -328,7 +328,9 @@ mod tests {
             .build()?;
         let _ = pc.create_data_channel("test-channel", None)?;
         pc.add_local_candidate(host_candidate(
-            "127.0.0.1:4000".parse().expect("socket address should parse"),
+            "127.0.0.1:4000"
+                .parse()
+                .expect("socket address should parse"),
         )?)?;
         let offer = pc.create_offer(None)?;
         pc.set_local_description(offer.clone())?;

@@ -29,7 +29,7 @@ The current codebase uses:
 - `src/engine/` — the sans-IO SFU core boundary
 - `src/driver/` — the future socket/runtime driver layer
 - `apprtc/` — the Rust AppRTC signaling / Collider development crate
-- `bin/sfu.rs` — the runnable binary entrypoint
+- `examples/sfu.rs` — the sfu runtime example
 
 The new root crate is the active implementation target, with additional repo
 artifacts such as `docs/`, `scripts/`, and `todo_tests/` still present alongside
@@ -41,8 +41,8 @@ it during the migration.
 sfu/
 ├── Cargo.toml              # root sfu package manifest
 ├── apprtc/                 # apprtc submodule
-├── bin/
-│   └── sfu.rs              # binary scaffold
+├── examples/
+│   └── sfu.rs              # sfu runtime example
 ├── src/
 │   ├── driver/             # driver scaffold
 │   ├── engine/             # sans-IO SFU core scaffold
@@ -71,11 +71,21 @@ cargo build
 cargo fmt
 ```
 
-### Run the current binary scaffold
+### Run the temporary M2 runtime
 
 ```bash
-cargo run --bin sfu
+cargo run --example sfu
+
+# Optional overrides:
+#   SFU_HTTP_BIND_ADDR=127.0.0.1:8080
+#   SFU_UDP_BIND_ADDR=127.0.0.1:3478
+#   SFU_UDP_CANDIDATE_ADDR=127.0.0.1:3478
 ```
+
+The temporary M2 signaling path accepts a raw `RTCSessionDescription` JSON offer at
+`POST /offer` and returns the JSON answer body. The example currently drives one
+client end-to-end on a single UDP socket for bring-up, while the library crate
+stays free of runtime/HTTP dependencies.
 
 ## Notes for Contributors
 
