@@ -22,6 +22,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: recursive
       - name: Build
         run: cargo build --verbose
 
@@ -33,6 +35,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: recursive
       - name: Run tests
         run: cargo test --verbose
 
@@ -41,6 +45,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: recursive
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
