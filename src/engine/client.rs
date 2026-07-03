@@ -1,5 +1,5 @@
+use crate::RoomId;
 use crate::engine::forward::ForwardKey;
-use crate::engine::ids::{ClientId, RoomId};
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
@@ -117,6 +117,8 @@ where
 pub struct InboundTrack {
     pub track_id: String,
 }
+
+pub type ClientId = u64;
 
 pub struct Client {
     pub id: ClientId,

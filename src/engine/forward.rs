@@ -1,4 +1,4 @@
-use crate::engine::ids::ClientId;
+use crate::ClientId;
 use rtc::rtp_transceiver::RTCRtpSenderId;
 use std::collections::HashMap;
 

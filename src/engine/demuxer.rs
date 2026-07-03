@@ -1,4 +1,4 @@
-use crate::engine::ids::ClientId;
+use crate::ClientId;
 use rtc::shared::FourTuple;
 use rtc::shared::TaggedBytesMut;
 use rtc::stun::attributes::ATTR_USERNAME;
@@ -21,16 +21,16 @@ impl Demuxer {
         self.by_tuple.insert(four_tuple, client_id);
     }
 
-    pub fn route(&self, pkt: &TaggedBytesMut) -> Option<ClientId> {
+    pub fn demux(&self, pkt: &TaggedBytesMut) -> Option<ClientId> {
         let four_tuple = FourTuple::from(&pkt.transport);
         if let Some(client_id) = self.by_tuple.get(&four_tuple) {
             return Some(*client_id);
         }
 
-        self.route_stun_username(pkt.message.as_ref())
+        self.demux_stun_username(pkt.message.as_ref())
     }
 
-    fn route_stun_username(&self, message: &[u8]) -> Option<ClientId> {
+    fn demux_stun_username(&self, message: &[u8]) -> Option<ClientId> {
         if !is_stun_message(message) {
             return None;
         }
@@ -85,7 +85,7 @@ mod tests {
         demuxer.bind_tuple(FourTuple::from(&packet.transport), 7);
         demuxer.bind_ufrag("local", 9);
 
-        assert_eq!(demuxer.route(&packet), Some(7));
+        assert_eq!(demuxer.demux(&packet), Some(7));
     }
 
     #[test]
@@ -95,7 +95,7 @@ mod tests {
 
         let packet = tagged_packet(build_stun_binding("localufrag:remoteufrag"), 5001, 6001);
 
-        assert_eq!(demuxer.route(&packet), Some(42));
+        assert_eq!(demuxer.demux(&packet), Some(42));
     }
 
     #[test]
@@ -106,7 +106,7 @@ mod tests {
         let unknown = tagged_packet(build_stun_binding("other:remote"), 5002, 6002);
         let invalid = tagged_packet(vec![1, 2, 3, 4, 5], 5003, 6003);
 
-        assert_eq!(demuxer.route(&unknown), None);
-        assert_eq!(demuxer.route(&invalid), None);
+        assert_eq!(demuxer.demux(&unknown), None);
+        assert_eq!(demuxer.demux(&invalid), None);
     }
 }

@@ -1,15 +1,13 @@
 pub mod client;
-pub mod command;
 pub mod core;
 pub mod demuxer;
+pub mod event;
 pub mod forward;
-pub mod ids;
 pub mod room;
 
-pub use client::{Client, ClientBuilder, PeerConnection};
-pub use command::{SFUCommand, SFUEvent};
+pub use client::{Client, ClientBuilder, ClientId, PeerConnection};
 pub use core::SFUCore;
 pub use demuxer::Demuxer;
+pub use event::{SFUCommand, SFUEvent};
 pub use forward::{ForwardEntry, ForwardKey, ForwardTable};
-pub use ids::{ClientId, RoomId};
-pub use room::Room;
+pub use room::{Room, RoomId};

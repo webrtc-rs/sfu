@@ -1,5 +1,7 @@
-use crate::engine::ids::{ClientId, RoomId};
+use crate::ClientId;
 use std::collections::HashSet;
+
+pub type RoomId = u64;
 
 #[derive(Debug, Default)]
 pub struct Room {
