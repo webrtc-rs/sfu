@@ -1,53 +1,20 @@
-[workspace]
-members = [
-    "apprtc",
-    "crates/sfu-engine",
-    "crates/sfu-driver",
-    "crates/sfu-bin",
-]
-resolver = "2"
-
-[workspace.package]
+[package]
+name = "sfu"
 version = "0.20.0-rc.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Rusty Rain <y@liu.mx>"]
 repository = "https://github.com/webrtc-rs/sfu"
 homepage = "https://sfu.rs"
+description = "SFU in Rust with Sans-IO"
 keywords = ["networking", "protocols", "webrtc", "sans-io", "sfu"]
 categories = ["network-programming", "asynchronous", "multimedia"]
 
-[workspace.dependencies]
+[[bin]]
+name = "sfu"
+path = "bin/sfu.rs"
+
+[dependencies]
 apprtc = { version = "0.20.0-rc.1", path = "apprtc" }
 rtc = { version = "0.20.0-rc.1", path = "rtc/rtc" }
-signal = { version = "0.20.0-rc.1", path = "rtc/examples/examples/signal", package = "rtc-signal" }
-datachannel = { version = "0.20.0-rc.1", path = "rtc/rtc-datachannel", package = "rtc-datachannel" }
-dtls = { version = "0.20.0-rc.1", path = "rtc/rtc-dtls", package = "rtc-dtls" }
-ice = { version = "0.20.0-rc.1", path = "rtc/rtc-ice", package = "rtc-ice" }
-interceptor = { version = "0.20.0-rc.1", path = "rtc/rtc-interceptor", package = "rtc-interceptor" }
-interceptor-derive = { version = "0.20.0-rc.1", path = "rtc/rtc-interceptor-derive", package = "rtc-interceptor-derive" }
-mdns = { version = "0.20.0-rc.1", path = "rtc/rtc-mdns", package = "rtc-mdns" }
-media = { version = "0.20.0-rc.1", path = "rtc/rtc-media", package = "rtc-media" }
-rtcp = { version = "0.20.0-rc.1", path = "rtc/rtc-rtcp", package = "rtc-rtcp" }
-rtp = { version = "0.20.0-rc.1", path = "rtc/rtc-rtp", package = "rtc-rtp" }
-sctp = { version = "0.20.0-rc.1", path = "rtc/rtc-sctp", package = "rtc-sctp" }
-sdp = { version = "0.20.0-rc.1", path = "rtc/rtc-sdp", package = "rtc-sdp" }
-shared = { version = "0.20.0-rc.1", path = "rtc/rtc-shared", package = "rtc-shared", default-features = false }
-srtp = { version = "0.20.0-rc.1", path = "rtc/rtc-srtp", package = "rtc-srtp" }
-stun = { version = "0.20.0-rc.1", path = "rtc/rtc-stun", package = "rtc-stun" }
-turn = { version = "0.20.0-rc.1", path = "rtc/rtc-turn", package = "rtc-turn" }
 sansio = "1"
-bytes = "1.12.0"
-byteorder = "1.5.0"
-log = "0.4.33"
-rcgen = { version = "0.14.8", features = ["pem", "x509-parser"] }
-ring = "0.17.14"
-rand = "0.10.1"
-serde = { version = "1.0.228", features = ["derive"] }
-thiserror = "2.0.18"
-env_logger = "0.11.11"
-chrono = "0.4.45"
-clap = { version = "4.6.1", features = ["derive"] }
-ctrlc = "3.5.2"
-criterion = "0.8.2"
-tokio = { version = "1.52.3", features = ["full"] }

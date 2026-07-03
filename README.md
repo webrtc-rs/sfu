@@ -24,14 +24,14 @@
 
 This repository is being re-architected around the modern sans-IO `rtc` core.
 
-The current codebase has completed the workspace split for the new design:
+The current codebase uses:
 
-- `crates/sfu-engine` — the new sans-IO SFU core boundary
-- `crates/sfu-driver` — the future socket/runtime driver layer
-- `apprtc` — the Rust AppRTC signaling / Collider development crate
-- `crates/sfu-bin` — the runnable binary entrypoint
+- `src/engine/` — the sans-IO SFU core boundary
+- `src/driver/` — the future socket/runtime driver layer
+- `apprtc/` — the Rust AppRTC signaling / Collider development crate
+- `bin/sfu.rs` — the runnable binary entrypoint
 
-The new workspace is the active implementation target, with additional repo
+The new root crate is the active implementation target, with additional repo
 artifacts such as `docs/`, `scripts/`, and `todo_tests/` still present alongside
 it during the migration.
 
@@ -39,12 +39,14 @@ it during the migration.
 
 ```text
 sfu/
-├── Cargo.toml              # workspace root
+├── Cargo.toml              # root sfu package manifest
 ├── apprtc/                 # apprtc submodule
-├── crates/
-│   ├── sfu-bin/            # binary scaffold
-│   ├── sfu-driver/         # driver scaffold
-│   └── sfu-engine/         # sans-IO SFU core scaffold
+├── bin/
+│   └── sfu.rs              # binary scaffold
+├── src/
+│   ├── driver/             # driver scaffold
+│   ├── engine/             # sans-IO SFU core scaffold
+│   └── lib.rs              # root sfu crate
 ├── rtc/                    # rtc submodule
 ├── scripts/                # helper scripts
 ├── docs/                   # project documentation
@@ -57,31 +59,31 @@ sfu/
 
 Use a Rust toolchain with Edition 2024 support.
 
-### Build the workspace
+### Build
 
 ```bash
-cargo build --workspace
+cargo build
 ```
 
-### Format the workspace
+### Format
 
 ```bash
-cargo fmt --all
+cargo fmt
 ```
 
 ### Run the current binary scaffold
 
 ```bash
-cargo run -p sfu-bin
+cargo run --bin sfu
 ```
 
 ## Notes for Contributors
 
-- The active implementation now lives under `crates/`.
-- The `apprtc/` directory is where Rust-based Collider/signaling development now lives.
-- The `rtc/` directory is the local `rtc` workspace used during the migration.
+- The active implementation now lives under the root `sfu` crate.
+- The `apprtc/` directory is a separate Rust crate used as a path dependency for Collider/signaling development.
+- The `rtc/` directory is the local `rtc` repo used during the migration.
 - The new architecture is intentionally landing in phases; the absence of full SFU
-  behavior in `crates/` is expected at this stage.
+  behavior in `src/` is expected at this stage.
 
 ## Open Source License
 

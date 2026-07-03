@@ -1,4 +1,4 @@
-use crate::ids::{ClientId, RoomId};
+use crate::engine::ids::{ClientId, RoomId};
 use std::collections::HashSet;
 
 #[derive(Debug, Default)]
