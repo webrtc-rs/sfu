@@ -1,5 +1,3 @@
-use crate::RoomId;
-use crate::engine::forward::ForwardKey;
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
@@ -20,6 +18,9 @@ use rtc::shared::error::{Error, Result};
 use sansio::Protocol;
 use std::collections::HashMap;
 use std::time::Instant;
+
+use crate::forward::ForwardKey;
+use crate::room::RoomId;
 
 pub trait PeerConnection: Send {
     fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()>;

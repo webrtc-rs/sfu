@@ -1,10 +1,13 @@
-use crate::{Client, ClientId, ForwardTable, SFUCommand, SFUEvent};
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::time::Instant;
+
+use crate::client::{Client, ClientId};
+use crate::event::{SFUCommand, SFUEvent};
+use crate::forward::ForwardTable;
 
 pub type RoomId = u64;
 

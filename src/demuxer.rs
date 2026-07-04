@@ -1,10 +1,11 @@
-use crate::ClientId;
 use rtc::shared::FourTuple;
 use rtc::shared::TaggedBytesMut;
 use rtc::stun::attributes::ATTR_USERNAME;
 use rtc::stun::message::{Message, is_stun_message};
 use rtc::stun::textattrs::Username;
 use std::collections::HashMap;
+
+use crate::client::ClientId;
 
 #[derive(Debug, Default)]
 pub struct Demuxer {
