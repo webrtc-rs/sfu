@@ -12,14 +12,17 @@ pub enum SFUCommand {
     },
     AcceptAnswer {
         request_id: u64,
+        room: RoomId,
         client: ClientId,
         answer: RTCSessionDescription,
     },
-    AddLocalCandidate {
+    AddRemoteCandidate {
+        room: RoomId,
         client: ClientId,
         candidate: RTCIceCandidateInit,
     },
     CloseClient {
+        room: RoomId,
         client: ClientId,
     },
 }
@@ -28,25 +31,31 @@ pub enum SFUCommand {
 pub enum SFUEvent {
     Answer {
         request_id: u64,
+        room: RoomId,
         client: ClientId,
         answer: RTCSessionDescription,
     },
     Offer {
+        room: RoomId,
         client: ClientId,
         offer: RTCSessionDescription,
     },
     LocalCandidate {
+        room: RoomId,
         client: ClientId,
         candidate: RTCIceCandidateInit,
     },
     ClientConnected {
+        room: RoomId,
         client: ClientId,
     },
     ClientDisconnected {
+        room: RoomId,
         client: ClientId,
     },
     Error {
         request_id: Option<u64>,
+        room: Option<RoomId>,
         client: Option<ClientId>,
         error: String,
     },

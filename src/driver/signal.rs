@@ -1,8 +1,6 @@
-use crate::driver::UdpDriver;
 use crate::{ClientId, RoomId};
 use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::transport::RTCIceCandidateInit;
-use rtc::shared::error::Result;
 use std::net::SocketAddr;
 
 #[derive(Debug, Clone)]
@@ -26,6 +24,7 @@ pub struct OfferResponse {
 pub struct SignalAdapter;
 
 impl SignalAdapter {
+    /*
     pub fn handle_offer(
         &self,
         driver: &mut UdpDriver,
@@ -44,5 +43,5 @@ impl SignalAdapter {
             answer,
             local_candidate,
         })
-    }
+    }*/
 }

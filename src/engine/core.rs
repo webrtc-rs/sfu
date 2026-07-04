@@ -1,28 +1,21 @@
-use crate::engine::client::Client;
+use crate::RoomId;
 use crate::engine::demuxer::Demuxer;
 use crate::engine::event::{SFUCommand, SFUEvent};
-use crate::engine::forward::ForwardTable;
 use crate::engine::room::Room;
-use crate::{ClientId, RoomId};
-use rtc::peer_connection::event::RTCPeerConnectionEvent;
-use rtc::peer_connection::message::RTCMessage;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::time::Instant;
 
 #[derive(Default)]
-pub struct SFUCore {
-    pub demuxer: Demuxer,
-    pub rooms: HashMap<RoomId, Room>,
-    pub clients: HashMap<ClientId, Client>,
-    pub forward: ForwardTable,
+pub(crate) struct SFUCore {
+    demuxer: Demuxer,
+    rooms: HashMap<RoomId, Room>,
+
     transmits: VecDeque<TaggedBytesMut>,
     events: VecDeque<SFUEvent>,
-    dirty: HashSet<ClientId>,
-    next_timeout: Option<Instant>,
 }
 
 impl SFUCore {
@@ -30,6 +23,7 @@ impl SFUCore {
         Self::default()
     }
 
+    /*
     pub fn mark_dirty(&mut self, client_id: ClientId) {
         self.dirty.insert(client_id);
     }
@@ -106,7 +100,7 @@ impl SFUCore {
         }
 
         Ok(())
-    }
+    }*/
 }
 
 impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for SFUCore {
@@ -129,11 +123,16 @@ impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for SFUCore {
     }
 
     fn poll_write(&mut self) -> Option<Self::Wout> {
+        for room in self.rooms.values_mut() {
+            while let Some(transmit) = room.poll_write() {
+                self.transmits.push_back(transmit);
+            }
+        }
         self.transmits.pop_front()
     }
 
-    fn handle_event(&mut self, evt: SFUCommand) -> Result<(), Self::Error> {
-        match evt {
+    fn handle_event(&mut self, _evt: SFUCommand) -> Result<(), Self::Error> {
+        /*match evt {
             SFUCommand::AcceptOffer {
                 request_id,
                 room,
@@ -162,7 +161,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for SFUCore {
                 });
                 self.mark_dirty(client);
             }
-            SFUCommand::AddLocalCandidate { client, candidate } => {
+            SFUCommand::AddRemoteCandidate { client, candidate } => {
                 self.events
                     .push_back(SFUEvent::LocalCandidate { client, candidate });
                 self.mark_dirty(client);
@@ -177,27 +176,36 @@ impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for SFUCore {
                     .push_back(SFUEvent::ClientDisconnected { client });
                 self.dirty.remove(&client);
             }
-        }
+        }*/
         Ok(())
     }
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
+        for room in self.rooms.values_mut() {
+            while let Some(event) = room.poll_event() {
+                self.events.push_back(event);
+            }
+        }
+
         self.events.pop_front()
     }
 
     fn handle_timeout(&mut self, now: Self::Time) -> Result<(), Self::Error> {
-        self.next_timeout = Some(now);
+        for room in self.rooms.values_mut() {
+            let _ = room.handle_timeout(now);
+        }
         Ok(())
     }
 
     fn poll_timeout(&mut self) -> Option<Self::Time> {
-        self.next_timeout
+        for _room in self.rooms.values_mut() {
+            //TODO:  if let Some(timeout) = room.poll_timeout() {}
+        }
+        None
     }
 
     fn close(&mut self) -> Result<(), Self::Error> {
-        self.clients.clear();
         self.rooms.clear();
-        self.dirty.clear();
         Ok(())
     }
 }

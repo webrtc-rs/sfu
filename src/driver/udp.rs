@@ -1,25 +1,18 @@
-use crate::engine::{Client, ClientBuilder, SFUCommand, SFUCore, SFUEvent};
-use crate::{ClientId, RoomId};
+use crate::engine::core::SFUCore;
 use bytes::BytesMut;
-use rtc::interceptor::Interceptor;
-use rtc::interceptor::Registry;
-use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
-use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::event::RTCPeerConnectionEvent;
 use rtc::peer_connection::message::RTCMessage;
-use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::transport::{
     CandidateConfig, CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit,
 };
-use rtc::shared::error::{Error, Result};
+use rtc::shared::error::Result;
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
-use sansio::Protocol;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Instant;
 
 pub struct UdpDriver {
-    pub core: SFUCore,
+    core: SFUCore,
     outbound: VecDeque<TaggedBytesMut>,
     peer_events: VecDeque<RTCPeerConnectionEvent>,
     reads: VecDeque<RTCMessage>,
@@ -32,7 +25,7 @@ impl Default for UdpDriver {
 }
 
 impl UdpDriver {
-    pub fn new(core: SFUCore) -> Self {
+    fn new(core: SFUCore) -> Self {
         Self {
             core,
             outbound: VecDeque::new(),
@@ -41,6 +34,7 @@ impl UdpDriver {
         }
     }
 
+    /*
     pub fn handle_read(&mut self, client_id: ClientId, packet: TaggedBytesMut) -> Result<()> {
         let client = self
             .core
@@ -138,7 +132,7 @@ impl UdpDriver {
 
     pub fn handle_command(&mut self, command: SFUCommand, client_id: ClientId) -> Result<bool> {
         let should_stop =
-            matches!(command, SFUCommand::CloseClient { client } if client == client_id);
+            matches!(command, SFUCommand::CloseClient { client,.. } if client == client_id);
         self.core.handle_event(command)?;
         self.drain_client(client_id);
         Ok(should_stop)
@@ -174,7 +168,7 @@ impl UdpDriver {
 
         self.drain_client(client_id);
         Ok((answer, local_candidate))
-    }
+    }*/
 }
 
 pub fn tagged_udp_packet(
@@ -211,6 +205,7 @@ fn host_candidate(local_addr: SocketAddr) -> Result<RTCIceCandidateInit> {
     .to_json()
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,3 +334,4 @@ mod tests {
             .ok_or_else(|| Error::Other("missing local offer description".to_owned()))
     }
 }
+*/

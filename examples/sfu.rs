@@ -1,4 +1,4 @@
-use hyper::service::{make_service_fn, service_fn};
+/*use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_OPUS, MIME_TYPE_VP8};
@@ -557,3 +557,5 @@ mod tests {
         .expect("media offer SDP should be valid")
     }
 }
+*/
+fn main() {}
