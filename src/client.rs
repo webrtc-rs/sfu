@@ -1,6 +1,6 @@
 use crate::Event;
 use crate::room::RoomId;
-use rtc::data_channel::{RTCDataChannelId, RTCDataChannelInit};
+//use rtc::data_channel::{RTCDataChannelId, RTCDataChannelInit};
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
@@ -26,7 +26,18 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::time::Instant;
 
-pub(crate) trait PeerConnection: Send {
+pub(crate) trait PeerConnection:
+    Protocol<
+        TaggedBytesMut,
+        RTCMessage,
+        RTCEvent,
+        Rout = RTCMessage,
+        Wout = TaggedBytesMut,
+        Eout = RTCPeerConnectionEvent,
+        Error = Error,
+        Time = Instant,
+    > + Send
+{
     fn create_offer(&mut self, options: Option<RTCOfferOptions>) -> Result<RTCSessionDescription>;
     fn create_answer(&mut self, options: Option<RTCAnswerOptions>)
     -> Result<RTCSessionDescription>;
@@ -44,12 +55,11 @@ pub(crate) trait PeerConnection: Send {
     fn restart_ice(&mut self);
     fn get_configuration(&self) -> &RTCConfiguration;
     fn set_configuration(&mut self, configuration: RTCConfiguration) -> Result<()>;
-
-    fn create_data_channel(
+    /*fn create_data_channel(
         &mut self,
         label: &str,
         options: Option<RTCDataChannelInit>,
-    ) -> Result<RTCDataChannelId>;
+    ) -> Result<RTCDataChannelId>;*/
     fn get_senders(&self) -> Vec<RTCRtpSenderId>;
     fn get_receivers(&self) -> Vec<RTCRtpReceiverId>;
     fn get_transceivers(&self) -> Vec<RTCRtpTransceiverId>;
@@ -67,17 +77,6 @@ pub(crate) trait PeerConnection: Send {
         init: Option<RTCRtpTransceiverInit>,
     ) -> Result<RTCRtpTransceiverId>;
     fn get_stats(&mut self, now: Instant, selector: StatsSelector) -> RTCStatsReport;
-
-    // sansio::Protocol
-    fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()>;
-    fn poll_read(&mut self) -> Option<RTCMessage>;
-    fn handle_write(&mut self, msg: RTCMessage) -> Result<()>;
-    fn poll_write(&mut self) -> Option<TaggedBytesMut>;
-    fn handle_event(&mut self, evt: RTCEvent) -> Result<()>;
-    fn poll_event(&mut self) -> Option<RTCPeerConnectionEvent>;
-    fn handle_timeout(&mut self, now: Instant) -> Result<()>;
-    fn poll_timeout(&mut self) -> Option<Instant>;
-    fn close(&mut self) -> Result<()>;
 }
 
 impl<I> PeerConnection for RTCPeerConnection<I>
@@ -150,14 +149,14 @@ where
         RTCPeerConnection::set_configuration(self, configuration)
     }
 
-    fn create_data_channel(
+    /*fn create_data_channel(
         &mut self,
         label: &str,
         options: Option<RTCDataChannelInit>,
     ) -> Result<RTCDataChannelId> {
         let dc = RTCPeerConnection::create_data_channel(self, label, options)?;
         Ok(dc.id())
-    }
+    }*/
 
     fn get_senders(&self) -> Vec<RTCRtpSenderId> {
         RTCPeerConnection::get_senders(self).collect()
@@ -195,43 +194,6 @@ where
 
     fn get_stats(&mut self, now: Instant, selector: StatsSelector) -> RTCStatsReport {
         RTCPeerConnection::get_stats(self, now, selector)
-    }
-
-    // sansio::Protocol
-    fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()> {
-        Protocol::handle_read(self, packet)
-    }
-
-    fn poll_read(&mut self) -> Option<RTCMessage> {
-        Protocol::poll_read(self)
-    }
-
-    fn poll_write(&mut self) -> Option<TaggedBytesMut> {
-        Protocol::poll_write(self)
-    }
-
-    fn handle_write(&mut self, msg: RTCMessage) -> Result<()> {
-        Protocol::handle_write(self, msg)
-    }
-
-    fn handle_event(&mut self, evt: RTCEvent) -> Result<()> {
-        Protocol::handle_event(self, evt)
-    }
-
-    fn poll_event(&mut self) -> Option<RTCPeerConnectionEvent> {
-        Protocol::poll_event(self)
-    }
-
-    fn poll_timeout(&mut self) -> Option<Instant> {
-        Protocol::poll_timeout(self)
-    }
-
-    fn handle_timeout(&mut self, now: Instant) -> Result<()> {
-        Protocol::handle_timeout(self, now)
-    }
-
-    fn close(&mut self) -> Result<()> {
-        Protocol::close(self)
     }
 }
 
