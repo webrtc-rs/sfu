@@ -220,14 +220,6 @@ impl<I> ClientBuilder<I>
 where
     I: Interceptor,
 {
-    pub(crate) fn client_id(&self) -> ClientId {
-        self.id
-    }
-
-    pub(crate) fn room_id(&self) -> RoomId {
-        self.room_id
-    }
-
     pub(crate) fn with_configuration(mut self, configuration: RTCConfiguration) -> Self {
         self.peer_connection_builder = self
             .peer_connection_builder
@@ -267,11 +259,10 @@ where
     where
         I: Send + 'static,
     {
-        let pc = self.peer_connection_builder.build()?;
         Ok(Client {
             id: self.id,
             room_id: self.room_id,
-            peer_connection: Box::new(pc),
+            peer_connection: Box::new(self.peer_connection_builder.build()?),
 
             transmits: Default::default(),
             events: Default::default(),
