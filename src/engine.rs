@@ -6,7 +6,7 @@ use std::convert::Infallible;
 use std::time::Instant;
 
 use crate::demuxer::Demuxer;
-use crate::event::{SFUCommand, SFUEvent};
+use crate::event::Event;
 use crate::room::{Room, RoomId};
 
 #[derive(Default)]
@@ -15,7 +15,7 @@ pub(crate) struct Engine {
     rooms: HashMap<RoomId, Room>,
 
     transmits: VecDeque<TaggedBytesMut>,
-    events: VecDeque<SFUEvent>,
+    events: VecDeque<Event>,
 }
 
 impl Engine {
@@ -103,10 +103,10 @@ impl Engine {
     }*/
 }
 
-impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for Engine {
+impl Protocol<TaggedBytesMut, Infallible, Event> for Engine {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
-    type Eout = SFUEvent;
+    type Eout = Event;
     type Error = Error;
     type Time = Instant;
 
@@ -131,7 +131,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for Engine {
         self.transmits.pop_front()
     }
 
-    fn handle_event(&mut self, _evt: SFUCommand) -> Result<(), Self::Error> {
+    fn handle_event(&mut self, _evt: Event) -> Result<(), Self::Error> {
         /*match evt {
             SFUCommand::AcceptOffer {
                 request_id,

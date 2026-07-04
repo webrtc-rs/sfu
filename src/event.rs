@@ -4,61 +4,35 @@ use rtc::peer_connection::transport::RTCIceCandidateInit;
 use crate::client::ClientId;
 use crate::room::RoomId;
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
-pub enum SFUCommand {
-    AcceptOffer {
+pub enum Event {
+    SessionDescription {
         request_id: u64,
-        room: RoomId,
-        client: ClientId,
-        offer: RTCSessionDescription,
+        room_id: RoomId,
+        client_id: ClientId,
+        sdp: RTCSessionDescription,
     },
-    AcceptAnswer {
+    IceCandidate {
         request_id: u64,
-        room: RoomId,
-        client: ClientId,
-        answer: RTCSessionDescription,
-    },
-    AddRemoteCandidate {
-        room: RoomId,
-        client: ClientId,
-        candidate: RTCIceCandidateInit,
-    },
-    CloseClient {
-        room: RoomId,
-        client: ClientId,
-    },
-}
-
-#[derive(Debug)]
-pub enum SFUEvent {
-    Answer {
-        request_id: u64,
-        room: RoomId,
-        client: ClientId,
-        answer: RTCSessionDescription,
-    },
-    Offer {
-        room: RoomId,
-        client: ClientId,
-        offer: RTCSessionDescription,
-    },
-    LocalCandidate {
-        room: RoomId,
-        client: ClientId,
+        room_id: RoomId,
+        client_id: ClientId,
         candidate: RTCIceCandidateInit,
     },
     ClientConnected {
-        room: RoomId,
-        client: ClientId,
+        request_id: u64,
+        room_id: RoomId,
+        client_id: ClientId,
     },
     ClientDisconnected {
-        room: RoomId,
-        client: ClientId,
+        request_id: u64,
+        room_id: RoomId,
+        client_id: ClientId,
     },
     Error {
-        request_id: Option<u64>,
-        room: Option<RoomId>,
-        client: Option<ClientId>,
-        error: String,
+        request_id: u64,
+        room_id: RoomId,
+        client_id: ClientId,
+        reason: String,
     },
 }

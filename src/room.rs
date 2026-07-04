@@ -6,7 +6,7 @@ use std::convert::Infallible;
 use std::time::Instant;
 
 use crate::client::{Client, ClientId};
-use crate::event::{SFUCommand, SFUEvent};
+use crate::event::Event;
 use crate::forward::ForwardTable;
 
 pub type RoomId = u64;
@@ -18,7 +18,7 @@ pub(crate) struct Room {
     forward_table: ForwardTable,
 
     transmits: VecDeque<TaggedBytesMut>,
-    events: VecDeque<SFUEvent>,
+    events: VecDeque<Event>,
 }
 
 impl Room {
@@ -30,10 +30,10 @@ impl Room {
     }
 }
 
-impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for Room {
+impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
-    type Eout = SFUEvent;
+    type Eout = Event;
     type Error = Error;
     type Time = Instant;
 
@@ -53,7 +53,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for Room {
         self.transmits.pop_front()
     }
 
-    fn handle_event(&mut self, _evt: SFUCommand) -> Result<(), Self::Error> {
+    fn handle_event(&mut self, _evt: Event) -> Result<(), Self::Error> {
         /*match evt {
             SFUCommand::AcceptOffer {
                 request_id,
