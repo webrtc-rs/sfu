@@ -7,3 +7,8 @@ pub(crate) mod event;
 pub(crate) mod forward;
 pub(crate) mod room;
 pub(crate) mod sfu;
+
+pub use client::ClientId;
+pub use event::{Event, RequestId};
+pub use room::RoomId;
+pub use sfu::{Sfu, SfuId};

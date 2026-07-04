@@ -5,13 +5,13 @@ use crate::client::ClientId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ForwardKey {
-    pub publisher: ClientId,
-    pub track: u64,
+    publisher: ClientId,
+    track: u64,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct ForwardEntry {
-    pub subscribers: HashMap<ClientId, RTCRtpSenderId>,
+    subscribers: HashMap<ClientId, RTCRtpSenderId>,
 }
 
 #[derive(Debug, Default)]

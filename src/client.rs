@@ -122,12 +122,13 @@ where
 pub type ClientId = u64;
 
 pub(crate) struct Client {
-    pub id: ClientId,
-    pub room_id: RoomId,
-    pub pending_request: Option<u64>,
-    pub pc: Box<dyn PeerConnection>,
-    pub inbound: HashMap<RTCRtpReceiverId, MediaStreamTrackId>,
-    pub outbound: HashMap<ForwardKey, RTCRtpSenderId>,
+    id: ClientId,
+    room_id: RoomId,
+    pub(crate) pc: Box<dyn PeerConnection>,
+
+    pending_request: Option<u64>,
+    inbound: HashMap<RTCRtpReceiverId, MediaStreamTrackId>,
+    outbound: HashMap<ForwardKey, RTCRtpSenderId>,
 }
 
 pub(crate) struct ClientBuilder<I = NoopInterceptor>
@@ -140,7 +141,7 @@ where
 }
 
 impl ClientBuilder<NoopInterceptor> {
-    pub fn new(id: ClientId, room_id: RoomId) -> Self {
+    pub(crate) fn new(id: ClientId, room_id: RoomId) -> Self {
         Self {
             id,
             room_id,
