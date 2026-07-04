@@ -1,6 +1,6 @@
 use crate::Event;
 use crate::room::RoomId;
-//use rtc::data_channel::{RTCDataChannelId, RTCDataChannelInit};
+use log::{info, warn};
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
@@ -306,7 +306,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
 
     fn handle_event(&mut self, evt: Event) -> std::result::Result<(), Self::Error> {
         if let Some(room_id) = evt.room_id() {
-            if *room_id != self.room_id {
+            if room_id != self.room_id {
                 return Err(Error::Other(format!("invalid room id: {}", room_id)));
             }
         } else {
@@ -314,45 +314,69 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
         }
 
         if let Some(client_id) = evt.client_id() {
-            if *client_id != self.id {
+            if client_id != self.id {
                 return Err(Error::Other(format!("invalid client id: {}", client_id)));
             }
         } else {
             return Err(Error::Other("empty client id".to_string()));
         }
 
-        /*
         match evt {
             Event::Join {
                 request_id,
                 room_id,
                 client_id,
-            } => {}
+            } => {
+                warn!(
+                    "{}:{}:{} has already joined",
+                    request_id, room_id, client_id
+                );
+            }
             Event::SessionDescription {
                 request_id,
                 room_id,
                 client_id,
                 sdp,
-            } => {}
+            } => {
+                info!(
+                    "{}:{}:{} receives sdp type {} and {}",
+                    request_id, room_id, client_id, sdp.sdp_type, sdp.sdp
+                );
+            }
             Event::IceCandidate {
                 request_id,
                 room_id,
                 client_id,
                 candidate,
-            } => {}
+            } => {
+                info!(
+                    "{}:{}:{} receives ice candidate {}",
+                    request_id, room_id, client_id, candidate.candidate
+                );
+            }
             Event::Leave {
                 request_id,
                 room_id,
                 client_id,
                 reason,
-            } => {}
+            } => {
+                warn!(
+                    "{}:{}:{} has already left due to {}",
+                    request_id, room_id, client_id, reason
+                );
+            }
             Event::Error {
                 request_id,
                 room_id,
                 client_id,
                 reason,
-            } => {}
-        }*/
+            } => {
+                warn!(
+                    "{}:{:?}:{:?} receives error due to {}",
+                    request_id, room_id, client_id, reason
+                );
+            }
+        }
 
         Ok(())
     }

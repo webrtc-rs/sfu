@@ -59,10 +59,14 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
     }
 
     fn handle_event(&mut self, evt: Event) -> Result<(), Self::Error> {
-        if let Some(room_id) = evt.room_id()
-            && let Some(room) = self.rooms.get_mut(room_id)
-        {
-            room.handle_event(evt)?;
+        if let Some(room_id) = evt.room_id() {
+            if let Some(room) = self.rooms.get_mut(&room_id) {
+                room.handle_event(evt)?;
+            } else if let Event::Join { .. } = &evt {
+                let mut room = Room::new(room_id);
+                room.handle_event(evt)?;
+                self.rooms.insert(room_id, room);
+            }
         }
 
         Ok(())

@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::time::Instant;
 
-use crate::client::{Client, ClientId};
+use crate::client::{Client, ClientBuilder, ClientId};
 use crate::event::Event;
 use crate::forward::ForwardTable;
 
@@ -54,18 +54,23 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     }
 
     fn handle_event(&mut self, evt: Event) -> Result<(), Self::Error> {
-        if let Some(room_id) = evt.room_id() {
-            if *room_id != self.id {
+        let room_id = if let Some(room_id) = evt.room_id() {
+            if room_id != self.id {
                 return Err(Error::Other(format!("invalid room id: {}", room_id)));
             }
+            room_id
         } else {
             return Err(Error::Other("empty room id".to_string()));
-        }
+        };
 
-        if let Some(client_id) = evt.client_id()
-            && let Some(client) = self.clients.get_mut(client_id)
-        {
-            client.handle_event(evt)?;
+        if let Some(client_id) = evt.client_id() {
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.handle_event(evt)?;
+            } else if let Event::Join { .. } = &evt {
+                //TODO: ClientBuilder with configurable
+                let client = ClientBuilder::new(client_id, room_id).build()?;
+                self.clients.insert(client_id, client);
+            }
         }
 
         Ok(())
