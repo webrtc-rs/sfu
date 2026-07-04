@@ -1,5 +1,5 @@
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
-use rtc::media_stream::MediaStreamTrack;
+use rtc::media_stream::{MediaStreamTrack, MediaStreamTrackId};
 use rtc::peer_connection::RTCPeerConnection;
 use rtc::peer_connection::RTCPeerConnectionBuilder;
 use rtc::peer_connection::configuration::RTCAnswerOptions;
@@ -22,7 +22,7 @@ use std::time::Instant;
 use crate::forward::ForwardKey;
 use crate::room::RoomId;
 
-pub trait PeerConnection: Send {
+pub(crate) trait PeerConnection: Send {
     fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()>;
     fn create_answer(&mut self, options: Option<RTCAnswerOptions>)
     -> Result<RTCSessionDescription>;
@@ -119,54 +119,24 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct InboundTrack {
-    pub track_id: String,
-}
-
 pub type ClientId = u64;
 
-pub struct Client {
+pub(crate) struct Client {
     pub id: ClientId,
     pub room_id: RoomId,
     pub pending_request: Option<u64>,
-    pub pc: Option<Box<dyn PeerConnection>>,
-    pub inbound: HashMap<RTCRtpReceiverId, InboundTrack>,
+    pub pc: Box<dyn PeerConnection>,
+    pub inbound: HashMap<RTCRtpReceiverId, MediaStreamTrackId>,
     pub outbound: HashMap<ForwardKey, RTCRtpSenderId>,
 }
 
-pub struct ClientBuilder<I = NoopInterceptor>
+pub(crate) struct ClientBuilder<I = NoopInterceptor>
 where
     I: Interceptor,
 {
     id: ClientId,
     room_id: RoomId,
     peer_connection_builder: RTCPeerConnectionBuilder<I>,
-}
-
-impl Client {
-    fn with_peer_connection(
-        id: ClientId,
-        room_id: RoomId,
-        pc: RTCPeerConnection<impl Interceptor + 'static>,
-    ) -> Self {
-        Self {
-            id,
-            room_id,
-            pending_request: None,
-            pc: Some(Box::new(pc)),
-            inbound: HashMap::new(),
-            outbound: HashMap::new(),
-        }
-    }
-
-    pub fn has_peer_connection(&self) -> bool {
-        self.pc.is_some()
-    }
-
-    pub fn builder(id: ClientId, room_id: RoomId) -> ClientBuilder<NoopInterceptor> {
-        ClientBuilder::new(id, room_id)
-    }
 }
 
 impl ClientBuilder<NoopInterceptor> {
@@ -183,34 +153,37 @@ impl<I> ClientBuilder<I>
 where
     I: Interceptor,
 {
-    pub fn client_id(&self) -> ClientId {
+    pub(crate) fn client_id(&self) -> ClientId {
         self.id
     }
 
-    pub fn room_id(&self) -> RoomId {
+    pub(crate) fn room_id(&self) -> RoomId {
         self.room_id
     }
 
-    pub fn with_configuration(mut self, configuration: RTCConfiguration) -> Self {
+    pub(crate) fn with_configuration(mut self, configuration: RTCConfiguration) -> Self {
         self.peer_connection_builder = self
             .peer_connection_builder
             .with_configuration(configuration);
         self
     }
 
-    pub fn with_media_engine(mut self, media_engine: MediaEngine) -> Self {
+    pub(crate) fn with_media_engine(mut self, media_engine: MediaEngine) -> Self {
         self.peer_connection_builder = self.peer_connection_builder.with_media_engine(media_engine);
         self
     }
 
-    pub fn with_setting_engine(mut self, setting_engine: SettingEngine) -> Self {
+    pub(crate) fn with_setting_engine(mut self, setting_engine: SettingEngine) -> Self {
         self.peer_connection_builder = self
             .peer_connection_builder
             .with_setting_engine(setting_engine);
         self
     }
 
-    pub fn with_interceptor_registry<P>(self, interceptor_registry: Registry<P>) -> ClientBuilder<P>
+    pub(crate) fn with_interceptor_registry<P>(
+        self,
+        interceptor_registry: Registry<P>,
+    ) -> ClientBuilder<P>
     where
         P: Interceptor,
     {
@@ -223,12 +196,19 @@ where
         }
     }
 
-    pub fn build(self) -> Result<Client>
+    pub(crate) fn build(self) -> Result<Client>
     where
         I: Send + 'static,
     {
         let pc = self.peer_connection_builder.build()?;
-        Ok(Client::with_peer_connection(self.id, self.room_id, pc))
+        Ok(Client {
+            id: self.id,
+            room_id: self.room_id,
+            pending_request: None,
+            pc: Box::new(pc),
+            inbound: HashMap::new(),
+            outbound: HashMap::new(),
+        })
     }
 }
 
@@ -244,14 +224,13 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let client = Client::builder(10, 20)
+        let client = ClientBuilder::new(10, 20)
             .with_media_engine(media_engine)
             .build()
             .expect("default client should build");
 
         assert_eq!(client.id, 10);
         assert_eq!(client.room_id, 20);
-        assert!(client.has_peer_connection());
         assert!(client.inbound.is_empty());
         assert!(client.outbound.is_empty());
     }
@@ -263,12 +242,10 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let client = Client::builder(1, 2)
+        let _ = ClientBuilder::new(1, 2)
             .with_media_engine(media_engine)
             .build()
             .expect("client should build");
-
-        assert!(client.has_peer_connection());
     }
 
     #[test]
@@ -278,13 +255,11 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let client = Client::builder(3, 4)
+        let _ = ClientBuilder::new(3, 4)
             .with_media_engine(media_engine)
             .with_setting_engine(SettingEngine::default())
             .build()
             .expect("client should build");
-
-        assert!(client.has_peer_connection());
     }
 
     #[test]
@@ -295,14 +270,12 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let client = Client::builder(5, 6)
+        let _ = ClientBuilder::new(5, 6)
             .with_configuration(configuration)
             .with_media_engine(media_engine)
             .with_setting_engine(SettingEngine::default())
             .with_interceptor_registry(Registry::new())
             .build()
             .expect("client should build");
-
-        assert!(client.has_peer_connection());
     }
 }

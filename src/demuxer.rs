@@ -8,21 +8,21 @@ use std::collections::HashMap;
 use crate::client::ClientId;
 
 #[derive(Debug, Default)]
-pub struct Demuxer {
+pub(crate) struct Demuxer {
     by_ufrag: HashMap<String, ClientId>,
     by_tuple: HashMap<FourTuple, ClientId>,
 }
 
 impl Demuxer {
-    pub fn bind_ufrag(&mut self, local_ufrag: impl Into<String>, client_id: ClientId) {
+    pub(crate) fn bind_ufrag(&mut self, local_ufrag: impl Into<String>, client_id: ClientId) {
         self.by_ufrag.insert(local_ufrag.into(), client_id);
     }
 
-    pub fn bind_tuple(&mut self, four_tuple: FourTuple, client_id: ClientId) {
+    pub(crate) fn bind_tuple(&mut self, four_tuple: FourTuple, client_id: ClientId) {
         self.by_tuple.insert(four_tuple, client_id);
     }
 
-    pub fn demux(&self, pkt: &TaggedBytesMut) -> Option<ClientId> {
+    pub(crate) fn demux(&self, pkt: &TaggedBytesMut) -> Option<ClientId> {
         let four_tuple = FourTuple::from(&pkt.transport);
         if let Some(client_id) = self.by_tuple.get(&four_tuple) {
             return Some(*client_id);

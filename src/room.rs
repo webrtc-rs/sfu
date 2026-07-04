@@ -22,7 +22,7 @@ pub(crate) struct Room {
 }
 
 impl Room {
-    pub fn new(id: RoomId) -> Self {
+    pub(crate) fn new(id: RoomId) -> Self {
         Self {
             id,
             ..Default::default()
@@ -108,9 +108,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for Room {
 
     fn handle_timeout(&mut self, now: Self::Time) -> Result<(), Self::Error> {
         for client in self.clients.values_mut() {
-            if let Some(pc) = client.pc.as_mut() {
-                let _ = pc.handle_timeout(now);
-            }
+            let _ = client.pc.handle_timeout(now);
         }
         Ok(())
     }
@@ -118,9 +116,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for Room {
     fn poll_timeout(&mut self) -> Option<Self::Time> {
         let mut eto: Option<Instant> = None;
         for client in self.clients.values_mut() {
-            if let Some(pc) = client.pc.as_mut()
-                && let Some(next) = pc.poll_timeout()
-            {
+            if let Some(next) = client.pc.poll_timeout() {
                 eto = Some(eto.map_or(next, |curr| std::cmp::min(curr, next)));
             }
         }
