@@ -2,7 +2,7 @@ use crate::{Client, ClientId, ForwardTable, SFUCommand, SFUEvent};
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::time::Instant;
 
@@ -16,7 +16,6 @@ pub(crate) struct Room {
 
     transmits: VecDeque<TaggedBytesMut>,
     events: VecDeque<SFUEvent>,
-    dirty: HashSet<ClientId>,
 }
 
 impl Room {
@@ -114,13 +113,19 @@ impl Protocol<TaggedBytesMut, Infallible, SFUCommand> for Room {
     }
 
     fn poll_timeout(&mut self) -> Option<Self::Time> {
-        //TODO:
-        None
+        let mut eto: Option<Instant> = None;
+        for client in self.clients.values_mut() {
+            if let Some(pc) = client.pc.as_mut()
+                && let Some(next) = pc.poll_timeout()
+            {
+                eto = Some(eto.map_or(next, |curr| std::cmp::min(curr, next)));
+            }
+        }
+        eto
     }
 
     fn close(&mut self) -> Result<(), Self::Error> {
         self.clients.clear();
-        self.dirty.clear();
         Ok(())
     }
 }

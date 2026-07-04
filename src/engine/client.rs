@@ -22,32 +22,29 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 pub trait PeerConnection: Send {
-    fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()>;
     fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()>;
     fn create_answer(&mut self, options: Option<RTCAnswerOptions>)
     -> Result<RTCSessionDescription>;
     fn set_local_description(&mut self, local_description: RTCSessionDescription) -> Result<()>;
     fn local_description(&self) -> Option<RTCSessionDescription>;
     fn add_local_candidate(&mut self, local_candidate: RTCIceCandidateInit) -> Result<()>;
+    fn add_remote_candidate(&mut self, remote_candidate: RTCIceCandidateInit) -> Result<()>;
     fn add_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId>;
     fn rtp_receiver_kind(&mut self, receiver_id: RTCRtpReceiverId) -> Option<RtpCodecKind>;
     fn rtp_sender_ssrc(&mut self, sender_id: RTCRtpSenderId) -> Option<u32>;
     fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: Packet) -> Result<()>;
     fn poll_write(&mut self) -> Option<TaggedBytesMut>;
     fn poll_event(&mut self) -> Option<RTCPeerConnectionEvent>;
+    fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()>;
     fn poll_read(&mut self) -> Option<RTCMessage>;
-    fn poll_timeout(&mut self) -> Option<Instant>;
     fn handle_timeout(&mut self, now: Instant) -> Result<()>;
+    fn poll_timeout(&mut self) -> Option<Instant>;
 }
 
 impl<I> PeerConnection for RTCPeerConnection<I>
 where
     I: Interceptor + Send + 'static,
 {
-    fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()> {
-        Protocol::handle_read(self, packet)
-    }
-
     fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()> {
         RTCPeerConnection::set_remote_description(self, remote_description)
     }
@@ -71,6 +68,10 @@ where
         RTCPeerConnection::add_local_candidate(self, local_candidate)
     }
 
+    fn add_remote_candidate(&mut self, remote_candidate: RTCIceCandidateInit) -> Result<()> {
+        RTCPeerConnection::add_remote_candidate(self, remote_candidate)
+    }
+
     fn add_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId> {
         RTCPeerConnection::add_track(self, track)
     }
@@ -92,16 +93,20 @@ where
         sender.write_rtp(packet)
     }
 
+    fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()> {
+        Protocol::handle_read(self, packet)
+    }
+
+    fn poll_read(&mut self) -> Option<RTCMessage> {
+        Protocol::poll_read(self)
+    }
+
     fn poll_write(&mut self) -> Option<TaggedBytesMut> {
         Protocol::poll_write(self)
     }
 
     fn poll_event(&mut self) -> Option<RTCPeerConnectionEvent> {
         Protocol::poll_event(self)
-    }
-
-    fn poll_read(&mut self) -> Option<RTCMessage> {
-        Protocol::poll_read(self)
     }
 
     fn poll_timeout(&mut self) -> Option<Instant> {
@@ -139,33 +144,25 @@ where
 }
 
 impl Client {
-    pub fn new(id: ClientId, room_id: RoomId) -> Self {
+    fn with_peer_connection(
+        id: ClientId,
+        room_id: RoomId,
+        pc: RTCPeerConnection<impl Interceptor + 'static>,
+    ) -> Self {
         Self {
             id,
             room_id,
             pending_request: None,
-            pc: None,
+            pc: Some(Box::new(pc)),
             inbound: HashMap::new(),
             outbound: HashMap::new(),
         }
     }
 
-    pub fn with_peer_connection(
-        id: ClientId,
-        room_id: RoomId,
-        pc: RTCPeerConnection<impl Interceptor + 'static>,
-    ) -> Self {
-        let mut client = Self::new(id, room_id);
-        client.pc = Some(Box::new(pc));
-        client
-    }
-
     pub fn has_peer_connection(&self) -> bool {
         self.pc.is_some()
     }
-}
 
-impl Client {
     pub fn builder(id: ClientId, room_id: RoomId) -> ClientBuilder<NoopInterceptor> {
         ClientBuilder::new(id, room_id)
     }

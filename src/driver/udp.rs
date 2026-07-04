@@ -1,4 +1,4 @@
-use crate::engine::core::SFUCore;
+use crate::engine::Engine;
 use bytes::BytesMut;
 use rtc::peer_connection::event::RTCPeerConnectionEvent;
 use rtc::peer_connection::message::RTCMessage;
@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 pub struct UdpDriver {
-    core: SFUCore,
+    engine: Engine,
     outbound: VecDeque<TaggedBytesMut>,
     peer_events: VecDeque<RTCPeerConnectionEvent>,
     reads: VecDeque<RTCMessage>,
@@ -20,14 +20,14 @@ pub struct UdpDriver {
 
 impl Default for UdpDriver {
     fn default() -> Self {
-        Self::new(SFUCore::default())
+        Self::new(Engine::default())
     }
 }
 
 impl UdpDriver {
-    fn new(core: SFUCore) -> Self {
+    fn new(engine: Engine) -> Self {
         Self {
-            core,
+            engine,
             outbound: VecDeque::new(),
             peer_events: VecDeque::new(),
             reads: VecDeque::new(),
