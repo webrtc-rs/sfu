@@ -53,52 +53,21 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
         self.transmits.pop_front()
     }
 
-    fn handle_event(&mut self, _evt: Event) -> Result<(), Self::Error> {
-        /*match evt {
-            SFUCommand::AcceptOffer {
-                request_id,
-                room,
-                client,
-                offer,
-            } => {
-                let room_ref = self.ensure_room(room);
-                room_ref.clients.insert(client);
-                let client_ref = self
-                    .clients
-                    .entry(client)
-                    .or_insert_with(|| Client::new(client, room));
-                client_ref.pending_request = Some(request_id);
-                self.events.push_back(SFUEvent::Offer { client, offer });
-                self.mark_dirty(client);
+    fn handle_event(&mut self, evt: Event) -> Result<(), Self::Error> {
+        if let Some(room_id) = evt.room_id() {
+            if *room_id != self.id {
+                return Err(Error::Other(format!("invalid room id: {}", room_id)));
             }
-            SFUCommand::AcceptAnswer {
-                request_id,
-                client,
-                answer,
-            } => {
-                self.events.push_back(SFUEvent::Answer {
-                    request_id,
-                    client,
-                    answer,
-                });
-                self.mark_dirty(client);
-            }
-            SFUCommand::AddRemoteCandidate { client, candidate } => {
-                self.events
-                    .push_back(SFUEvent::LocalCandidate { client, candidate });
-                self.mark_dirty(client);
-            }
-            SFUCommand::CloseClient { client } => {
-                if let Some(existing) = self.clients.remove(&client)
-                    && let Some(room) = self.rooms.get_mut(&existing.room_id)
-                {
-                    room.clients.remove(&client);
-                }
-                self.events
-                    .push_back(SFUEvent::ClientDisconnected { client });
-                self.dirty.remove(&client);
-            }
-        }*/
+        } else {
+            return Err(Error::Other("empty room id".to_string()));
+        }
+
+        if let Some(client_id) = evt.client_id()
+            && let Some(client) = self.clients.get_mut(client_id)
+        {
+            client.handle_event(evt)?;
+        }
+
         Ok(())
     }
 
@@ -108,7 +77,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
 
     fn handle_timeout(&mut self, now: Self::Time) -> Result<(), Self::Error> {
         for client in self.clients.values_mut() {
-            let _ = client.pc.handle_timeout(now);
+            let _ = client.handle_timeout(now);
         }
         Ok(())
     }
@@ -116,7 +85,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     fn poll_timeout(&mut self) -> Option<Self::Time> {
         let mut eto: Option<Instant> = None;
         for client in self.clients.values_mut() {
-            if let Some(next) = client.pc.poll_timeout() {
+            if let Some(next) = client.poll_timeout() {
                 eto = Some(eto.map_or(next, |curr| std::cmp::min(curr, next)));
             }
         }
@@ -125,6 +94,8 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
 
     fn close(&mut self) -> Result<(), Self::Error> {
         self.clients.clear();
+        self.transmits.clear();
+        self.events.clear();
         Ok(())
     }
 }

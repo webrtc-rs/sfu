@@ -1,12 +1,14 @@
+use crate::Event;
+use crate::room::RoomId;
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
-use rtc::media_stream::{MediaStreamTrack, MediaStreamTrackId};
+use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
 use rtc::peer_connection::RTCPeerConnectionBuilder;
 use rtc::peer_connection::configuration::RTCAnswerOptions;
 use rtc::peer_connection::configuration::RTCConfiguration;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
-use rtc::peer_connection::event::RTCPeerConnectionEvent;
+use rtc::peer_connection::event::{RTCEvent, RTCPeerConnectionEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::transport::RTCIceCandidateInit;
@@ -16,11 +18,9 @@ use rtc::rtp_transceiver::{RTCRtpReceiverId, RTCRtpSenderId};
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::{Error, Result};
 use sansio::Protocol;
-use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::convert::Infallible;
 use std::time::Instant;
-
-use crate::forward::ForwardKey;
-use crate::room::RoomId;
 
 pub(crate) trait PeerConnection: Send {
     fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()>;
@@ -34,12 +34,17 @@ pub(crate) trait PeerConnection: Send {
     fn rtp_receiver_kind(&mut self, receiver_id: RTCRtpReceiverId) -> Option<RtpCodecKind>;
     fn rtp_sender_ssrc(&mut self, sender_id: RTCRtpSenderId) -> Option<u32>;
     fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: Packet) -> Result<()>;
-    fn poll_write(&mut self) -> Option<TaggedBytesMut>;
-    fn poll_event(&mut self) -> Option<RTCPeerConnectionEvent>;
+
+    // sansio::Protocol
     fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()>;
     fn poll_read(&mut self) -> Option<RTCMessage>;
+    fn handle_write(&mut self, msg: RTCMessage) -> Result<()>;
+    fn poll_write(&mut self) -> Option<TaggedBytesMut>;
+    fn handle_event(&mut self, evt: RTCEvent) -> Result<()>;
+    fn poll_event(&mut self) -> Option<RTCPeerConnectionEvent>;
     fn handle_timeout(&mut self, now: Instant) -> Result<()>;
     fn poll_timeout(&mut self) -> Option<Instant>;
+    fn close(&mut self) -> Result<()>;
 }
 
 impl<I> PeerConnection for RTCPeerConnection<I>
@@ -94,6 +99,7 @@ where
         sender.write_rtp(packet)
     }
 
+    // sansio::Protocol
     fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()> {
         Protocol::handle_read(self, packet)
     }
@@ -104,6 +110,14 @@ where
 
     fn poll_write(&mut self) -> Option<TaggedBytesMut> {
         Protocol::poll_write(self)
+    }
+
+    fn handle_write(&mut self, msg: RTCMessage) -> Result<()> {
+        Protocol::handle_write(self, msg)
+    }
+
+    fn handle_event(&mut self, evt: RTCEvent) -> Result<()> {
+        Protocol::handle_event(self, evt)
     }
 
     fn poll_event(&mut self) -> Option<RTCPeerConnectionEvent> {
@@ -117,18 +131,10 @@ where
     fn handle_timeout(&mut self, now: Instant) -> Result<()> {
         Protocol::handle_timeout(self, now)
     }
-}
 
-pub type ClientId = u64;
-
-pub(crate) struct Client {
-    id: ClientId,
-    room_id: RoomId,
-    pub(crate) pc: Box<dyn PeerConnection>,
-
-    pending_request: Option<u64>,
-    inbound: HashMap<RTCRtpReceiverId, MediaStreamTrackId>,
-    outbound: HashMap<ForwardKey, RTCRtpSenderId>,
+    fn close(&mut self) -> Result<()> {
+        Protocol::close(self)
+    }
 }
 
 pub(crate) struct ClientBuilder<I = NoopInterceptor>
@@ -205,11 +211,122 @@ where
         Ok(Client {
             id: self.id,
             room_id: self.room_id,
-            pending_request: None,
-            pc: Box::new(pc),
-            inbound: HashMap::new(),
-            outbound: HashMap::new(),
+            peer_connection: Box::new(pc),
+
+            transmits: Default::default(),
+            events: Default::default(),
         })
+    }
+}
+
+pub type ClientId = u64;
+
+pub(crate) struct Client {
+    id: ClientId,
+    room_id: RoomId,
+    peer_connection: Box<dyn PeerConnection>,
+
+    transmits: VecDeque<TaggedBytesMut>,
+    events: VecDeque<Event>,
+}
+
+impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
+    type Rout = Infallible;
+    type Wout = TaggedBytesMut;
+    type Eout = Event;
+    type Error = Error;
+    type Time = Instant;
+
+    fn handle_read(&mut self, _msg: TaggedBytesMut) -> std::result::Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn poll_read(&mut self) -> Option<Self::Rout> {
+        None
+    }
+
+    fn handle_write(&mut self, _msg: Infallible) -> std::result::Result<(), Self::Error> {
+        match _msg {}
+    }
+
+    fn poll_write(&mut self) -> Option<Self::Wout> {
+        self.transmits.pop_front()
+    }
+
+    fn handle_event(&mut self, evt: Event) -> std::result::Result<(), Self::Error> {
+        if let Some(room_id) = evt.room_id() {
+            if *room_id != self.room_id {
+                return Err(Error::Other(format!("invalid room id: {}", room_id)));
+            }
+        } else {
+            return Err(Error::Other("empty room id".to_string()));
+        }
+
+        if let Some(client_id) = evt.client_id() {
+            if *client_id != self.id {
+                return Err(Error::Other(format!("invalid client id: {}", client_id)));
+            }
+        } else {
+            return Err(Error::Other("empty client id".to_string()));
+        }
+
+        /*
+        match evt {
+            Event::Join {
+                request_id,
+                room_id,
+                client_id,
+            } => {}
+            Event::SessionDescription {
+                request_id,
+                room_id,
+                client_id,
+                sdp,
+            } => {}
+            Event::IceCandidate {
+                request_id,
+                room_id,
+                client_id,
+                candidate,
+            } => {}
+            Event::Leave {
+                request_id,
+                room_id,
+                client_id,
+                reason,
+            } => {}
+            Event::Error {
+                request_id,
+                room_id,
+                client_id,
+                reason,
+            } => {}
+        }*/
+
+        Ok(())
+    }
+
+    fn poll_event(&mut self) -> Option<Self::Eout> {
+        self.events.pop_front()
+    }
+
+    fn handle_timeout(&mut self, now: Self::Time) -> std::result::Result<(), Self::Error> {
+        let _ = self.peer_connection.handle_timeout(now);
+        Ok(())
+    }
+
+    fn poll_timeout(&mut self) -> Option<Self::Time> {
+        let mut eto: Option<Instant> = None;
+        if let Some(next) = self.peer_connection.poll_timeout() {
+            eto = Some(eto.map_or(next, |curr| std::cmp::min(curr, next)));
+        }
+        eto
+    }
+
+    fn close(&mut self) -> std::result::Result<(), Self::Error> {
+        self.transmits.clear();
+        self.events.clear();
+        self.peer_connection.close()
     }
 }
 
@@ -232,8 +349,6 @@ mod tests {
 
         assert_eq!(client.id, 10);
         assert_eq!(client.room_id, 20);
-        assert!(client.inbound.is_empty());
-        assert!(client.outbound.is_empty());
     }
 
     #[test]
