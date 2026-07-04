@@ -9,8 +9,11 @@ use crate::demuxer::Demuxer;
 use crate::event::Event;
 use crate::room::{Room, RoomId};
 
+pub type SfuId = u64;
+
 #[derive(Default)]
-pub(crate) struct Engine {
+pub struct Sfu {
+    id: SfuId,
     demuxer: Demuxer,
     rooms: HashMap<RoomId, Room>,
 
@@ -18,9 +21,12 @@ pub(crate) struct Engine {
     events: VecDeque<Event>,
 }
 
-impl Engine {
-    pub fn new() -> Self {
-        Self::default()
+impl Sfu {
+    pub fn new(id: SfuId) -> Self {
+        Self {
+            id,
+            ..Default::default()
+        }
     }
 
     /*
@@ -103,7 +109,7 @@ impl Engine {
     }*/
 }
 
-impl Protocol<TaggedBytesMut, Infallible, Event> for Engine {
+impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
     type Eout = Event;
