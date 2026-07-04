@@ -1,39 +1,72 @@
 use crate::Event;
 use crate::room::RoomId;
+use rtc::data_channel::{RTCDataChannelId, RTCDataChannelInit};
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
 use rtc::peer_connection::RTCPeerConnectionBuilder;
-use rtc::peer_connection::configuration::RTCAnswerOptions;
 use rtc::peer_connection::configuration::RTCConfiguration;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
+use rtc::peer_connection::configuration::{RTCAnswerOptions, RTCOfferOptions};
 use rtc::peer_connection::event::{RTCEvent, RTCPeerConnectionEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::transport::RTCIceCandidateInit;
-use rtc::rtp::packet::Packet;
 use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
-use rtc::rtp_transceiver::{RTCRtpReceiverId, RTCRtpSenderId};
+use rtc::rtp_transceiver::{
+    RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverId, RTCRtpTransceiverInit,
+};
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::{Error, Result};
+use rtc::statistics::StatsSelector;
+use rtc::statistics::report::RTCStatsReport;
 use sansio::Protocol;
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::time::Instant;
 
 pub(crate) trait PeerConnection: Send {
-    fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()>;
+    fn create_offer(&mut self, options: Option<RTCOfferOptions>) -> Result<RTCSessionDescription>;
     fn create_answer(&mut self, options: Option<RTCAnswerOptions>)
     -> Result<RTCSessionDescription>;
     fn set_local_description(&mut self, local_description: RTCSessionDescription) -> Result<()>;
     fn local_description(&self) -> Option<RTCSessionDescription>;
+    fn current_local_description(&self) -> Option<RTCSessionDescription>;
+    fn pending_local_description(&self) -> Option<RTCSessionDescription>;
+    fn can_trickle_ice_candidates(&self) -> Option<bool>;
+    fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()>;
+    fn remote_description(&self) -> Option<&RTCSessionDescription>;
+    fn current_remote_description(&self) -> Option<&RTCSessionDescription>;
+    fn pending_remote_description(&self) -> Option<&RTCSessionDescription>;
     fn add_local_candidate(&mut self, local_candidate: RTCIceCandidateInit) -> Result<()>;
     fn add_remote_candidate(&mut self, remote_candidate: RTCIceCandidateInit) -> Result<()>;
+    fn restart_ice(&mut self);
+    fn get_configuration(&self) -> &RTCConfiguration;
+    fn set_configuration(&mut self, configuration: RTCConfiguration) -> Result<()>;
+
+    fn create_data_channel(
+        &mut self,
+        label: &str,
+        options: Option<RTCDataChannelInit>,
+    ) -> Result<RTCDataChannelId>;
+    fn get_senders(&self) -> Vec<RTCRtpSenderId>;
+    fn get_receivers(&self) -> Vec<RTCRtpReceiverId>;
+    fn get_transceivers(&self) -> Vec<RTCRtpTransceiverId>;
+
     fn add_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId>;
-    fn rtp_receiver_kind(&mut self, receiver_id: RTCRtpReceiverId) -> Option<RtpCodecKind>;
-    fn rtp_sender_ssrc(&mut self, sender_id: RTCRtpSenderId) -> Option<u32>;
-    fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: Packet) -> Result<()>;
+    fn remove_track(&mut self, sender_id: RTCRtpSenderId) -> Result<()>;
+    fn add_transceiver_from_track(
+        &mut self,
+        track: MediaStreamTrack,
+        init: Option<RTCRtpTransceiverInit>,
+    ) -> Result<RTCRtpTransceiverId>;
+    fn add_transceiver_from_kind(
+        &mut self,
+        kind: RtpCodecKind,
+        init: Option<RTCRtpTransceiverInit>,
+    ) -> Result<RTCRtpTransceiverId>;
+    fn get_stats(&mut self, now: Instant, selector: StatsSelector) -> RTCStatsReport;
 
     // sansio::Protocol
     fn handle_read(&mut self, packet: TaggedBytesMut) -> Result<()>;
@@ -51,8 +84,8 @@ impl<I> PeerConnection for RTCPeerConnection<I>
 where
     I: Interceptor + Send + 'static,
 {
-    fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()> {
-        RTCPeerConnection::set_remote_description(self, remote_description)
+    fn create_offer(&mut self, options: Option<RTCOfferOptions>) -> Result<RTCSessionDescription> {
+        RTCPeerConnection::create_offer(self, options)
     }
 
     fn create_answer(
@@ -70,6 +103,34 @@ where
         RTCPeerConnection::local_description(self)
     }
 
+    fn current_local_description(&self) -> Option<RTCSessionDescription> {
+        RTCPeerConnection::current_local_description(self)
+    }
+
+    fn pending_local_description(&self) -> Option<RTCSessionDescription> {
+        RTCPeerConnection::pending_local_description(self)
+    }
+
+    fn can_trickle_ice_candidates(&self) -> Option<bool> {
+        RTCPeerConnection::can_trickle_ice_candidates(self)
+    }
+
+    fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()> {
+        RTCPeerConnection::set_remote_description(self, remote_description)
+    }
+
+    fn remote_description(&self) -> Option<&RTCSessionDescription> {
+        RTCPeerConnection::remote_description(self)
+    }
+
+    fn current_remote_description(&self) -> Option<&RTCSessionDescription> {
+        RTCPeerConnection::current_remote_description(self)
+    }
+
+    fn pending_remote_description(&self) -> Option<&RTCSessionDescription> {
+        RTCPeerConnection::pending_remote_description(self)
+    }
+
     fn add_local_candidate(&mut self, local_candidate: RTCIceCandidateInit) -> Result<()> {
         RTCPeerConnection::add_local_candidate(self, local_candidate)
     }
@@ -78,25 +139,62 @@ where
         RTCPeerConnection::add_remote_candidate(self, remote_candidate)
     }
 
+    fn restart_ice(&mut self) {
+        RTCPeerConnection::restart_ice(self)
+    }
+
+    fn get_configuration(&self) -> &RTCConfiguration {
+        RTCPeerConnection::get_configuration(self)
+    }
+    fn set_configuration(&mut self, configuration: RTCConfiguration) -> Result<()> {
+        RTCPeerConnection::set_configuration(self, configuration)
+    }
+
+    fn create_data_channel(
+        &mut self,
+        label: &str,
+        options: Option<RTCDataChannelInit>,
+    ) -> Result<RTCDataChannelId> {
+        let dc = RTCPeerConnection::create_data_channel(self, label, options)?;
+        Ok(dc.id())
+    }
+
+    fn get_senders(&self) -> Vec<RTCRtpSenderId> {
+        RTCPeerConnection::get_senders(self).collect()
+    }
+    fn get_receivers(&self) -> Vec<RTCRtpReceiverId> {
+        RTCPeerConnection::get_receivers(self).collect()
+    }
+    fn get_transceivers(&self) -> Vec<RTCRtpTransceiverId> {
+        RTCPeerConnection::get_transceivers(self).collect()
+    }
+
     fn add_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId> {
         RTCPeerConnection::add_track(self, track)
     }
 
-    fn rtp_receiver_kind(&mut self, receiver_id: RTCRtpReceiverId) -> Option<RtpCodecKind> {
-        self.rtp_receiver(receiver_id)
-            .map(|receiver| receiver.track().kind())
+    fn remove_track(&mut self, sender_id: RTCRtpSenderId) -> Result<()> {
+        RTCPeerConnection::remove_track(self, sender_id)
     }
 
-    fn rtp_sender_ssrc(&mut self, sender_id: RTCRtpSenderId) -> Option<u32> {
-        self.rtp_sender(sender_id)
-            .and_then(|sender| sender.track().ssrcs().last())
+    fn add_transceiver_from_track(
+        &mut self,
+        track: MediaStreamTrack,
+        init: Option<RTCRtpTransceiverInit>,
+    ) -> Result<RTCRtpTransceiverId> {
+        RTCPeerConnection::add_transceiver_from_track(self, track, init)
     }
 
-    fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: Packet) -> Result<()> {
-        let mut sender = self
-            .rtp_sender(sender_id)
-            .ok_or(Error::ErrRTPSenderNotExisted)?;
-        sender.write_rtp(packet)
+    fn add_transceiver_from_kind(
+        &mut self,
+        kind: RtpCodecKind,
+        init: Option<RTCRtpTransceiverInit>,
+    ) -> Result<RTCRtpTransceiverId> {
+        RTCPeerConnection::add_transceiver_from_kind(self, kind, init)
+    }
+
+    fn get_stats(&mut self, now: Instant, selector: StatsSelector) -> RTCStatsReport {
+        RTCPeerConnection::get_stats(self, now, selector)
     }
 
     // sansio::Protocol
