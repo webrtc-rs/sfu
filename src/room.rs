@@ -103,6 +103,11 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     }
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
+        for client in self.clients.values_mut() {
+            while let Some(event) = client.poll_event() {
+                self.events.push_back(event);
+            }
+        }
         self.events.pop_front()
     }
 

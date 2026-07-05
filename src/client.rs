@@ -1,5 +1,5 @@
-use crate::Event;
 use crate::room::RoomId;
+use crate::{Event, RequestId};
 use log::{info, warn};
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
@@ -11,7 +11,7 @@ use rtc::peer_connection::configuration::setting_engine::SettingEngine;
 use rtc::peer_connection::configuration::{RTCAnswerOptions, RTCOfferOptions};
 use rtc::peer_connection::event::{RTCEvent, RTCPeerConnectionEvent};
 use rtc::peer_connection::message::RTCMessage;
-use rtc::peer_connection::sdp::RTCSessionDescription;
+use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::transport::RTCIceCandidateInit;
 use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
 use rtc::rtp_transceiver::{
@@ -342,6 +342,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
                     "{}:{}:{} receives sdp type {} and {}",
                     request_id, room_id, client_id, sdp.sdp_type, sdp.sdp
                 );
+                self.handle_session_description(request_id, sdp)?;
             }
             Event::IceCandidate {
                 request_id,
@@ -353,6 +354,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
                     "{}:{}:{} receives ice candidate {}",
                     request_id, room_id, client_id, candidate.candidate
                 );
+                self.peer_connection.add_remote_candidate(candidate)?;
             }
             Event::Leave {
                 request_id,
@@ -379,6 +381,11 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
     }
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
+        while let Some(evt) = self.peer_connection.poll_event() {
+            //TODO: process peer_connection's event
+            info!("TODO: process peer_connection's event {:?}", evt);
+        }
+
         self.events.pop_front()
     }
 
@@ -399,6 +406,34 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
         self.transmits.clear();
         self.events.clear();
         self.peer_connection.close()
+    }
+}
+
+impl Client {
+    fn handle_session_description(
+        &mut self,
+        request_id: RequestId,
+        sdp: RTCSessionDescription,
+    ) -> Result<()> {
+        let sdp_type = sdp.sdp_type;
+
+        self.peer_connection.set_remote_description(sdp)?;
+
+        if sdp_type == RTCSdpType::Offer {
+            let answer = self.peer_connection.create_answer(None)?;
+            self.peer_connection.set_local_description(answer)?;
+            self.events.push_back(Event::SessionDescription {
+                request_id,
+                room_id: self.room_id,
+                client_id: self.id,
+                sdp: self
+                    .peer_connection
+                    .local_description()
+                    .ok_or(Error::ErrPeerConnLocalDescriptionNil)?,
+            })
+        }
+
+        Ok(())
     }
 }
 
