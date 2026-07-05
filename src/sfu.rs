@@ -1,13 +1,13 @@
+use crate::demuxer::Demuxer;
+use crate::event::Event;
+use crate::room::{Room, RoomId};
+use log::warn;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::time::Instant;
-
-use crate::demuxer::Demuxer;
-use crate::event::Event;
-use crate::room::{Room, RoomId};
 
 pub type SfuId = u64;
 
@@ -76,6 +76,11 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
             if remove_room {
                 self.rooms.remove(&room_id);
             }
+        } else if let Event::Error {
+            request_id, reason, ..
+        } = evt
+        {
+            warn!("{} receives error due to {}", request_id, reason);
         }
 
         Ok(())

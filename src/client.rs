@@ -311,7 +311,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
             }
         } else {
             return Err(Error::Other("empty room id".to_string()));
-        }
+        };
 
         if let Some(client_id) = evt.client_id() {
             if client_id != self.id {
@@ -366,14 +366,11 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
                 );
             }
             Event::Error {
-                request_id,
-                room_id,
-                client_id,
-                reason,
+                request_id, reason, ..
             } => {
                 warn!(
-                    "{}:{:?}:{:?} receives error due to {}",
-                    request_id, room_id, client_id, reason
+                    "{}:{}:{} receives error due to {}",
+                    request_id, self.room_id, self.id, reason
                 );
             }
         }

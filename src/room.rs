@@ -1,13 +1,13 @@
+use crate::client::{Client, ClientBuilder, ClientId};
+use crate::event::Event;
+use crate::forward::ForwardTable;
+use log::warn;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::time::Instant;
-
-use crate::client::{Client, ClientBuilder, ClientId};
-use crate::event::Event;
-use crate::forward::ForwardTable;
 
 pub type RoomId = u64;
 
@@ -89,6 +89,14 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
             if remove_client {
                 self.clients.remove(&client_id);
             }
+        } else if let Event::Error {
+            request_id, reason, ..
+        } = evt
+        {
+            warn!(
+                "{}:{} receives error due to {}",
+                request_id, room_id, reason
+            );
         }
 
         Ok(())
