@@ -28,6 +28,14 @@ impl Room {
             ..Default::default()
         }
     }
+
+    pub(crate) fn id(&self) -> RoomId {
+        self.id
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.clients.is_empty()
+    }
 }
 
 impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
@@ -64,12 +72,22 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
         };
 
         if let Some(client_id) = evt.client_id() {
+            let mut remove_client = false;
             if let Some(client) = self.clients.get_mut(&client_id) {
-                client.handle_event(evt)?;
+                if let Event::Leave { .. } = &evt {
+                    client.close()?;
+                    remove_client = true;
+                } else {
+                    client.handle_event(evt)?;
+                }
             } else if let Event::Join { .. } = &evt {
                 //TODO: ClientBuilder with configurable
                 let client = ClientBuilder::new(client_id, room_id).build()?;
                 self.clients.insert(client_id, client);
+            }
+
+            if remove_client {
+                self.clients.remove(&client_id);
             }
         }
 

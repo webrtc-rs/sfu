@@ -60,12 +60,21 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
 
     fn handle_event(&mut self, evt: Event) -> Result<(), Self::Error> {
         if let Some(room_id) = evt.room_id() {
+            let mut remove_room = false;
             if let Some(room) = self.rooms.get_mut(&room_id) {
+                let is_leave_event = matches!(evt, Event::Leave { .. });
                 room.handle_event(evt)?;
+                if is_leave_event && room.is_empty() {
+                    remove_room = true;
+                }
             } else if let Event::Join { .. } = &evt {
                 let mut room = Room::new(room_id);
                 room.handle_event(evt)?;
                 self.rooms.insert(room_id, room);
+            }
+
+            if remove_room {
+                self.rooms.remove(&room_id);
             }
         }
 
