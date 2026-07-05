@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
-use bytes::Bytes;
+use rand::random;
 use rouille::{Request, Response, ResponseBody};
+use rtc::peer_connection::sdp::RTCSessionDescription;
+use sfu::Event;
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::UdpSocket;
@@ -23,11 +25,11 @@ pub fn web_request(
         return Response::empty_400();
     }
 
-    let session_id = path[2].parse::<u64>().unwrap();
+    let room_id = path[2].parse::<u64>().unwrap();
     let mut sorted_ports: Vec<u16> = media_port_thread_map.keys().map(|x| *x).collect();
     sorted_ports.sort();
     assert!(!sorted_ports.is_empty());
-    let port = sorted_ports[(session_id as usize) % sorted_ports.len()];
+    let port = sorted_ports[(room_id as usize) % sorted_ports.len()];
     let tx = media_port_thread_map.get(&port);
 
     // Expected POST SDP Offers.
@@ -40,27 +42,57 @@ pub fn web_request(
 
     // The Rtc instance is shipped off to the main run loop.
     if let Some(tx) = tx {
-        let endpoint_id = path[3].parse::<u64>().unwrap();
-        if path[1] == "offer" {
+        let client_id = path[3].parse::<u64>().unwrap();
+        if path[1] == "join" {
             let (response_tx, response_rx) = mpsc::sync_channel(1);
 
             tx.send(SignalingMessage {
-                request: SignalingProtocolMessage::Offer {
-                    session_id,
-                    endpoint_id,
-                    offer_sdp: Bytes::from(offer_sdp),
+                request: Event::Join {
+                    request_id: random(),
+                    room_id,
+                    client_id,
                 },
                 response_tx,
             })
-            .expect("to send SignalingMessage instance");
+            .expect("to send Join");
 
-            let response = response_rx.recv().expect("receive answer offer");
+            let response = response_rx.recv().expect("receive ok");
             match response {
-                SignalingProtocolMessage::Answer {
-                    session_id: _,
-                    endpoint_id: _,
-                    answer_sdp,
-                } => Response::from_data("application/json", answer_sdp),
+                Event::Ok {
+                    request_id: _,
+                    room_id: _,
+                    client_id: _,
+                } => Response {
+                    status_code: 200,
+                    headers: vec![],
+                    data: ResponseBody::empty(),
+                    upgrade: None,
+                },
+                _ => Response::empty_404(),
+            }
+        } else if path[1] == "offer" {
+            let (response_tx, response_rx) = mpsc::sync_channel(1);
+
+            tx.send(SignalingMessage {
+                request: Event::SessionDescription {
+                    request_id: random(),
+                    room_id,
+                    client_id,
+                    sdp: RTCSessionDescription::offer(String::from_utf8(offer_sdp).unwrap())
+                        .unwrap(),
+                },
+                response_tx,
+            })
+            .expect("to send Offer");
+
+            let response = response_rx.recv().expect("receive Answer");
+            match response {
+                Event::SessionDescription {
+                    request_id: _,
+                    room_id: _,
+                    client_id: _,
+                    sdp,
+                } => Response::from_data("application/json", sdp.sdp),
                 _ => Response::empty_404(),
             }
         } else {
@@ -217,35 +249,10 @@ fn build_pipeline(
     pipeline.finalize()
 }
 */
-pub enum SignalingProtocolMessage {
-    Ok {
-        session_id: u64,
-        endpoint_id: u64,
-    },
-    Err {
-        session_id: u64,
-        endpoint_id: u64,
-        reason: Bytes,
-    },
-    Offer {
-        session_id: u64,
-        endpoint_id: u64,
-        offer_sdp: Bytes,
-    },
-    Answer {
-        session_id: u64,
-        endpoint_id: u64,
-        answer_sdp: Bytes,
-    },
-    Leave {
-        session_id: u64,
-        endpoint_id: u64,
-    },
-}
 
 pub struct SignalingMessage {
-    pub request: SignalingProtocolMessage,
-    pub response_tx: SyncSender<SignalingProtocolMessage>,
+    pub request: Event,
+    pub response_tx: SyncSender<Event>,
 }
 /*
 pub fn handle_signaling_message(
@@ -254,43 +261,43 @@ pub fn handle_signaling_message(
 ) -> anyhow::Result<()> {
     match signaling_msg.request {
         SignalingProtocolMessage::Offer {
-            session_id,
-            endpoint_id,
+            room_id,
+            client_id,
             offer_sdp,
         } => handle_offer_message(
             server_states,
-            session_id,
-            endpoint_id,
+            room_id,
+            client_id,
             offer_sdp,
             signaling_msg.response_tx,
         ),
         SignalingProtocolMessage::Leave {
-            session_id,
-            endpoint_id,
+            room_id,
+            client_id,
         } => handle_leave_message(
             server_states,
-            session_id,
-            endpoint_id,
+            room_id,
+            client_id,
             signaling_msg.response_tx,
         ),
         SignalingProtocolMessage::Ok {
-            session_id,
-            endpoint_id,
+            room_id,
+            client_id,
         }
         | SignalingProtocolMessage::Err {
-            session_id,
-            endpoint_id,
+            room_id,
+            client_id,
             reason: _,
         }
         | SignalingProtocolMessage::Answer {
-            session_id,
-            endpoint_id,
+            room_id,
+            client_id,
             answer_sdp: _,
         } => Ok(signaling_msg
             .response_tx
             .send(SignalingProtocolMessage::Err {
-                session_id,
-                endpoint_id,
+                room_id,
+                client_id,
                 reason: Bytes::from("Invalid Request"),
             })
             .map_err(|_| {
@@ -304,8 +311,8 @@ pub fn handle_signaling_message(
 
 fn handle_offer_message(
     server_states: &Rc<RefCell<ServerStates>>,
-    session_id: u64,
-    endpoint_id: u64,
+    room_id: u64,
+    client_id: u64,
     offer: Bytes,
     response_tx: SyncSender<SignalingProtocolMessage>,
 ) -> anyhow::Result<()> {
@@ -313,14 +320,14 @@ fn handle_offer_message(
         let offer_str = String::from_utf8(offer.to_vec())?;
         log::info!(
             "handle_offer_message: {}/{}/{}",
-            session_id,
-            endpoint_id,
+            room_id,
+            client_id,
             offer_str,
         );
         let mut server_states = server_states.borrow_mut();
 
         let offer_sdp = serde_json::from_str::<RTCSessionDescription>(&offer_str)?;
-        let answer = server_states.accept_offer(session_id, endpoint_id, None, offer_sdp)?;
+        let answer = server_states.accept_offer(room_id, client_id, None, offer_sdp)?;
         let answer_str = serde_json::to_string(&answer)?;
         log::info!("generate answer sdp: {}", answer_str);
         Ok(Bytes::from(answer_str))
@@ -329,8 +336,8 @@ fn handle_offer_message(
     match try_handle() {
         Ok(answer_sdp) => Ok(response_tx
             .send(SignalingProtocolMessage::Answer {
-                session_id,
-                endpoint_id,
+                room_id,
+                client_id,
                 answer_sdp,
             })
             .map_err(|_| {
@@ -341,8 +348,8 @@ fn handle_offer_message(
             })?),
         Err(err) => Ok(response_tx
             .send(SignalingProtocolMessage::Err {
-                session_id,
-                endpoint_id,
+                room_id,
+                client_id,
                 reason: Bytes::from(err.to_string()),
             })
             .map_err(|_| {
@@ -356,20 +363,20 @@ fn handle_offer_message(
 
 fn handle_leave_message(
     _server_states: &Rc<RefCell<ServerStates>>,
-    session_id: u64,
-    endpoint_id: u64,
+    room_id: u64,
+    client_id: u64,
     response_tx: SyncSender<SignalingProtocolMessage>,
 ) -> anyhow::Result<()> {
     let try_handle = || -> anyhow::Result<()> {
-        log::info!("handle_leave_message: {}/{}", session_id, endpoint_id,);
+        log::info!("handle_leave_message: {}/{}", room_id, client_id,);
         Ok(())
     };
 
     match try_handle() {
         Ok(_) => Ok(response_tx
             .send(SignalingProtocolMessage::Ok {
-                session_id,
-                endpoint_id,
+                room_id,
+                client_id,
             })
             .map_err(|_| {
                 Error::new(
@@ -379,8 +386,8 @@ fn handle_leave_message(
             })?),
         Err(err) => Ok(response_tx
             .send(SignalingProtocolMessage::Err {
-                session_id,
-                endpoint_id,
+                room_id,
+                client_id,
                 reason: Bytes::from(err.to_string()),
             })
             .map_err(|_| {

@@ -17,6 +17,7 @@ rtc = { version = "0.20.0-rc.1", path = "rtc/rtc" }
 sansio = "1"
 bytes = "1.12.0"
 log = "0.4.33"
+rand = "0.10.1"
 
 [dev-dependencies]
 clap = { version = "4.6.1", features = ["derive"] }

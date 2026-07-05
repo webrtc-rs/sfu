@@ -105,14 +105,13 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
             if remove_client {
                 self.clients.remove(&client_id);
             }
-        } else if let Event::Error {
+        } else if let Event::Err {
             request_id, reason, ..
         } = evt
         {
-            warn!(
-                "{}:{} receives error due to {}",
-                request_id, room_id, reason
-            );
+            warn!("{}:{} receives err due to {}", request_id, room_id, reason);
+        } else if let Event::Ok { request_id, .. } = evt {
+            warn!("{}:{} receives ok", request_id, room_id,);
         }
 
         Ok(())

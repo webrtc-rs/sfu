@@ -159,9 +159,19 @@ Status: <span id="ice_status">Waiting</span>
     };
 
     async function startRtc() {
+        let joinPath = '/join/' + byId("room").value + '/' + endpointId;
+        const joinRes = await fetch(joinPath, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+        });
+
+        //TODO: check join Result?
+
         let path = '/offer/' + byId("room").value + '/' + endpointId;
         byId('ice_status').innerText = 'Connecting';
-        byId('chan_status').innerText = 'Joining room ' + byId("room").value + ' as endpoint ' + endpointId;
+        byId('chan_status').innerText = 'Joining room ' + byId("room").value + ' as client ' + endpointId;
         byId("room").disabled = true;
         byId('join').disabled = true;
         byId('leave').disabled = false;
@@ -177,7 +187,7 @@ Status: <span id="ice_status">Waiting</span>
             }
         };
         dataChannel.onopen = () => {
-            byId('chan_status').innerText = 'Joined room ' + byId("room").value + ' as endpoint ' + endpointId;
+            byId('chan_status').innerText = 'Joined room ' + byId("room").value + ' as client ' + endpointId;
             byId('mic').disabled = false;
             byId('cam').disabled = false;
         };

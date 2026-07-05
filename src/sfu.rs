@@ -76,11 +76,13 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
             if remove_room {
                 self.rooms.remove(&room_id);
             }
-        } else if let Event::Error {
+        } else if let Event::Err {
             request_id, reason, ..
         } = evt
         {
-            warn!("{} receives error due to {}", request_id, reason);
+            warn!("{} receives err due to {}", request_id, reason);
+        } else if let Event::Ok { request_id, .. } = evt {
+            warn!("{} receives ok", request_id);
         }
 
         Ok(())

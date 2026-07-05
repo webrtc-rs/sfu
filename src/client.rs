@@ -322,6 +322,17 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
         }
 
         match evt {
+            Event::Ok { request_id, .. } => {
+                warn!("{}:{}:{} receives ok", request_id, self.room_id, self.id,);
+            }
+            Event::Err {
+                request_id, reason, ..
+            } => {
+                warn!(
+                    "{}:{}:{} receives err due to {}",
+                    request_id, self.room_id, self.id, reason
+                );
+            }
             Event::Join {
                 request_id,
                 room_id,
@@ -365,14 +376,6 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
                 warn!(
                     "{}:{}:{} has already left due to {}",
                     request_id, room_id, client_id, reason
-                );
-            }
-            Event::Error {
-                request_id, reason, ..
-            } => {
-                warn!(
-                    "{}:{}:{} receives error due to {}",
-                    request_id, self.room_id, self.id, reason
                 );
             }
         }
