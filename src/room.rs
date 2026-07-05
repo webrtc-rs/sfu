@@ -2,6 +2,10 @@ use crate::client::{Client, ClientBuilder, ClientId};
 use crate::event::Event;
 use crate::forward::ForwardTable;
 use log::warn;
+use rtc::interceptor::Registry;
+use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
+use rtc::peer_connection::configuration::media_engine::MediaEngine;
+use rtc::peer_connection::configuration::setting_engine::SettingEngine;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
@@ -35,6 +39,19 @@ impl Room {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.clients.is_empty()
+    }
+
+    /// Build a client with the default media engine (default codecs), the default
+    /// interceptor chain, and default setting engine.
+    fn build_client(&self, client_id: ClientId, room_id: RoomId) -> Result<Client, Error> {
+        let mut media_engine = MediaEngine::default();
+        media_engine.register_default_codecs()?;
+        let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
+        ClientBuilder::new(client_id, room_id)
+            .with_setting_engine(SettingEngine::default())
+            .with_media_engine(media_engine)
+            .with_interceptor_registry(registry)
+            .build()
     }
 }
 
@@ -81,8 +98,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
                     client.handle_event(evt)?;
                 }
             } else if let Event::Join { .. } = &evt {
-                //TODO: ClientBuilder with configurable
-                let client = ClientBuilder::new(client_id, room_id).build()?;
+                let client = self.build_client(client_id, room_id)?;
                 self.clients.insert(client_id, client);
             }
 

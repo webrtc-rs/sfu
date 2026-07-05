@@ -120,3 +120,124 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RequestId;
+    use crate::event::Event;
+    use rtc::peer_connection::RTCPeerConnectionBuilder;
+    use rtc::peer_connection::configuration::media_engine::MediaEngine;
+    use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
+    use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
+
+    const ROOM: RoomId = 100;
+    const CLIENT: crate::ClientId = 200;
+
+    /// A browser-side peer connection that publishes one video track, used only to
+    /// produce a valid SDP offer to feed into the SFU.
+    fn build_offer() -> RTCSessionDescription {
+        let mut media_engine = MediaEngine::default();
+        media_engine
+            .register_default_codecs()
+            .expect("default codecs should register");
+
+        let mut offerer = RTCPeerConnectionBuilder::new()
+            .with_media_engine(media_engine)
+            .build()
+            .expect("offerer peer connection should build");
+
+        offerer
+            .add_transceiver_from_kind(RtpCodecKind::Video, None)
+            .expect("video transceiver should be added");
+
+        let offer = offerer.create_offer(None).expect("offer should be created");
+        assert_eq!(offer.sdp_type, RTCSdpType::Offer);
+        assert!(!offer.sdp.is_empty());
+        offer
+    }
+
+    fn join(sfu: &mut Sfu, request_id: RequestId) {
+        sfu.handle_event(Event::Join {
+            request_id,
+            room_id: ROOM,
+            client_id: CLIENT,
+        })
+        .expect("join should succeed");
+    }
+
+    #[test]
+    fn join_creates_room_and_client() {
+        let mut sfu = Sfu::new(0);
+        assert!(sfu.rooms.is_empty());
+
+        join(&mut sfu, 1);
+
+        let room = sfu.rooms.get(&ROOM).expect("room should exist after join");
+        assert_eq!(room.id(), ROOM);
+        assert!(!room.is_empty(), "room should contain the joined client");
+    }
+
+    #[test]
+    fn leave_removes_client_and_reaps_empty_room() {
+        let mut sfu = Sfu::new(0);
+        join(&mut sfu, 1);
+        assert!(sfu.rooms.contains_key(&ROOM));
+
+        sfu.handle_event(Event::Leave {
+            request_id: 2,
+            room_id: ROOM,
+            client_id: CLIENT,
+            reason: "bye".to_string(),
+        })
+        .expect("leave should succeed");
+
+        // The last client left, so the SFU self-reaps the now-empty room.
+        assert!(
+            !sfu.rooms.contains_key(&ROOM),
+            "empty room should be removed after the last client leaves"
+        );
+    }
+
+    #[test]
+    fn session_description_offer_returns_answer() {
+        let mut sfu = Sfu::new(0);
+        join(&mut sfu, 1);
+
+        let request_id: RequestId = 2;
+        sfu.handle_event(Event::SessionDescription {
+            request_id,
+            room_id: ROOM,
+            client_id: CLIENT,
+            sdp: build_offer(),
+        })
+        .expect("handling the offer should succeed");
+
+        let event = sfu
+            .poll_event()
+            .expect("the SFU should emit an answer for the offer");
+
+        match event {
+            Event::SessionDescription {
+                request_id: got_request_id,
+                room_id,
+                client_id,
+                sdp,
+            } => {
+                assert_eq!(got_request_id, request_id);
+                assert_eq!(room_id, ROOM);
+                assert_eq!(client_id, CLIENT);
+                assert_eq!(
+                    sdp.sdp_type,
+                    RTCSdpType::Answer,
+                    "the SFU should answer an offer"
+                );
+                assert!(!sdp.sdp.is_empty(), "the answer SDP should not be empty");
+            }
+            other => panic!("expected a SessionDescription answer, got {:?}", other),
+        }
+
+        // Only the answer is surfaced.
+        assert!(sfu.poll_event().is_none());
+    }
+}
