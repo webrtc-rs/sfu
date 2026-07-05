@@ -1,21 +1,17 @@
 use clap::Parser;
 use rouille::Server;
-use rtc::dtls::extension::extension_use_srtp::SrtpProtectionProfile;
-use rtc::peer_connection::certificate::RTCCertificate;
-use sfu::ServerConfig;
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::{IpAddr, UdpSocket};
 use std::str::FromStr;
-use std::sync::mpsc::{self};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::mpsc::{self};
 use wg::WaitGroup;
 
-mod sync_signal;
+mod signaling;
 mod util;
 
-use sync_signal::*;
+use signaling::*;
 
 #[derive(Default, Debug, Copy, Clone, clap::ValueEnum)]
 enum Level {
@@ -82,8 +78,8 @@ fn main() -> anyhow::Result<()> {
             .init();
     }
 
-    let certificate = include_bytes!("examples/util/cer.pem").to_vec();
-    let private_key = include_bytes!("examples/util/key.pem").to_vec();
+    let certificate = include_bytes!("util/cer.pem").to_vec();
+    let private_key = include_bytes!("util/key.pem").to_vec();
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = if cli.host == "127.0.0.1" && !cli.force_local_loop {
@@ -96,29 +92,6 @@ fn main() -> anyhow::Result<()> {
     let (stop_tx, stop_rx) = crossbeam_channel::bounded::<()>(1);
     let mut media_port_thread_map = HashMap::new();
 
-    let key_pair = rcgen::KeyPair::generate()?;
-    let certificates = vec![RTCCertificate::from_key_pair(key_pair)?];
-    let dtls_handshake_config = Arc::new(
-        rtc::dtls::config::ConfigBuilder::default()
-            .with_certificates(
-                certificates
-                    .iter()
-                    .map(|c| c.dtls_certificate.clone())
-                    .collect(),
-            )
-            .with_srtp_protection_profiles(vec![SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80])
-            .with_extended_master_secret(rtc::dtls::config::ExtendedMasterSecretType::Require)
-            .build(false, None)?,
-    );
-    let sctp_endpoint_config = Arc::new(rtc::sctp::EndpointConfig::default());
-    let sctp_server_config = Arc::new(rtc::sctp::ServerConfig::default());
-    let server_config = Arc::new(
-        ServerConfig::new(certificates)
-            .with_dtls_handshake_config(dtls_handshake_config)
-            .with_sctp_endpoint_config(sctp_endpoint_config)
-            .with_sctp_server_config(sctp_server_config)
-            .with_idle_timeout(Duration::from_secs(30)),
-    );
     let wait_group = WaitGroup::new();
 
     for port in media_ports {
@@ -132,10 +105,10 @@ fn main() -> anyhow::Result<()> {
             .expect(&format!("binding to {host_addr}:{port}"));
 
         media_port_thread_map.insert(port, signaling_tx);
-        let server_config = server_config.clone();
+
         // The run loop is on a separate thread to the web server.
         std::thread::spawn(move || {
-            if let Err(err) = sync_run(stop_rx, socket, signaling_rx, server_config) {
+            if let Err(err) = sync_run(stop_rx, socket, signaling_rx) {
                 eprintln!("run_sfu got error: {}", err);
             }
             worker.done();

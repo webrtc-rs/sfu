@@ -2,7 +2,6 @@
 
 use bytes::Bytes;
 use rouille::{Request, Response, ResponseBody};
-use sfu::ServerConfig;
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::UdpSocket;
@@ -84,7 +83,6 @@ pub fn sync_run(
     _stop_rx: crossbeam_channel::Receiver<()>,
     _socket: UdpSocket,
     _rx: Receiver<SignalingMessage>,
-    _server_config: Arc<ServerConfig>,
 ) -> anyhow::Result<()> {
     /*TODO: let server_states = Rc::new(RefCell::new(ServerStates::new(
         server_config,
