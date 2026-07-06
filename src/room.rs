@@ -1,6 +1,6 @@
-use crate::client::{Client, ClientBuilder, ClientId};
+use crate::client::{Client, ClientBuilder, ClientEvent, ClientId};
 use crate::demuxer::Demuxer;
-use crate::event::Event;
+use crate::event::SFUEvent;
 use log::warn;
 use rtc::ice::rand::{generate_pwd, generate_ufrag};
 use rtc::interceptor::Registry;
@@ -26,7 +26,7 @@ pub(crate) struct Room {
     clients: HashMap<ClientId, Client>,
 
     writes: VecDeque<TaggedBytesMut>,
-    events: VecDeque<Event>,
+    events: VecDeque<SFUEvent>,
 }
 
 impl Room {
@@ -78,10 +78,10 @@ impl Room {
     }
 }
 
-impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
+impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
-    type Eout = Event;
+    type Eout = SFUEvent;
     type Error = Error;
     type Time = Instant;
 
@@ -160,7 +160,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
         self.writes.pop_front()
     }
 
-    fn handle_event(&mut self, evt: Event) -> Result<(), Self::Error> {
+    fn handle_event(&mut self, evt: SFUEvent) -> Result<(), Self::Error> {
         let room_id = if let Some(room_id) = evt.room_id() {
             if room_id != self.id {
                 return Err(Error::Other(format!("invalid room id: {}", room_id)));
@@ -173,13 +173,13 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
         if let Some(client_id) = evt.client_id() {
             let mut remove_client = false;
             if let Some(client) = self.clients.get_mut(&client_id) {
-                if let Event::Leave { .. } = &evt {
+                if let SFUEvent::Leave { .. } = &evt {
                     client.close()?;
                     remove_client = true;
                 } else {
-                    client.handle_event(evt)?;
+                    client.handle_event(ClientEvent::SFUEvent(evt))?;
                 }
-            } else if let Event::Join { .. } = &evt {
+            } else if let SFUEvent::Join { .. } = &evt {
                 let client = self.build_client(client_id, room_id)?;
                 self.clients.insert(client_id, client);
             }
@@ -187,12 +187,12 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
             if remove_client {
                 self.clients.remove(&client_id);
             }
-        } else if let Event::Err {
+        } else if let SFUEvent::Err {
             request_id, reason, ..
         } = evt
         {
             warn!("{}:{} receives err due to {}", request_id, room_id, reason);
-        } else if let Event::Ok { request_id, .. } = evt {
+        } else if let SFUEvent::Ok { request_id, .. } = evt {
             warn!("{}:{} receives ok", request_id, room_id,);
         }
 
@@ -202,7 +202,14 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     fn poll_event(&mut self) -> Option<Self::Eout> {
         for client in self.clients.values_mut() {
             while let Some(event) = client.poll_event() {
-                self.events.push_back(event);
+                match event {
+                    ClientEvent::SFUEvent(evt) => {
+                        self.events.push_back(evt);
+                    }
+                    ClientEvent::PeerConnectionEvent(_) => {
+                        //TODO:
+                    }
+                }
             }
         }
         self.events.pop_front()

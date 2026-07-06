@@ -1,5 +1,5 @@
 use crate::room::RoomId;
-use crate::{Event, RequestId};
+use crate::{RequestId, SFUEvent};
 use log::{info, warn};
 use rtc::ice::candidate::CandidateConfig;
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
@@ -286,13 +286,19 @@ pub(crate) struct Client {
 
     reads: VecDeque<RTCMessage>,
     writes: VecDeque<TaggedBytesMut>,
-    events: VecDeque<Event>,
+    events: VecDeque<ClientEvent>,
 }
 
-impl Protocol<TaggedBytesMut, RTCMessage, Event> for Client {
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum ClientEvent {
+    SFUEvent(SFUEvent),
+    PeerConnectionEvent(RTCPeerConnectionEvent),
+}
+
+impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
     type Rout = RTCMessage;
     type Wout = TaggedBytesMut;
-    type Eout = Event;
+    type Eout = ClientEvent;
     type Error = Error;
     type Time = Instant;
 
@@ -319,79 +325,13 @@ impl Protocol<TaggedBytesMut, RTCMessage, Event> for Client {
         self.writes.pop_front()
     }
 
-    fn handle_event(&mut self, evt: Event) -> std::result::Result<(), Self::Error> {
-        if let Some(room_id) = evt.room_id() {
-            if room_id != self.room_id {
-                return Err(Error::Other(format!("invalid room id: {}", room_id)));
-            }
-        } else {
-            return Err(Error::Other("empty room id".to_string()));
-        };
-
-        if let Some(client_id) = evt.client_id() {
-            if client_id != self.id {
-                return Err(Error::Other(format!("invalid client id: {}", client_id)));
-            }
-        } else {
-            return Err(Error::Other("empty client id".to_string()));
-        }
-
+    fn handle_event(&mut self, evt: ClientEvent) -> std::result::Result<(), Self::Error> {
         match evt {
-            Event::Ok { request_id, .. } => {
-                warn!("{}:{}:{} receives ok", request_id, self.room_id, self.id,);
+            ClientEvent::SFUEvent(evt) => {
+                self.handle_sfu_event(evt)?;
             }
-            Event::Err {
-                request_id, reason, ..
-            } => {
-                warn!(
-                    "{}:{}:{} receives err due to {}",
-                    request_id, self.room_id, self.id, reason
-                );
-            }
-            Event::Join {
-                request_id,
-                room_id,
-                client_id,
-            } => {
-                warn!(
-                    "{}:{}:{} has already joined",
-                    request_id, room_id, client_id
-                );
-            }
-            Event::SessionDescription {
-                request_id,
-                room_id,
-                client_id,
-                sdp,
-            } => {
-                info!(
-                    "{}:{}:{} receives sdp type {} and {}",
-                    request_id, room_id, client_id, sdp.sdp_type, sdp.sdp
-                );
-                self.handle_session_description(request_id, sdp)?;
-            }
-            Event::IceCandidate {
-                request_id,
-                room_id,
-                client_id,
-                candidate,
-            } => {
-                info!(
-                    "{}:{}:{} receives ice candidate {}",
-                    request_id, room_id, client_id, candidate.candidate
-                );
-                self.peer_connection.add_remote_candidate(candidate)?;
-            }
-            Event::Leave {
-                request_id,
-                room_id,
-                client_id,
-                reason,
-            } => {
-                warn!(
-                    "{}:{}:{} has already left due to {}",
-                    request_id, room_id, client_id, reason
-                );
+            ClientEvent::PeerConnectionEvent(_) => {
+                //TODO:
             }
         }
 
@@ -400,8 +340,7 @@ impl Protocol<TaggedBytesMut, RTCMessage, Event> for Client {
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
         while let Some(evt) = self.peer_connection.poll_event() {
-            //TODO: process peer_connection's poll_event
-            info!("TODO: process peer_connection's poll_event {:?}", evt);
+            self.events.push_back(ClientEvent::PeerConnectionEvent(evt));
         }
 
         self.events.pop_front()
@@ -450,17 +389,96 @@ impl Client {
 
             self.peer_connection.set_local_description(answer)?;
 
-            self.events.push_back(Event::SessionDescription {
-                request_id,
-                room_id: self.room_id,
-                client_id: self.id,
-                sdp: self
-                    .peer_connection
-                    .local_description()
-                    .ok_or(Error::ErrPeerConnLocalDescriptionNil)?,
-            })
+            self.events
+                .push_back(ClientEvent::SFUEvent(SFUEvent::SessionDescription {
+                    request_id,
+                    room_id: self.room_id,
+                    client_id: self.id,
+                    sdp: self
+                        .peer_connection
+                        .local_description()
+                        .ok_or(Error::ErrPeerConnLocalDescriptionNil)?,
+                }))
         }
 
+        Ok(())
+    }
+
+    fn handle_sfu_event(&mut self, evt: SFUEvent) -> Result<()> {
+        if let Some(room_id) = evt.room_id() {
+            if room_id != self.room_id {
+                return Err(Error::Other(format!("invalid room id: {}", room_id)));
+            }
+        } else {
+            return Err(Error::Other("empty room id".to_string()));
+        };
+
+        if let Some(client_id) = evt.client_id() {
+            if client_id != self.id {
+                return Err(Error::Other(format!("invalid client id: {}", client_id)));
+            }
+        } else {
+            return Err(Error::Other("empty client id".to_string()));
+        }
+
+        match evt {
+            SFUEvent::Ok { request_id, .. } => {
+                warn!("{}:{}:{} receives ok", request_id, self.room_id, self.id,);
+            }
+            SFUEvent::Err {
+                request_id, reason, ..
+            } => {
+                warn!(
+                    "{}:{}:{} receives err due to {}",
+                    request_id, self.room_id, self.id, reason
+                );
+            }
+            SFUEvent::Join {
+                request_id,
+                room_id,
+                client_id,
+            } => {
+                warn!(
+                    "{}:{}:{} has already joined",
+                    request_id, room_id, client_id
+                );
+            }
+            SFUEvent::SessionDescription {
+                request_id,
+                room_id,
+                client_id,
+                sdp,
+            } => {
+                info!(
+                    "{}:{}:{} receives sdp type {} and {}",
+                    request_id, room_id, client_id, sdp.sdp_type, sdp.sdp
+                );
+                self.handle_session_description(request_id, sdp)?;
+            }
+            SFUEvent::IceCandidate {
+                request_id,
+                room_id,
+                client_id,
+                candidate,
+            } => {
+                info!(
+                    "{}:{}:{} receives ice candidate {}",
+                    request_id, room_id, client_id, candidate.candidate
+                );
+                self.peer_connection.add_remote_candidate(candidate)?;
+            }
+            SFUEvent::Leave {
+                request_id,
+                room_id,
+                client_id,
+                reason,
+            } => {
+                warn!(
+                    "{}:{}:{} has already left due to {}",
+                    request_id, room_id, client_id, reason
+                );
+            }
+        }
         Ok(())
     }
 }

@@ -1,5 +1,5 @@
 use crate::demuxer::Demuxer;
-use crate::event::Event;
+use crate::event::SFUEvent;
 use crate::room::{Room, RoomId};
 use log::{info, warn};
 use rtc::shared::TaggedBytesMut;
@@ -19,7 +19,7 @@ pub struct Sfu {
     rooms: HashMap<RoomId, Room>,
 
     writes: VecDeque<TaggedBytesMut>,
-    events: VecDeque<Event>,
+    events: VecDeque<SFUEvent>,
 }
 
 impl Sfu {
@@ -36,10 +36,10 @@ impl Sfu {
     }
 }
 
-impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
+impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Sfu {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
-    type Eout = Event;
+    type Eout = SFUEvent;
     type Error = Error;
     type Time = Instant;
 
@@ -81,16 +81,16 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
         self.writes.pop_front()
     }
 
-    fn handle_event(&mut self, evt: Event) -> Result<(), Self::Error> {
+    fn handle_event(&mut self, evt: SFUEvent) -> Result<(), Self::Error> {
         if let Some(room_id) = evt.room_id() {
             let mut remove_room = false;
             if let Some(room) = self.rooms.get_mut(&room_id) {
-                let is_leave_event = matches!(evt, Event::Leave { .. });
+                let is_leave_event = matches!(evt, SFUEvent::Leave { .. });
                 room.handle_event(evt)?;
                 if is_leave_event && room.is_empty() {
                     remove_room = true;
                 }
-            } else if let Event::Join { .. } = &evt {
+            } else if let SFUEvent::Join { .. } = &evt {
                 let mut room = Room::new(room_id, self.local_addr);
                 room.handle_event(evt)?;
                 self.rooms.insert(room_id, room);
@@ -99,12 +99,12 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
             if remove_room {
                 self.rooms.remove(&room_id);
             }
-        } else if let Event::Err {
+        } else if let SFUEvent::Err {
             request_id, reason, ..
         } = evt
         {
             warn!("{} receives err due to {}", request_id, reason);
-        } else if let Event::Ok { request_id, .. } = evt {
+        } else if let SFUEvent::Ok { request_id, .. } = evt {
             warn!("{} receives ok", request_id);
         }
 
@@ -150,7 +150,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
 mod tests {
     use super::*;
     use crate::RequestId;
-    use crate::event::Event;
+    use crate::event::SFUEvent;
     use rtc::peer_connection::RTCPeerConnectionBuilder;
     use rtc::peer_connection::configuration::media_engine::MediaEngine;
     use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
@@ -183,7 +183,7 @@ mod tests {
     }
 
     fn join(sfu: &mut Sfu, request_id: RequestId) {
-        sfu.handle_event(Event::Join {
+        sfu.handle_event(SFUEvent::Join {
             request_id,
             room_id: ROOM,
             client_id: CLIENT,
@@ -209,7 +209,7 @@ mod tests {
         join(&mut sfu, 1);
         assert!(sfu.rooms.contains_key(&ROOM));
 
-        sfu.handle_event(Event::Leave {
+        sfu.handle_event(SFUEvent::Leave {
             request_id: 2,
             room_id: ROOM,
             client_id: CLIENT,
@@ -230,7 +230,7 @@ mod tests {
         join(&mut sfu, 1);
 
         let request_id: RequestId = 2;
-        sfu.handle_event(Event::SessionDescription {
+        sfu.handle_event(SFUEvent::SessionDescription {
             request_id,
             room_id: ROOM,
             client_id: CLIENT,
@@ -243,7 +243,7 @@ mod tests {
             .expect("the SFU should emit an answer for the offer");
 
         match event {
-            Event::SessionDescription {
+            SFUEvent::SessionDescription {
                 request_id: got_request_id,
                 room_id,
                 client_id,

@@ -9,6 +9,6 @@ pub(crate) mod room;
 pub(crate) mod sfu;
 
 pub use client::ClientId;
-pub use event::{Event, RequestId};
+pub use event::{RequestId, SFUEvent};
 pub use room::RoomId;
 pub use sfu::{Sfu, SfuId};

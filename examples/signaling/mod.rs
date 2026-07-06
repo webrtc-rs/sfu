@@ -7,7 +7,7 @@ use rouille::{Request, Response, ResponseBody};
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
 use sansio::Protocol;
-use sfu::{ClientId, Event, RequestId, RoomId, Sfu};
+use sfu::{ClientId, RequestId, RoomId, SFUEvent, Sfu};
 use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read};
 use std::net::UdpSocket;
@@ -33,8 +33,8 @@ pub enum Command {
 }
 
 pub struct SignalingMessage {
-    pub request: Event,
-    pub response_tx: SyncSender<Event>,
+    pub request: SFUEvent,
+    pub response_tx: SyncSender<SFUEvent>,
 }
 
 /// Streaming body for a Server-Sent Events response. Blocks on the per-client
@@ -134,7 +134,7 @@ pub fn web_request(
             let (response_tx, response_rx) = mpsc::sync_channel(1);
             send_signal(
                 tx,
-                Event::Join {
+                SFUEvent::Join {
                     request_id: random(),
                     room_id,
                     client_id,
@@ -142,7 +142,7 @@ pub fn web_request(
                 response_tx,
             );
             match response_rx.recv() {
-                Ok(Event::Ok { .. }) => ok_200(),
+                Ok(SFUEvent::Ok { .. }) => ok_200(),
                 _ => Response::empty_404(),
             }
         }
@@ -151,7 +151,7 @@ pub fn web_request(
             let offer_str = String::from_utf8(sdp).unwrap();
             send_signal(
                 tx,
-                Event::SessionDescription {
+                SFUEvent::SessionDescription {
                     request_id: random(),
                     room_id,
                     client_id,
@@ -162,7 +162,9 @@ pub fn web_request(
             // The answer is produced by the SFU and delivered asynchronously by the
             // run loop (see `drain_events`), so wait for it here.
             match response_rx.recv_timeout(OFFER_ANSWER_TIMEOUT) {
-                Ok(Event::SessionDescription { sdp, .. }) if sdp.sdp_type == RTCSdpType::Answer => {
+                Ok(SFUEvent::SessionDescription { sdp, .. })
+                    if sdp.sdp_type == RTCSdpType::Answer =>
+                {
                     Response::from_data("application/json", serde_json::to_string(&sdp).unwrap())
                 }
                 _ => Response::empty_404(),
@@ -173,7 +175,7 @@ pub fn web_request(
             let answer_str = String::from_utf8(sdp).unwrap();
             send_signal(
                 tx,
-                Event::SessionDescription {
+                SFUEvent::SessionDescription {
                     request_id: random(),
                     room_id,
                     client_id,
@@ -182,7 +184,7 @@ pub fn web_request(
                 response_tx,
             );
             match response_rx.recv() {
-                Ok(Event::Ok { .. }) => ok_200(),
+                Ok(SFUEvent::Ok { .. }) => ok_200(),
                 _ => Response::empty_404(),
             }
         }
@@ -190,7 +192,7 @@ pub fn web_request(
             let (response_tx, response_rx) = mpsc::sync_channel(1);
             send_signal(
                 tx,
-                Event::Leave {
+                SFUEvent::Leave {
                     request_id: random(),
                     room_id,
                     client_id,
@@ -240,7 +242,7 @@ fn subscribe_events(
     }
 }
 
-fn send_signal(tx: &SyncSender<Command>, request: Event, response_tx: SyncSender<Event>) {
+fn send_signal(tx: &SyncSender<Command>, request: SFUEvent, response_tx: SyncSender<SFUEvent>) {
     tx.send(Command::Signal(SignalingMessage {
         request,
         response_tx,
@@ -271,7 +273,7 @@ pub fn run(
     // Per-client SSE push channels (server -> browser), and the answer channels of
     // in-flight `POST /offer` requests awaiting the SFU's answer.
     let mut subscribers: HashMap<ClientId, SyncSender<String>> = HashMap::new();
-    let mut pending_offers: HashMap<RequestId, SyncSender<Event>> = HashMap::new();
+    let mut pending_offers: HashMap<RequestId, SyncSender<SFUEvent>> = HashMap::new();
 
     let mut buf = vec![0; 2000];
     loop {
@@ -361,12 +363,12 @@ pub fn run(
 ///   `POST /answer` — no data channel involved.
 fn poll_event(
     sfu: &mut Sfu,
-    pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
+    pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
     subscribers: &mut HashMap<ClientId, SyncSender<String>>,
 ) {
     while let Some(evt) = sfu.poll_event() {
         match evt {
-            Event::SessionDescription {
+            SFUEvent::SessionDescription {
                 request_id,
                 room_id,
                 client_id,
@@ -375,7 +377,7 @@ fn poll_event(
                 if sdp.sdp_type == RTCSdpType::Answer {
                     match pending_offers.remove(&request_id) {
                         Some(response_tx) => {
-                            let _ = response_tx.send(Event::SessionDescription {
+                            let _ = response_tx.send(SFUEvent::SessionDescription {
                                 request_id,
                                 room_id,
                                 client_id,
@@ -422,7 +424,7 @@ fn push_to_subscriber(
 fn handle_command(
     sfu: &mut Sfu,
     command: Command,
-    pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
+    pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
     subscribers: &mut HashMap<ClientId, SyncSender<String>>,
 ) -> anyhow::Result<()> {
     match command {
@@ -438,7 +440,7 @@ fn handle_command(
         Command::Signal(msg) => {
             // Tear down a client's SSE stream when it leaves.
             let leaving = match &msg.request {
-                Event::Leave { client_id, .. } => Some(*client_id),
+                SFUEvent::Leave { client_id, .. } => Some(*client_id),
                 _ => None,
             };
             let result = handle_signaling_message(sfu, msg, pending_offers);
@@ -453,10 +455,10 @@ fn handle_command(
 pub fn handle_signaling_message(
     sfu: &mut Sfu,
     signaling_msg: SignalingMessage,
-    pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
+    pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
 ) -> anyhow::Result<()> {
     match signaling_msg.request {
-        Event::Join {
+        SFUEvent::Join {
             request_id,
             room_id,
             client_id,
@@ -467,7 +469,7 @@ pub fn handle_signaling_message(
             client_id,
             signaling_msg.response_tx,
         ),
-        Event::SessionDescription {
+        SFUEvent::SessionDescription {
             request_id,
             room_id,
             client_id,
@@ -481,7 +483,7 @@ pub fn handle_signaling_message(
             signaling_msg.response_tx,
             pending_offers,
         ),
-        Event::Leave {
+        SFUEvent::Leave {
             request_id,
             room_id,
             client_id,
@@ -494,30 +496,30 @@ pub fn handle_signaling_message(
             reason,
             signaling_msg.response_tx,
         ),
-        Event::IceCandidate {
+        SFUEvent::IceCandidate {
             request_id,
             room_id,
             client_id,
             candidate: _,
-        } => Ok(signaling_msg.response_tx.send(Event::Err {
+        } => Ok(signaling_msg.response_tx.send(SFUEvent::Err {
             request_id,
             room_id: Some(room_id),
             client_id: Some(client_id),
             reason: "Unsupported Request yet".to_string(),
         })?),
-        Event::Ok {
+        SFUEvent::Ok {
             request_id,
             room_id,
             client_id,
             ..
         }
-        | Event::Err {
+        | SFUEvent::Err {
             request_id,
             room_id,
             client_id,
             reason: _,
             ..
-        } => Ok(signaling_msg.response_tx.send(Event::Err {
+        } => Ok(signaling_msg.response_tx.send(SFUEvent::Err {
             request_id,
             room_id,
             client_id,
@@ -531,11 +533,11 @@ fn handle_join_message(
     request_id: RequestId,
     room_id: RoomId,
     client_id: ClientId,
-    response_tx: SyncSender<Event>,
+    response_tx: SyncSender<SFUEvent>,
 ) -> anyhow::Result<()> {
     let mut try_handle = || -> anyhow::Result<()> {
         log::info!("handle_join_message: {}/{}", room_id, client_id);
-        Ok(sfu.handle_event(Event::Join {
+        Ok(sfu.handle_event(SFUEvent::Join {
             request_id,
             room_id,
             client_id,
@@ -543,12 +545,12 @@ fn handle_join_message(
     };
 
     match try_handle() {
-        Ok(_) => Ok(response_tx.send(Event::Ok {
+        Ok(_) => Ok(response_tx.send(SFUEvent::Ok {
             request_id,
             room_id: Some(room_id),
             client_id: Some(client_id),
         })?),
-        Err(err) => Ok(response_tx.send(Event::Err {
+        Err(err) => Ok(response_tx.send(SFUEvent::Err {
             request_id,
             room_id: Some(room_id),
             client_id: Some(client_id),
@@ -570,8 +572,8 @@ fn handle_session_description(
     room_id: RoomId,
     client_id: ClientId,
     sdp: RTCSessionDescription,
-    response_tx: SyncSender<Event>,
-    pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
+    response_tx: SyncSender<SFUEvent>,
+    pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
 ) -> anyhow::Result<()> {
     let is_offer = sdp.sdp_type == RTCSdpType::Offer;
     log::info!(
@@ -582,7 +584,7 @@ fn handle_session_description(
         sdp.sdp,
     );
 
-    match sfu.handle_event(Event::SessionDescription {
+    match sfu.handle_event(SFUEvent::SessionDescription {
         request_id,
         room_id,
         client_id,
@@ -594,14 +596,14 @@ fn handle_session_description(
                 pending_offers.insert(request_id, response_tx);
                 Ok(())
             } else {
-                Ok(response_tx.send(Event::Ok {
+                Ok(response_tx.send(SFUEvent::Ok {
                     request_id,
                     room_id: Some(room_id),
                     client_id: Some(client_id),
                 })?)
             }
         }
-        Err(err) => Ok(response_tx.send(Event::Err {
+        Err(err) => Ok(response_tx.send(SFUEvent::Err {
             request_id,
             room_id: Some(room_id),
             client_id: Some(client_id),
@@ -616,11 +618,11 @@ fn handle_leave_message(
     room_id: RoomId,
     client_id: ClientId,
     reason: String,
-    response_tx: SyncSender<Event>,
+    response_tx: SyncSender<SFUEvent>,
 ) -> anyhow::Result<()> {
     let try_handle = || -> anyhow::Result<()> {
         log::info!("handle_leave_message: {}/{}", room_id, client_id);
-        Ok(sfu.handle_event(Event::Leave {
+        Ok(sfu.handle_event(SFUEvent::Leave {
             request_id,
             room_id,
             client_id,
@@ -629,12 +631,12 @@ fn handle_leave_message(
     };
 
     match try_handle() {
-        Ok(_) => Ok(response_tx.send(Event::Ok {
+        Ok(_) => Ok(response_tx.send(SFUEvent::Ok {
             request_id,
             room_id: Some(room_id),
             client_id: Some(client_id),
         })?),
-        Err(err) => Ok(response_tx.send(Event::Err {
+        Err(err) => Ok(response_tx.send(SFUEvent::Err {
             request_id,
             room_id: Some(room_id),
             client_id: Some(client_id),
