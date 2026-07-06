@@ -18,7 +18,7 @@ pub struct Sfu {
     demuxer: Demuxer,
     rooms: HashMap<RoomId, Room>,
 
-    transmits: VecDeque<TaggedBytesMut>,
+    writes: VecDeque<TaggedBytesMut>,
     events: VecDeque<Event>,
 }
 
@@ -30,7 +30,7 @@ impl Sfu {
 
             demuxer: Default::default(),
             rooms: Default::default(),
-            transmits: Default::default(),
+            writes: Default::default(),
             events: Default::default(),
         }
     }
@@ -74,11 +74,11 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
 
     fn poll_write(&mut self) -> Option<Self::Wout> {
         for room in self.rooms.values_mut() {
-            while let Some(transmit) = room.poll_write() {
-                self.transmits.push_back(transmit);
+            while let Some(msg) = room.poll_write() {
+                self.writes.push_back(msg);
             }
         }
-        self.transmits.pop_front()
+        self.writes.pop_front()
     }
 
     fn handle_event(&mut self, evt: Event) -> Result<(), Self::Error> {
@@ -140,7 +140,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
 
     fn close(&mut self) -> Result<(), Self::Error> {
         self.rooms.clear();
-        self.transmits.clear();
+        self.writes.clear();
         self.events.clear();
         Ok(())
     }

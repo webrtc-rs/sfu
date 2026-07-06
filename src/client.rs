@@ -24,7 +24,6 @@ use rtc::statistics::StatsSelector;
 use rtc::statistics::report::RTCStatsReport;
 use sansio::Protocol;
 use std::collections::VecDeque;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Instant;
 
@@ -270,7 +269,8 @@ where
             local_addr: self.local_addr,
             peer_connection: Box::new(self.peer_connection_builder.build()?),
 
-            transmits: Default::default(),
+            reads: Default::default(),
+            writes: Default::default(),
             events: Default::default(),
         })
     }
@@ -284,12 +284,13 @@ pub(crate) struct Client {
     local_addr: SocketAddr,
     peer_connection: Box<dyn PeerConnection>,
 
-    transmits: VecDeque<TaggedBytesMut>,
+    reads: VecDeque<RTCMessage>,
+    writes: VecDeque<TaggedBytesMut>,
     events: VecDeque<Event>,
 }
 
-impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
-    type Rout = Infallible;
+impl Protocol<TaggedBytesMut, RTCMessage, Event> for Client {
+    type Rout = RTCMessage;
     type Wout = TaggedBytesMut;
     type Eout = Event;
     type Error = Error;
@@ -301,23 +302,21 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
 
     fn poll_read(&mut self) -> Option<Self::Rout> {
         while let Some(msg) = self.peer_connection.poll_read() {
-            //TODO: process peer_connection's poll_read
-            info!("TODO: process peer_connection's poll_read {:?}", msg);
+            self.reads.push_back(msg);
         }
-
-        None
+        self.reads.pop_front()
     }
 
-    fn handle_write(&mut self, _msg: Infallible) -> std::result::Result<(), Self::Error> {
-        match _msg {}
+    fn handle_write(&mut self, msg: RTCMessage) -> std::result::Result<(), Self::Error> {
+        self.peer_connection.handle_write(msg)
     }
 
     fn poll_write(&mut self) -> Option<Self::Wout> {
         while let Some(msg) = self.peer_connection.poll_write() {
-            self.transmits.push_back(msg);
+            self.writes.push_back(msg);
         }
 
-        self.transmits.pop_front()
+        self.writes.pop_front()
     }
 
     fn handle_event(&mut self, evt: Event) -> std::result::Result<(), Self::Error> {

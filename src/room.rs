@@ -1,12 +1,13 @@
 use crate::client::{Client, ClientBuilder, ClientId};
 use crate::demuxer::Demuxer;
 use crate::event::Event;
-use log::{info, warn};
+use log::warn;
 use rtc::ice::rand::{generate_pwd, generate_ufrag};
 use rtc::interceptor::Registry;
 use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
+use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
@@ -24,7 +25,7 @@ pub(crate) struct Room {
     demuxer: Demuxer,
     clients: HashMap<ClientId, Client>,
 
-    transmits: VecDeque<TaggedBytesMut>,
+    writes: VecDeque<TaggedBytesMut>,
     events: VecDeque<Event>,
 }
 
@@ -36,7 +37,7 @@ impl Room {
 
             demuxer: Default::default(),
             clients: Default::default(),
-            transmits: Default::default(),
+            writes: Default::default(),
             events: Default::default(),
         }
     }
@@ -112,12 +113,33 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     }
 
     fn poll_read(&mut self) -> Option<Self::Rout> {
-        for client in self.clients.values_mut() {
+        let mut forwardings: HashMap<ClientId, VecDeque<RTCMessage>> = HashMap::new();
+        for (client_id, client) in &mut self.clients {
             while let Some(msg) = client.poll_read() {
-                info!(
-                    "process client's poll_read {:?}, should always be None",
-                    msg
-                );
+                if let RTCMessage::DataChannelMessage(data_channel_id, _) = &msg {
+                    warn!(
+                        "Drop data channel message for data channel id {}",
+                        data_channel_id
+                    );
+                } else {
+                    forwardings.entry(*client_id).or_default().push_back(msg);
+                }
+            }
+        }
+
+        for (client_id, mut reads) in forwardings.drain() {
+            while let Some(msg) = reads.pop_front() {
+                for (peer_id, peer) in &mut self.clients {
+                    //TODO: Selective Forwarding RTP Packets by using ForwardTable?
+                    if client_id != *peer_id
+                        && let Err(err) = peer.handle_write(msg.clone())
+                    {
+                        warn!(
+                            "{}: {}->{} forward packet got err: {}",
+                            self.id, client_id, peer_id, err
+                        );
+                    }
+                }
             }
         }
 
@@ -131,11 +153,11 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     fn poll_write(&mut self) -> Option<Self::Wout> {
         for client in self.clients.values_mut() {
             while let Some(msg) = client.poll_write() {
-                self.transmits.push_back(msg);
+                self.writes.push_back(msg);
             }
         }
 
-        self.transmits.pop_front()
+        self.writes.pop_front()
     }
 
     fn handle_event(&mut self, evt: Event) -> Result<(), Self::Error> {
@@ -205,7 +227,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
 
     fn close(&mut self) -> Result<(), Self::Error> {
         self.clients.clear();
-        self.transmits.clear();
+        self.writes.clear();
         self.events.clear();
         Ok(())
     }
