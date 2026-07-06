@@ -1,7 +1,7 @@
 use crate::demuxer::Demuxer;
 use crate::event::Event;
 use crate::room::{Room, RoomId};
-use log::warn;
+use log::{info, warn};
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
@@ -60,6 +60,11 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
     }
 
     fn poll_read(&mut self) -> Option<Self::Rout> {
+        for room in self.rooms.values_mut() {
+            while let Some(msg) = room.poll_read() {
+                info!("process room's poll_read {:?}, should always be None", msg);
+            }
+        }
         None
     }
 

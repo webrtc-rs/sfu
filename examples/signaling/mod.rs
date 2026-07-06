@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use bytes::BytesMut;
-use log::{error, warn};
+use log::{error, info, warn};
 use rand::random;
 use rouille::{Request, Response, ResponseBody};
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
@@ -300,7 +300,11 @@ pub fn run(
 
         // Drain SFU-emitted events: answers -> the pending POST /offer; server-initiated
         // offers -> the target client's SSE stream.
-        drain_events(&mut sfu, &mut pending_offers, &mut subscribers);
+        poll_event(&mut sfu, &mut pending_offers, &mut subscribers);
+
+        while let Some(msg) = sfu.poll_read() {
+            info!("process sfu's poll_read {:?}, should always be None", msg);
+        }
 
         // Poll clients until they return timeout
         let eto = sfu
@@ -355,7 +359,7 @@ pub fn run(
 /// - a `SessionDescription` **offer** is server-initiated (e.g. a subscribe re-offer)
 ///   and is pushed to that client's SSE stream, so the browser can answer it via
 ///   `POST /answer` — no data channel involved.
-fn drain_events(
+fn poll_event(
     sfu: &mut Sfu,
     pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
     subscribers: &mut HashMap<ClientId, SyncSender<String>>,
