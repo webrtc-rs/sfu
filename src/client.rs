@@ -1,6 +1,7 @@
 use crate::room::RoomId;
 use crate::{Event, RequestId};
 use log::{info, warn};
+use rtc::ice::candidate::CandidateConfig;
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
@@ -12,7 +13,7 @@ use rtc::peer_connection::configuration::{RTCAnswerOptions, RTCOfferOptions};
 use rtc::peer_connection::event::{RTCEvent, RTCPeerConnectionEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
-use rtc::peer_connection::transport::RTCIceCandidateInit;
+use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
 use rtc::rtp_transceiver::{
     RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverId, RTCRtpTransceiverInit,
@@ -24,6 +25,7 @@ use rtc::statistics::report::RTCStatsReport;
 use sansio::Protocol;
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::time::Instant;
 
 pub(crate) trait PeerConnection:
@@ -203,14 +205,16 @@ where
 {
     id: ClientId,
     room_id: RoomId,
+    local_addr: SocketAddr,
     peer_connection_builder: RTCPeerConnectionBuilder<I>,
 }
 
 impl ClientBuilder<NoopInterceptor> {
-    pub(crate) fn new(id: ClientId, room_id: RoomId) -> Self {
+    pub(crate) fn new(id: ClientId, room_id: RoomId, local_addr: SocketAddr) -> Self {
         Self {
             id,
             room_id,
+            local_addr,
             peer_connection_builder: RTCPeerConnectionBuilder::new(),
         }
     }
@@ -249,6 +253,7 @@ where
         ClientBuilder {
             id: self.id,
             room_id: self.room_id,
+            local_addr: self.local_addr,
             peer_connection_builder: self
                 .peer_connection_builder
                 .with_interceptor_registry(interceptor_registry),
@@ -262,6 +267,7 @@ where
         Ok(Client {
             id: self.id,
             room_id: self.room_id,
+            local_addr: self.local_addr,
             peer_connection: Box::new(self.peer_connection_builder.build()?),
 
             transmits: Default::default(),
@@ -275,6 +281,7 @@ pub type ClientId = u64;
 pub(crate) struct Client {
     id: ClientId,
     room_id: RoomId,
+    local_addr: SocketAddr,
     peer_connection: Box<dyn PeerConnection>,
 
     transmits: VecDeque<TaggedBytesMut>,
@@ -425,8 +432,25 @@ impl Client {
         self.peer_connection.set_remote_description(sdp)?;
 
         if sdp_type == RTCSdpType::Offer {
+            let candidate = CandidateHostConfig {
+                base_config: CandidateConfig {
+                    network: "udp".to_owned(),
+                    address: self.local_addr.ip().to_string(),
+                    port: self.local_addr.port(),
+                    component: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+            .new_candidate_host()?;
+            let local_candidate_init = RTCIceCandidate::from(&candidate).to_json()?;
+            self.peer_connection
+                .add_local_candidate(local_candidate_init)?;
+
             let answer = self.peer_connection.create_answer(None)?;
+
             self.peer_connection.set_local_description(answer)?;
+
             self.events.push_back(Event::SessionDescription {
                 request_id,
                 room_id: self.room_id,
@@ -454,7 +478,7 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let client = ClientBuilder::new(10, 20)
+        let client = ClientBuilder::new(10, 20, "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
             .build()
             .expect("default client should build");
@@ -470,7 +494,7 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let _ = ClientBuilder::new(1, 2)
+        let _ = ClientBuilder::new(1, 2, "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
             .build()
             .expect("client should build");
@@ -483,7 +507,7 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let _ = ClientBuilder::new(3, 4)
+        let _ = ClientBuilder::new(3, 4, "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
             .with_setting_engine(SettingEngine::default())
             .build()
@@ -498,7 +522,7 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let _ = ClientBuilder::new(5, 6)
+        let _ = ClientBuilder::new(5, 6, "0.0.0.0:0".parse().unwrap())
             .with_configuration(configuration)
             .with_media_engine(media_engine)
             .with_setting_engine(SettingEngine::default())

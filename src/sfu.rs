@@ -86,7 +86,7 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
                     remove_room = true;
                 }
             } else if let Event::Join { .. } = &evt {
-                let mut room = Room::new(room_id);
+                let mut room = Room::new(room_id, self.local_addr);
                 room.handle_event(evt)?;
                 self.rooms.insert(room_id, room);
             }

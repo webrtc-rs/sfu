@@ -12,13 +12,14 @@ use rtc::shared::error::Error;
 use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::time::Instant;
 
 pub type RoomId = u64;
 
-#[derive(Default)]
 pub(crate) struct Room {
     id: RoomId,
+    local_addr: SocketAddr,
     demuxer: Demuxer,
     clients: HashMap<ClientId, Client>,
 
@@ -27,10 +28,15 @@ pub(crate) struct Room {
 }
 
 impl Room {
-    pub(crate) fn new(id: RoomId) -> Self {
+    pub(crate) fn new(id: RoomId, local_addr: SocketAddr) -> Self {
         Self {
             id,
-            ..Default::default()
+            local_addr,
+
+            demuxer: Default::default(),
+            clients: Default::default(),
+            transmits: Default::default(),
+            events: Default::default(),
         }
     }
 
@@ -57,7 +63,7 @@ impl Room {
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
         let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
-        ClientBuilder::new(client_id, room_id)
+        ClientBuilder::new(client_id, room_id, self.local_addr)
             .with_setting_engine(setting_engine)
             .with_media_engine(media_engine)
             .with_interceptor_registry(registry)
