@@ -1,14 +1,20 @@
 #![allow(dead_code)]
 
+use anyhow::anyhow;
+use bytes::BytesMut;
+use log::error;
 use rand::random;
 use rouille::{Request, Response, ResponseBody};
 use rtc::peer_connection::sdp::RTCSessionDescription;
-use sfu::Event;
+use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
+use sansio::Protocol;
+use sfu::{ClientId, Event, RequestId, RoomId, Sfu};
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::net::UdpSocket;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 // Handle a web request.
 pub fn web_request(
@@ -111,23 +117,16 @@ pub fn web_request(
 
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.
-pub fn sync_run(
-    _stop_rx: crossbeam_channel::Receiver<()>,
-    _socket: UdpSocket,
-    _rx: Receiver<SignalingMessage>,
+pub fn run(
+    stop_rx: crossbeam_channel::Receiver<()>,
+    socket: UdpSocket,
+    rx: Receiver<SignalingMessage>,
 ) -> anyhow::Result<()> {
-    /*TODO: let server_states = Rc::new(RefCell::new(ServerStates::new(
-        server_config,
-        socket.local_addr()?,
-    )?));
-
     println!("listening {}...", socket.local_addr()?);
 
-    let pipeline = build_pipeline(socket.local_addr()?, server_states.clone());
+    let mut sfu = Sfu::new(random());
 
     let mut buf = vec![0; 2000];
-
-    pipeline.transport_active();
     loop {
         match stop_rx.try_recv() {
             Ok(_) => break,
@@ -138,263 +137,246 @@ pub fn sync_run(
             }
         };
 
-        write_socket_output(&socket, &pipeline)?;
+        while let Some(transmit) = sfu.poll_write() {
+            socket.send_to(&transmit.message, transmit.transport.peer_addr)?;
+        }
 
         // Spawn new incoming signal message from the signaling server thread.
         if let Ok(signal_message) = rx.try_recv() {
-            if let Err(err) = handle_signaling_message(&server_states, signal_message) {
+            if let Err(err) = handle_signaling_message(&mut sfu, signal_message) {
                 error!("handle_signaling_message got error:{}", err);
                 continue;
             }
         }
 
         // Poll clients until they return timeout
-        let mut eto = Instant::now() + Duration::from_millis(100);
-        pipeline.poll_timeout(&mut eto);
-
+        let eto = sfu
+            .poll_timeout()
+            .unwrap_or_else(|| Instant::now() + Duration::from_millis(100)); //TODO: DEFAULT_TIMEOUT_DURATION
         let delay_from_now = eto
             .checked_duration_since(Instant::now())
             .unwrap_or(Duration::from_secs(0));
         if delay_from_now.is_zero() {
-            pipeline.handle_timeout(Instant::now());
+            sfu.handle_timeout(Instant::now())?;
             continue;
         }
 
         socket
             .set_read_timeout(Some(delay_from_now))
             .expect("setting socket read timeout");
+        if let Some(packet) = match socket.recv_from(&mut buf) {
+            Ok((n, peer_addr)) => Some(TaggedBytesMut {
+                now: Instant::now(),
+                transport: TransportContext {
+                    local_addr: socket.local_addr().unwrap(),
+                    peer_addr,
+                    transport_protocol: TransportProtocol::UDP,
+                    ecn: None,
+                },
+                message: BytesMut::from(&buf[..n]),
+            }),
 
-        if let Some(input) = read_socket_input(&socket, &mut buf) {
-            pipeline.read(input);
+            Err(e) => match e.kind() {
+                // Expected error for set_read_timeout(). One for windows, one for the rest.
+                ErrorKind::WouldBlock | ErrorKind::TimedOut => None,
+                _ => panic!("UdpSocket read failed: {e:?}"),
+            },
+        } {
+            sfu.handle_read(packet)?;
         }
 
         // Drive time forward in all clients.
-        pipeline.handle_timeout(Instant::now());
+        sfu.handle_timeout(Instant::now())?;
     }
-    pipeline.transport_inactive();
 
     println!(
         "media server on {} is gracefully down",
         socket.local_addr()?
     );
-     */
-    Ok(())
-}
-/*TODO:
-fn write_socket_output(
-    socket: &UdpSocket,
-    pipeline: &Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>>,
-) -> anyhow::Result<()> {
-    while let Some(transmit) = pipeline.poll_transmit() {
-        socket.send_to(&transmit.message, transmit.transport.peer_addr)?;
-    }
 
     Ok(())
 }
-
-fn read_socket_input(socket: &UdpSocket, buf: &mut [u8]) -> Option<TaggedBytesMut> {
-    match socket.recv_from(buf) {
-        Ok((n, peer_addr)) => {
-            return Some(TaggedBytesMut {
-                now: Instant::now(),
-                transport: TransportContext {
-                    local_addr: socket.local_addr().unwrap(),
-                    peer_addr,
-                    ecn: None,
-                },
-                message: BytesMut::from(&buf[..n]),
-            });
-        }
-
-        Err(e) => match e.kind() {
-            // Expected error for set_read_timeout(). One for windows, one for the rest.
-            ErrorKind::WouldBlock | ErrorKind::TimedOut => None,
-            _ => panic!("UdpSocket read failed: {e:?}"),
-        },
-    }
-}
-
-fn build_pipeline(
-    local_addr: SocketAddr,
-    server_states: Rc<RefCell<ServerStates>>,
-) -> Rc<Pipeline<TaggedBytesMut, TaggedBytesMut>> {
-    let pipeline: Pipeline<TaggedBytesMut, TaggedBytesMut> = Pipeline::new();
-
-    let demuxer_handler = DemuxerHandler::new();
-    let stun_handler = StunHandler::new();
-    // DTLS
-    let dtls_handler = DtlsHandler::new(local_addr, Rc::clone(&server_states));
-    let sctp_handler = SctpHandler::new(local_addr, Rc::clone(&server_states));
-    let data_channel_handler = DataChannelHandler::new();
-    // SRTP
-    let srtp_handler = SrtpHandler::new(Rc::clone(&server_states));
-    let interceptor_handler = InterceptorHandler::new(Rc::clone(&server_states));
-    // Gateway
-    let gateway_handler = GatewayHandler::new(Rc::clone(&server_states));
-    let exception_handler = ExceptionHandler::new();
-
-    pipeline.add_back(demuxer_handler);
-    pipeline.add_back(stun_handler);
-    // DTLS
-    pipeline.add_back(dtls_handler);
-    pipeline.add_back(sctp_handler);
-    pipeline.add_back(data_channel_handler);
-    // SRTP
-    pipeline.add_back(srtp_handler);
-    pipeline.add_back(interceptor_handler);
-    // Gateway
-    pipeline.add_back(gateway_handler);
-    pipeline.add_back(exception_handler);
-
-    pipeline.finalize()
-}
-*/
 
 pub struct SignalingMessage {
     pub request: Event,
     pub response_tx: SyncSender<Event>,
 }
-/*
+
 pub fn handle_signaling_message(
-    server_states: &Rc<RefCell<ServerStates>>,
+    sfu: &mut Sfu,
     signaling_msg: SignalingMessage,
 ) -> anyhow::Result<()> {
     match signaling_msg.request {
-        SignalingProtocolMessage::Offer {
+        Event::Join {
+            request_id,
             room_id,
             client_id,
-            offer_sdp,
+        } => handle_join_message(
+            sfu,
+            request_id,
+            room_id,
+            client_id,
+            signaling_msg.response_tx,
+        ),
+        Event::SessionDescription {
+            request_id,
+            room_id,
+            client_id,
+            sdp,
         } => handle_offer_message(
-            server_states,
+            sfu,
+            request_id,
             room_id,
             client_id,
-            offer_sdp,
+            sdp,
             signaling_msg.response_tx,
         ),
-        SignalingProtocolMessage::Leave {
+        Event::Leave {
+            request_id,
             room_id,
             client_id,
+            reason,
         } => handle_leave_message(
-            server_states,
+            sfu,
+            request_id,
             room_id,
             client_id,
+            reason,
             signaling_msg.response_tx,
         ),
-        SignalingProtocolMessage::Ok {
+        Event::IceCandidate {
+            request_id,
             room_id,
             client_id,
+            candidate: _,
+        } => Ok(signaling_msg.response_tx.send(Event::Err {
+            request_id,
+            room_id: Some(room_id),
+            client_id: Some(client_id),
+            reason: "Unsupported Request yet".to_string(),
+        })?),
+        Event::Ok {
+            request_id,
+            room_id,
+            client_id,
+            ..
         }
-        | SignalingProtocolMessage::Err {
+        | Event::Err {
+            request_id,
             room_id,
             client_id,
             reason: _,
-        }
-        | SignalingProtocolMessage::Answer {
+            ..
+        } => Ok(signaling_msg.response_tx.send(Event::Err {
+            request_id,
             room_id,
             client_id,
-            answer_sdp: _,
-        } => Ok(signaling_msg
-            .response_tx
-            .send(SignalingProtocolMessage::Err {
-                room_id,
-                client_id,
-                reason: Bytes::from("Invalid Request"),
-            })
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Other,
-                    "failed to send back signaling message response".to_string(),
-                )
-            })?),
+            reason: "Invalid Request".to_string(),
+        })?),
+    }
+}
+
+fn handle_join_message(
+    sfu: &mut Sfu,
+    request_id: RequestId,
+    room_id: RoomId,
+    client_id: ClientId,
+    response_tx: SyncSender<Event>,
+) -> anyhow::Result<()> {
+    let mut try_handle = || -> anyhow::Result<()> {
+        log::info!("handle_join_message: {}/{}", room_id, client_id);
+        Ok(sfu.handle_event(Event::Join {
+            request_id,
+            room_id,
+            client_id,
+        })?)
+    };
+
+    match try_handle() {
+        Ok(_) => Ok(response_tx.send(Event::Ok {
+            request_id,
+            room_id: Some(room_id),
+            client_id: Some(client_id),
+        })?),
+        Err(err) => Ok(response_tx.send(Event::Err {
+            request_id,
+            room_id: Some(room_id),
+            client_id: Some(client_id),
+            reason: err.to_string(),
+        })?),
     }
 }
 
 fn handle_offer_message(
-    server_states: &Rc<RefCell<ServerStates>>,
-    room_id: u64,
-    client_id: u64,
-    offer: Bytes,
-    response_tx: SyncSender<SignalingProtocolMessage>,
+    sfu: &mut Sfu,
+    request_id: RequestId,
+    room_id: RoomId,
+    client_id: ClientId,
+    sdp: RTCSessionDescription,
+    response_tx: SyncSender<Event>,
 ) -> anyhow::Result<()> {
-    let try_handle = || -> anyhow::Result<Bytes> {
-        let offer_str = String::from_utf8(offer.to_vec())?;
+    let try_handle = || -> anyhow::Result<Event> {
         log::info!(
             "handle_offer_message: {}/{}/{}",
             room_id,
             client_id,
-            offer_str,
+            sdp.sdp,
         );
-        let mut server_states = server_states.borrow_mut();
-
-        let offer_sdp = serde_json::from_str::<RTCSessionDescription>(&offer_str)?;
-        let answer = server_states.accept_offer(room_id, client_id, None, offer_sdp)?;
-        let answer_str = serde_json::to_string(&answer)?;
-        log::info!("generate answer sdp: {}", answer_str);
-        Ok(Bytes::from(answer_str))
+        sfu.handle_event(Event::SessionDescription {
+            request_id,
+            room_id,
+            client_id,
+            sdp,
+        })?;
+        if let Some(evt) = sfu.poll_event()
+            && let Event::SessionDescription { .. } = &evt
+        {
+            Ok(evt)
+        } else {
+            Err(anyhow!("SessionDescription answer failed"))
+        }
     };
 
     match try_handle() {
-        Ok(answer_sdp) => Ok(response_tx
-            .send(SignalingProtocolMessage::Answer {
-                room_id,
-                client_id,
-                answer_sdp,
-            })
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Other,
-                    "failed to send back signaling message response".to_string(),
-                )
-            })?),
-        Err(err) => Ok(response_tx
-            .send(SignalingProtocolMessage::Err {
-                room_id,
-                client_id,
-                reason: Bytes::from(err.to_string()),
-            })
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Other,
-                    "failed to send back signaling message response".to_string(),
-                )
-            })?),
+        Ok(evt) => Ok(response_tx.send(evt)?),
+        Err(err) => Ok(response_tx.send(Event::Err {
+            request_id,
+            room_id: Some(room_id),
+            client_id: Some(client_id),
+            reason: err.to_string(),
+        })?),
     }
 }
 
 fn handle_leave_message(
-    _server_states: &Rc<RefCell<ServerStates>>,
-    room_id: u64,
-    client_id: u64,
-    response_tx: SyncSender<SignalingProtocolMessage>,
+    sfu: &mut Sfu,
+    request_id: RequestId,
+    room_id: RoomId,
+    client_id: ClientId,
+    reason: String,
+    response_tx: SyncSender<Event>,
 ) -> anyhow::Result<()> {
     let try_handle = || -> anyhow::Result<()> {
-        log::info!("handle_leave_message: {}/{}", room_id, client_id,);
-        Ok(())
+        log::info!("handle_leave_message: {}/{}", room_id, client_id);
+        Ok(sfu.handle_event(Event::Leave {
+            request_id,
+            room_id,
+            client_id,
+            reason,
+        })?)
     };
 
     match try_handle() {
-        Ok(_) => Ok(response_tx
-            .send(SignalingProtocolMessage::Ok {
-                room_id,
-                client_id,
-            })
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Other,
-                    "failed to send back signaling message response".to_string(),
-                )
-            })?),
-        Err(err) => Ok(response_tx
-            .send(SignalingProtocolMessage::Err {
-                room_id,
-                client_id,
-                reason: Bytes::from(err.to_string()),
-            })
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Other,
-                    "failed to send back signaling message response".to_string(),
-                )
-            })?),
+        Ok(_) => Ok(response_tx.send(Event::Ok {
+            request_id,
+            room_id: Some(room_id),
+            client_id: Some(client_id),
+        })?),
+        Err(err) => Ok(response_tx.send(Event::Err {
+            request_id,
+            room_id: Some(room_id),
+            client_id: Some(client_id),
+            reason: err.to_string(),
+        })?),
     }
-}*/
+}

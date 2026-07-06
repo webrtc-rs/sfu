@@ -108,7 +108,7 @@ fn main() -> anyhow::Result<()> {
 
         // The run loop is on a separate thread to the web server.
         std::thread::spawn(move || {
-            if let Err(err) = sync_run(stop_rx, socket, signaling_rx) {
+            if let Err(err) = run(stop_rx, socket, signaling_rx) {
                 eprintln!("run_sfu got error: {}", err);
             }
             worker.done();
