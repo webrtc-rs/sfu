@@ -7,6 +7,7 @@ use rtc::interceptor::Registry;
 use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
+use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
@@ -60,6 +61,11 @@ impl Room {
             generate_pwd(),
         );
         setting_engine.set_lite(true);
+        // The SFU is ICE-lite (controlled) and DTLS-passive: it answers `a=setup:passive`
+        // so the browser is the DTLS client and initiates the handshake (sends the
+        // ClientHello) once ICE connects. Without this, the answer defaults to
+        // `a=setup:active` (DTLS client) — a mismatch that deadlocks the handshake.
+        setting_engine.set_answering_dtls_role(RTCDtlsRole::Server)?;
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
         let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
