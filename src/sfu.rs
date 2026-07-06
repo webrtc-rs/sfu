@@ -7,13 +7,14 @@ use rtc::shared::error::Error;
 use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::time::Instant;
 
 pub type SfuId = u64;
 
-#[derive(Default)]
 pub struct Sfu {
     id: SfuId,
+    local_addr: SocketAddr,
     demuxer: Demuxer,
     rooms: HashMap<RoomId, Room>,
 
@@ -22,10 +23,15 @@ pub struct Sfu {
 }
 
 impl Sfu {
-    pub fn new(id: SfuId) -> Self {
+    pub fn new(id: SfuId, local_addr: SocketAddr) -> Self {
         Self {
             id,
-            ..Default::default()
+            local_addr,
+
+            demuxer: Default::default(),
+            rooms: Default::default(),
+            transmits: Default::default(),
+            events: Default::default(),
         }
     }
 }
@@ -37,7 +43,19 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Sfu {
     type Error = Error;
     type Time = Instant;
 
-    fn handle_read(&mut self, _msg: TaggedBytesMut) -> Result<(), Self::Error> {
+    fn handle_read(&mut self, msg: TaggedBytesMut) -> Result<(), Self::Error> {
+        if let Some((room_id, _client_id)) = self.demuxer.demux(&msg) {
+            if let Some(room) = self.rooms.get_mut(&room_id) {
+                room.handle_read(msg)?;
+            } else {
+                warn!("Received message for unknown room {}", room_id);
+            }
+        } else {
+            warn!(
+                "unroutable message from {} to {}",
+                msg.transport.peer_addr, msg.transport.local_addr
+            );
+        }
         Ok(())
     }
 
@@ -170,7 +188,7 @@ mod tests {
 
     #[test]
     fn join_creates_room_and_client() {
-        let mut sfu = Sfu::new(0);
+        let mut sfu = Sfu::new(0, "0.0.0.0:0".parse().unwrap());
         assert!(sfu.rooms.is_empty());
 
         join(&mut sfu, 1);
@@ -182,7 +200,7 @@ mod tests {
 
     #[test]
     fn leave_removes_client_and_reaps_empty_room() {
-        let mut sfu = Sfu::new(0);
+        let mut sfu = Sfu::new(0, "0.0.0.0:0".parse().unwrap());
         join(&mut sfu, 1);
         assert!(sfu.rooms.contains_key(&ROOM));
 
@@ -203,7 +221,7 @@ mod tests {
 
     #[test]
     fn session_description_offer_returns_answer() {
-        let mut sfu = Sfu::new(0);
+        let mut sfu = Sfu::new(0, "0.0.0.0:0".parse().unwrap());
         join(&mut sfu, 1);
 
         let request_id: RequestId = 2;

@@ -288,11 +288,16 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
     type Error = Error;
     type Time = Instant;
 
-    fn handle_read(&mut self, _msg: TaggedBytesMut) -> std::result::Result<(), Self::Error> {
-        Ok(())
+    fn handle_read(&mut self, msg: TaggedBytesMut) -> std::result::Result<(), Self::Error> {
+        self.peer_connection.handle_read(msg)
     }
 
     fn poll_read(&mut self) -> Option<Self::Rout> {
+        while let Some(msg) = self.peer_connection.poll_read() {
+            //TODO: process peer_connection's poll_read
+            info!("TODO: process peer_connection's poll_read {:?}", msg);
+        }
+
         None
     }
 
@@ -301,6 +306,10 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
     }
 
     fn poll_write(&mut self) -> Option<Self::Wout> {
+        while let Some(msg) = self.peer_connection.poll_write() {
+            self.transmits.push_back(msg);
+        }
+
         self.transmits.pop_front()
     }
 
@@ -385,29 +394,22 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Client {
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
         while let Some(evt) = self.peer_connection.poll_event() {
-            //TODO: process peer_connection's event
-            info!("TODO: process peer_connection's event {:?}", evt);
+            //TODO: process peer_connection's poll_event
+            info!("TODO: process peer_connection's poll_event {:?}", evt);
         }
 
         self.events.pop_front()
     }
 
     fn handle_timeout(&mut self, now: Self::Time) -> std::result::Result<(), Self::Error> {
-        let _ = self.peer_connection.handle_timeout(now);
-        Ok(())
+        self.peer_connection.handle_timeout(now)
     }
 
     fn poll_timeout(&mut self) -> Option<Self::Time> {
-        let mut eto: Option<Instant> = None;
-        if let Some(next) = self.peer_connection.poll_timeout() {
-            eto = Some(eto.map_or(next, |curr| std::cmp::min(curr, next)));
-        }
-        eto
+        self.peer_connection.poll_timeout()
     }
 
     fn close(&mut self) -> std::result::Result<(), Self::Error> {
-        self.transmits.clear();
-        self.events.clear();
         self.peer_connection.close()
     }
 }

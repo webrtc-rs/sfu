@@ -1,7 +1,8 @@
 use crate::client::{Client, ClientBuilder, ClientId};
+use crate::demuxer::Demuxer;
 use crate::event::Event;
-use crate::forward::ForwardTable;
-use log::warn;
+use log::{info, warn};
+use rtc::ice::rand::{generate_pwd, generate_ufrag};
 use rtc::interceptor::Registry;
 use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
@@ -18,8 +19,8 @@ pub type RoomId = u64;
 #[derive(Default)]
 pub(crate) struct Room {
     id: RoomId,
+    demuxer: Demuxer,
     clients: HashMap<ClientId, Client>,
-    forward_table: ForwardTable,
 
     transmits: VecDeque<TaggedBytesMut>,
     events: VecDeque<Event>,
@@ -44,11 +45,20 @@ impl Room {
     /// Build a client with the default media engine (default codecs), the default
     /// interceptor chain, and default setting engine.
     fn build_client(&self, client_id: ClientId, room_id: RoomId) -> Result<Client, Error> {
+        // USERNAME = local_ufrag ":" remote_ufrag
+        // ufrag = 4*256ice-char // length range [4, 256]
+        // ice-char = ALPHA / DIGIT / "+" / "/"
+        let mut setting_engine = SettingEngine::default();
+        setting_engine.set_ice_credentials(
+            format!("{}/{}+{}", room_id, client_id, generate_ufrag()),
+            generate_pwd(),
+        );
+        setting_engine.set_lite(true);
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
         let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
         ClientBuilder::new(client_id, room_id)
-            .with_setting_engine(SettingEngine::default())
+            .with_setting_engine(setting_engine)
             .with_media_engine(media_engine)
             .with_interceptor_registry(registry)
             .build()
@@ -62,11 +72,43 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     type Error = Error;
     type Time = Instant;
 
-    fn handle_read(&mut self, _msg: TaggedBytesMut) -> Result<(), Self::Error> {
+    fn handle_read(&mut self, msg: TaggedBytesMut) -> Result<(), Self::Error> {
+        if let Some((room_id, client_id)) = self.demuxer.demux(&msg) {
+            if room_id != self.id {
+                warn!(
+                    "Invalid room {}'s message routed to room {}",
+                    room_id, self.id
+                );
+                return Err(Error::Other(format!(
+                    "Invalid room {}'s message routed to room {}",
+                    self.id, self.id
+                )));
+            }
+
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.handle_read(msg)?;
+            } else {
+                warn!("Received message for unknown client {}", client_id);
+            }
+        } else {
+            warn!(
+                "unroutable message from {} to {}",
+                msg.transport.peer_addr, msg.transport.local_addr
+            );
+        }
         Ok(())
     }
 
     fn poll_read(&mut self) -> Option<Self::Rout> {
+        for client in self.clients.values_mut() {
+            while let Some(msg) = client.poll_read() {
+                info!(
+                    "process client's poll_read {:?}, should always be None",
+                    msg
+                );
+            }
+        }
+
         None
     }
 
@@ -75,6 +117,12 @@ impl Protocol<TaggedBytesMut, Infallible, Event> for Room {
     }
 
     fn poll_write(&mut self) -> Option<Self::Wout> {
+        for client in self.clients.values_mut() {
+            while let Some(msg) = client.poll_write() {
+                self.transmits.push_back(msg);
+            }
+        }
+
         self.transmits.pop_front()
     }
 

@@ -127,7 +127,7 @@ pub fn run(
 ) -> anyhow::Result<()> {
     println!("listening {}...", socket.local_addr()?);
 
-    let mut sfu = Sfu::new(random());
+    let mut sfu = Sfu::new(random(), socket.local_addr()?);
 
     let mut buf = vec![0; 2000];
     loop {
