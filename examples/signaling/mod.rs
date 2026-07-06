@@ -1,44 +1,127 @@
 #![allow(dead_code)]
 
-use anyhow::anyhow;
 use bytes::BytesMut;
-use log::error;
+use log::{error, warn};
 use rand::random;
 use rouille::{Request, Response, ResponseBody};
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
 use sansio::Protocol;
 use sfu::{ClientId, Event, RequestId, RoomId, Sfu};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read};
 use std::net::UdpSocket;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+/// How long a `POST /offer` will wait for the SFU's answer before giving up.
+const OFFER_ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Messages the web (rouille) threads hand to a media port's run loop.
+pub enum Command {
+    /// A request/response signaling message (`/join`, `/offer`, `/answer`, `/leave`).
+    Signal(SignalingMessage),
+    /// A browser subscribing to server-initiated push (the `GET /events/...` SSE stream).
+    /// The run loop keeps `event_tx` and pushes server-initiated SDP (e.g. subscribe
+    /// re-offers) to it; the SSE handler streams whatever arrives to the browser.
+    Subscribe {
+        room_id: RoomId,
+        client_id: ClientId,
+        event_tx: SyncSender<String>,
+    },
+}
+
+pub struct SignalingMessage {
+    pub request: Event,
+    pub response_tx: SyncSender<Event>,
+}
+
+/// Streaming body for a Server-Sent Events response. Blocks on the per-client
+/// receiver and emits each payload as an SSE `data:` frame, holding the HTTP
+/// connection open. Returns EOF once the run loop drops the sender (client left).
+struct SseReader {
+    rx: Receiver<String>,
+    pending: VecDeque<u8>,
+}
+
+impl SseReader {
+    fn new(rx: Receiver<String>) -> Self {
+        // A comment keeps EventSource reconnects from looking like errors, and nudges
+        // the browser's retry interval.
+        let mut pending = VecDeque::new();
+        pending.extend(b": connected\nretry: 2000\n\n");
+        Self { rx, pending }
+    }
+}
+
+impl Read for SseReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pending.is_empty() {
+            match self.rx.recv() {
+                // SSE frame: "data: <json>\n\n"
+                Ok(data) => self
+                    .pending
+                    .extend(format!("data: {}\n\n", data).into_bytes()),
+                // Sender dropped (client left / run loop gone) => end the stream.
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = buf.len().min(self.pending.len());
+        for slot in buf.iter_mut().take(n) {
+            *slot = self.pending.pop_front().unwrap();
+        }
+        Ok(n)
+    }
+}
+
+/// Pick the media port (run loop) that owns a given room.
+fn port_for_room(map: &HashMap<u16, SyncSender<Command>>, room_id: RoomId) -> Option<u16> {
+    let mut ports: Vec<u16> = map.keys().copied().collect();
+    ports.sort();
+    if ports.is_empty() {
+        return None;
+    }
+    Some(ports[(room_id as usize) % ports.len()])
+}
+
 // Handle a web request.
 pub fn web_request(
     request: &Request,
-    media_port_thread_map: Arc<HashMap<u16, SyncSender<SignalingMessage>>>,
+    media_port_thread_map: Arc<HashMap<u16, SyncSender<Command>>>,
 ) -> Response {
+    // "/offer/433774451/456773342", "/leave/433774451/456773342", "/events/.../..."
+    let path: Vec<String> = request.url().split('/').map(|s| s.to_owned()).collect();
+
     if request.method() == "GET" {
+        // GET /events/{room}/{client} => open a Server-Sent Events stream for
+        // server-initiated push (subscribe re-offers). Any other GET serves the page.
+        if path.len() == 4 && path[1] == "events" {
+            return match (path[2].parse::<RoomId>(), path[3].parse::<ClientId>()) {
+                (Ok(room_id), Ok(client_id)) => {
+                    subscribe_events(room_id, client_id, &media_port_thread_map)
+                }
+                _ => Response::empty_400(),
+            };
+        }
         return Response::html(include_str!("../chat.html"));
     }
 
-    // "/offer/433774451/456773342" or "/leave/433774451/456773342"
-    let path: Vec<String> = request.url().split('/').map(|s| s.to_owned()).collect();
     if path.len() != 4 || path[2].parse::<u64>().is_err() || path[3].parse::<u64>().is_err() {
         return Response::empty_400();
     }
 
-    let room_id = path[2].parse::<u64>().unwrap();
-    let mut sorted_ports: Vec<u16> = media_port_thread_map.keys().map(|x| *x).collect();
-    sorted_ports.sort();
-    assert!(!sorted_ports.is_empty());
-    let port = sorted_ports[(room_id as usize) % sorted_ports.len()];
-    let tx = media_port_thread_map.get(&port);
+    let room_id = path[2].parse::<RoomId>().unwrap();
+    let client_id = path[3].parse::<ClientId>().unwrap();
 
-    // Expected POST SDP Offers.
+    let Some(port) = port_for_room(&media_port_thread_map, room_id) else {
+        return Response::empty_406();
+    };
+    let Some(tx) = media_port_thread_map.get(&port) else {
+        return Response::empty_406();
+    };
+
+    // Expected POST SDP Offers/Answers.
     let mut sdp = vec![];
     request
         .data()
@@ -46,104 +129,131 @@ pub fn web_request(
         .read_to_end(&mut sdp)
         .unwrap();
 
-    // The Rtc instance is shipped off to the main run loop.
-    if let Some(tx) = tx {
-        let client_id = path[3].parse::<u64>().unwrap();
-        if path[1] == "join" {
+    match path[1].as_str() {
+        "join" => {
             let (response_tx, response_rx) = mpsc::sync_channel(1);
-
-            tx.send(SignalingMessage {
-                request: Event::Join {
+            send_signal(
+                tx,
+                Event::Join {
                     request_id: random(),
                     room_id,
                     client_id,
                 },
                 response_tx,
-            })
-            .expect("to send Join");
-
-            let response = response_rx.recv().expect("receive ok");
-            match response {
-                Event::Ok {
-                    request_id: _,
-                    room_id: _,
-                    client_id: _,
-                } => Response {
-                    status_code: 200,
-                    headers: vec![],
-                    data: ResponseBody::empty(),
-                    upgrade: None,
-                },
+            );
+            match response_rx.recv() {
+                Ok(Event::Ok { .. }) => ok_200(),
                 _ => Response::empty_404(),
             }
-        } else if path[1] == "offer" {
+        }
+        "offer" => {
             let (response_tx, response_rx) = mpsc::sync_channel(1);
-
             let offer_str = String::from_utf8(sdp).unwrap();
-            tx.send(SignalingMessage {
-                request: Event::SessionDescription {
+            send_signal(
+                tx,
+                Event::SessionDescription {
                     request_id: random(),
                     room_id,
                     client_id,
                     sdp: serde_json::from_str::<RTCSessionDescription>(&offer_str).unwrap(),
                 },
                 response_tx,
-            })
-            .expect("to send Offer");
-
-            let response = response_rx.recv().expect("receive Answer");
-            match response {
-                Event::SessionDescription {
-                    request_id: _,
-                    room_id: _,
-                    client_id: _,
-                    sdp,
-                } => {
-                    assert_eq!(sdp.sdp_type, RTCSdpType::Answer);
+            );
+            // The answer is produced by the SFU and delivered asynchronously by the
+            // run loop (see `drain_events`), so wait for it here.
+            match response_rx.recv_timeout(OFFER_ANSWER_TIMEOUT) {
+                Ok(Event::SessionDescription { sdp, .. }) if sdp.sdp_type == RTCSdpType::Answer => {
                     Response::from_data("application/json", serde_json::to_string(&sdp).unwrap())
                 }
                 _ => Response::empty_404(),
             }
-        } else if path[1] == "answer" {
+        }
+        "answer" => {
             let (response_tx, response_rx) = mpsc::sync_channel(1);
-
             let answer_str = String::from_utf8(sdp).unwrap();
-            tx.send(SignalingMessage {
-                request: Event::SessionDescription {
+            send_signal(
+                tx,
+                Event::SessionDescription {
                     request_id: random(),
                     room_id,
                     client_id,
                     sdp: serde_json::from_str::<RTCSessionDescription>(&answer_str).unwrap(),
                 },
                 response_tx,
-            })
-            .expect("to send Answer");
-
-            let response = response_rx.recv().expect("receive ok");
-            match response {
-                Event::Ok {
-                    request_id: _,
-                    room_id: _,
-                    client_id: _,
-                } => Response {
-                    status_code: 200,
-                    headers: vec![],
-                    data: ResponseBody::empty(),
-                    upgrade: None,
-                },
+            );
+            match response_rx.recv() {
+                Ok(Event::Ok { .. }) => ok_200(),
                 _ => Response::empty_404(),
             }
-        } else {
-            // leave
-            Response {
-                status_code: 200,
-                headers: vec![],
-                data: ResponseBody::empty(),
-                upgrade: None,
-            }
         }
-    } else {
-        Response::empty_406()
+        "leave" => {
+            let (response_tx, response_rx) = mpsc::sync_channel(1);
+            send_signal(
+                tx,
+                Event::Leave {
+                    request_id: random(),
+                    room_id,
+                    client_id,
+                    reason: "user left".to_string(),
+                },
+                response_tx,
+            );
+            let _ = response_rx.recv();
+            ok_200()
+        }
+        _ => Response::empty_404(),
+    }
+}
+
+fn subscribe_events(
+    room_id: RoomId,
+    client_id: ClientId,
+    media_port_thread_map: &HashMap<u16, SyncSender<Command>>,
+) -> Response {
+    let Some(port) = port_for_room(media_port_thread_map, room_id) else {
+        return Response::empty_406();
+    };
+    let Some(tx) = media_port_thread_map.get(&port) else {
+        return Response::empty_406();
+    };
+
+    let (event_tx, event_rx) = mpsc::sync_channel::<String>(16);
+    if tx
+        .send(Command::Subscribe {
+            room_id,
+            client_id,
+            event_tx,
+        })
+        .is_err()
+    {
+        return Response::empty_406();
+    }
+
+    Response {
+        status_code: 200,
+        headers: vec![
+            ("Content-Type".into(), "text/event-stream".into()),
+            ("Cache-Control".into(), "no-cache".into()),
+        ],
+        data: ResponseBody::from_reader(SseReader::new(event_rx)),
+        upgrade: None,
+    }
+}
+
+fn send_signal(tx: &SyncSender<Command>, request: Event, response_tx: SyncSender<Event>) {
+    tx.send(Command::Signal(SignalingMessage {
+        request,
+        response_tx,
+    }))
+    .expect("to send signaling command");
+}
+
+fn ok_200() -> Response {
+    Response {
+        status_code: 200,
+        headers: vec![],
+        data: ResponseBody::empty(),
+        upgrade: None,
     }
 }
 
@@ -152,11 +262,16 @@ pub fn web_request(
 pub fn run(
     stop_rx: crossbeam_channel::Receiver<()>,
     socket: UdpSocket,
-    rx: Receiver<SignalingMessage>,
+    rx: Receiver<Command>,
 ) -> anyhow::Result<()> {
     println!("listening {}...", socket.local_addr()?);
 
     let mut sfu = Sfu::new(random(), socket.local_addr()?);
+
+    // Per-client SSE push channels (server -> browser), and the answer channels of
+    // in-flight `POST /offer` requests awaiting the SFU's answer.
+    let mut subscribers: HashMap<ClientId, SyncSender<String>> = HashMap::new();
+    let mut pending_offers: HashMap<RequestId, SyncSender<Event>> = HashMap::new();
 
     let mut buf = vec![0; 2000];
     loop {
@@ -173,13 +288,19 @@ pub fn run(
             socket.send_to(&transmit.message, transmit.transport.peer_addr)?;
         }
 
-        // Spawn new incoming signal message from the signaling server thread.
-        if let Ok(signal_message) = rx.try_recv() {
-            if let Err(err) = handle_signaling_message(&mut sfu, signal_message) {
-                error!("handle_signaling_message got error:{}", err);
+        // Spawn new incoming command from the signaling server thread.
+        if let Ok(command) = rx.try_recv() {
+            if let Err(err) =
+                handle_command(&mut sfu, command, &mut pending_offers, &mut subscribers)
+            {
+                error!("handle_command got error:{}", err);
                 continue;
             }
         }
+
+        // Drain SFU-emitted events: answers -> the pending POST /offer; server-initiated
+        // offers -> the target client's SSE stream.
+        drain_events(&mut sfu, &mut pending_offers, &mut subscribers);
 
         // Poll clients until they return timeout
         let eto = sfu
@@ -229,14 +350,106 @@ pub fn run(
     Ok(())
 }
 
-pub struct SignalingMessage {
-    pub request: Event,
-    pub response_tx: SyncSender<Event>,
+/// Drain every event the SFU has produced and route it:
+/// - a `SessionDescription` **answer** completes an in-flight `POST /offer`;
+/// - a `SessionDescription` **offer** is server-initiated (e.g. a subscribe re-offer)
+///   and is pushed to that client's SSE stream, so the browser can answer it via
+///   `POST /answer` — no data channel involved.
+fn drain_events(
+    sfu: &mut Sfu,
+    pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
+    subscribers: &mut HashMap<ClientId, SyncSender<String>>,
+) {
+    while let Some(evt) = sfu.poll_event() {
+        match evt {
+            Event::SessionDescription {
+                request_id,
+                room_id,
+                client_id,
+                sdp,
+            } => {
+                if sdp.sdp_type == RTCSdpType::Answer {
+                    match pending_offers.remove(&request_id) {
+                        Some(response_tx) => {
+                            let _ = response_tx.send(Event::SessionDescription {
+                                request_id,
+                                room_id,
+                                client_id,
+                                sdp,
+                            });
+                        }
+                        None => warn!("no pending POST /offer for answer request {}", request_id),
+                    }
+                } else {
+                    // Server-initiated offer -> push to the client's SSE stream.
+                    push_to_subscriber(subscribers, client_id, &sdp);
+                }
+            }
+            // The SFU does not yet emit trickle ICE toward signaling; when it does,
+            // route Event::IceCandidate here to `push_to_subscriber` as well.
+            other => warn!("run loop dropped unroutable SFU event {:?}", other),
+        }
+    }
+}
+
+fn push_to_subscriber(
+    subscribers: &mut HashMap<ClientId, SyncSender<String>>,
+    client_id: ClientId,
+    sdp: &RTCSessionDescription,
+) {
+    let Some(tx) = subscribers.get(&client_id) else {
+        warn!(
+            "server-initiated offer for client {} but it has no SSE stream",
+            client_id
+        );
+        return;
+    };
+    match serde_json::to_string(sdp) {
+        Ok(payload) => {
+            if tx.send(payload).is_err() {
+                // Browser closed the SSE stream.
+                subscribers.remove(&client_id);
+            }
+        }
+        Err(err) => error!("failed to serialize server-initiated offer: {}", err),
+    }
+}
+
+fn handle_command(
+    sfu: &mut Sfu,
+    command: Command,
+    pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
+    subscribers: &mut HashMap<ClientId, SyncSender<String>>,
+) -> anyhow::Result<()> {
+    match command {
+        Command::Subscribe {
+            room_id: _,
+            client_id,
+            event_tx,
+        } => {
+            // Replace any stale stream (EventSource auto-reconnect).
+            subscribers.insert(client_id, event_tx);
+            Ok(())
+        }
+        Command::Signal(msg) => {
+            // Tear down a client's SSE stream when it leaves.
+            let leaving = match &msg.request {
+                Event::Leave { client_id, .. } => Some(*client_id),
+                _ => None,
+            };
+            let result = handle_signaling_message(sfu, msg, pending_offers);
+            if let Some(client_id) = leaving {
+                subscribers.remove(&client_id);
+            }
+            result
+        }
+    }
 }
 
 pub fn handle_signaling_message(
     sfu: &mut Sfu,
     signaling_msg: SignalingMessage,
+    pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
 ) -> anyhow::Result<()> {
     match signaling_msg.request {
         Event::Join {
@@ -255,13 +468,14 @@ pub fn handle_signaling_message(
             room_id,
             client_id,
             sdp,
-        } => handle_offer_message(
+        } => handle_session_description(
             sfu,
             request_id,
             room_id,
             client_id,
             sdp,
             signaling_msg.response_tx,
+            pending_offers,
         ),
         Event::Leave {
             request_id,
@@ -339,38 +553,50 @@ fn handle_join_message(
     }
 }
 
-fn handle_offer_message(
+/// Feed an incoming SDP into the SFU.
+///
+/// - **Offer** (`POST /offer`): the SFU answers asynchronously. We stash `response_tx`
+///   in `pending_offers` keyed by `request_id`; the run loop delivers the answer once
+///   `poll_event` yields it (see `drain_events`).
+/// - **Answer** (`POST /answer`, in reply to a server-initiated re-offer): the SFU only
+///   applies it, so we reply `Ok` immediately.
+fn handle_session_description(
     sfu: &mut Sfu,
     request_id: RequestId,
     room_id: RoomId,
     client_id: ClientId,
     sdp: RTCSessionDescription,
     response_tx: SyncSender<Event>,
+    pending_offers: &mut HashMap<RequestId, SyncSender<Event>>,
 ) -> anyhow::Result<()> {
-    let try_handle = || -> anyhow::Result<Event> {
-        log::info!(
-            "handle_offer_message: {}/{}/{}",
-            room_id,
-            client_id,
-            sdp.sdp,
-        );
-        sfu.handle_event(Event::SessionDescription {
-            request_id,
-            room_id,
-            client_id,
-            sdp,
-        })?;
-        if let Some(evt) = sfu.poll_event()
-            && let Event::SessionDescription { .. } = &evt
-        {
-            Ok(evt)
-        } else {
-            Err(anyhow!("SessionDescription answer failed"))
-        }
-    };
+    let is_offer = sdp.sdp_type == RTCSdpType::Offer;
+    log::info!(
+        "handle_session_description({}): {}/{}/{}",
+        sdp.sdp_type,
+        room_id,
+        client_id,
+        sdp.sdp,
+    );
 
-    match try_handle() {
-        Ok(evt) => Ok(response_tx.send(evt)?),
+    match sfu.handle_event(Event::SessionDescription {
+        request_id,
+        room_id,
+        client_id,
+        sdp,
+    }) {
+        Ok(_) => {
+            if is_offer {
+                // Answer delivered later by drain_events, correlated by request_id.
+                pending_offers.insert(request_id, response_tx);
+                Ok(())
+            } else {
+                Ok(response_tx.send(Event::Ok {
+                    request_id,
+                    room_id: Some(room_id),
+                    client_id: Some(client_id),
+                })?)
+            }
+        }
         Err(err) => Ok(response_tx.send(Event::Err {
             request_id,
             room_id: Some(room_id),

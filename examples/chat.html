@@ -30,6 +30,7 @@ Status: <span id="ice_status">Waiting</span>
     let streamCam;
     let streamMic;
     let dataChannel;
+    let eventSource;
     let rtc = new RTCPeerConnection();
     rtc.oniceconnectionstatechange = () => {
         byId('ice_status').innerText = rtc.iceConnectionState;
@@ -191,20 +192,28 @@ Status: <span id="ice_status">Waiting</span>
         byId("room").disabled = true;
         byId('join').disabled = true;
         byId('leave').disabled = false;
-        dataChannel = rtc.createDataChannel("offer/answer");
-        dataChannel.onmessage = (event) => {
-            let json = JSON.parse(event.data);
-            if (json.type == 'offer') {
-                // TODO: How to receive Server-initiated re-offer (subscribe direction), pushed by the SFU.
-                // We answer it over dedicated signaling (POST /answer/...), not the channel.
-                // (HTTP request/response cannot push, so this remains the inbound path.)
-                handleOffer(event.data);
-            }
-        };
+        // The data channel is only a transport bootstrap now: the initial offer needs at
+        // least one m-line to establish DTLS/ICE, and its onopen tells us the connection
+        // is ready. It is NOT used for signaling anymore — SDP goes over HTTP/SSE.
+        dataChannel = rtc.createDataChannel("bootstrap");
         dataChannel.onopen = () => {
             byId('chan_status').innerText = 'Joined room ' + byId("room").value + ' as client ' + clientId;
             byId('mic').disabled = false;
             byId('cam').disabled = false;
+        };
+
+        // Server-initiated re-offers (the SFU's subscribe direction) are pushed to the
+        // browser over Server-Sent Events; we answer each via POST /answer (handleOffer).
+        // This replaces receiving offers over the data channel.
+        eventSource = new EventSource('/events/' + byId("room").value + '/' + clientId);
+        eventSource.onmessage = (event) => {
+            let json = JSON.parse(event.data);
+            if (json.type == 'offer') {
+                handleOffer(event.data);
+            }
+        };
+        eventSource.onerror = (e) => {
+            console.log('EventSource error (will auto-reconnect):', e);
         };
         const offer = await rtc.createOffer();
         rtc.setLocalDescription(offer);
@@ -230,6 +239,11 @@ Status: <span id="ice_status">Waiting</span>
         byId('join').disabled = false;
         byId('leave').disabled = true;
         rtc.close();
+
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
 
         let path = '/leave/' + byId("room").value + '/' + clientId;
         const res = await fetch(path, {
