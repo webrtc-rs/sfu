@@ -5,7 +5,7 @@ use bytes::BytesMut;
 use log::error;
 use rand::random;
 use rouille::{Request, Response, ResponseBody};
-use rtc::peer_connection::sdp::RTCSessionDescription;
+use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
 use sansio::Protocol;
 use sfu::{ClientId, Event, RequestId, RoomId, Sfu};
@@ -79,13 +79,13 @@ pub fn web_request(
         } else if path[1] == "offer" {
             let (response_tx, response_rx) = mpsc::sync_channel(1);
 
+            let offer_str = String::from_utf8(offer_sdp).unwrap();
             tx.send(SignalingMessage {
                 request: Event::SessionDescription {
                     request_id: random(),
                     room_id,
                     client_id,
-                    sdp: RTCSessionDescription::offer(String::from_utf8(offer_sdp).unwrap())
-                        .unwrap(),
+                    sdp: serde_json::from_str::<RTCSessionDescription>(&offer_str).unwrap(),
                 },
                 response_tx,
             })
@@ -98,7 +98,10 @@ pub fn web_request(
                     room_id: _,
                     client_id: _,
                     sdp,
-                } => Response::from_data("application/json", sdp.sdp),
+                } => {
+                    assert_eq!(sdp.sdp_type, RTCSdpType::Answer);
+                    Response::from_data("application/json", serde_json::to_string(&sdp).unwrap())
+                }
                 _ => Response::empty_404(),
             }
         } else {
