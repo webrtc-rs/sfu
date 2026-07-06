@@ -1,11 +1,11 @@
 use clap::Parser;
+use env_logger::Target;
 use rouille::Server;
 use std::collections::HashMap;
-use std::io::Write;
 use std::net::{IpAddr, UdpSocket};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::mpsc::{self};
+use std::{fs::OpenOptions, io::Write, str::FromStr};
 use wg::WaitGroup;
 
 mod signaling;
@@ -57,12 +57,25 @@ struct Cli {
     #[arg(short, long, default_value_t = Level::Info)]
     #[clap(value_enum)]
     level: Level,
+    #[arg(short, long, default_value_t = format!(""))]
+    output_log_file: String,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if cli.debug {
         env_logger::Builder::new()
+            .target(if !cli.output_log_file.is_empty() {
+                Target::Pipe(Box::new(
+                    OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(cli.output_log_file)?,
+                ))
+            } else {
+                Target::Stdout
+            })
             .format(|buf, record| {
                 writeln!(
                     buf,
