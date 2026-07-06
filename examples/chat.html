@@ -24,7 +24,6 @@ Status: <span id="ice_status">Waiting</span>
 <script>
     const byId = (id) => document.getElementById(id);
     const byTag = (tag) => [].slice.call(document.getElementsByTagName(tag));
-    var callback = null;
 
     byId("room").value = Math.floor(Math.random() * 1000000000);
     let clientId = Math.floor(Math.random() * 1000000000);
@@ -53,11 +52,19 @@ Status: <span id="ice_status">Waiting</span>
         const offer = await rtc.createOffer();
         console.log('do offer', offer.sdp.split('\r\n'));
         rtc.setLocalDescription(offer);
-        await dataChannel.send(JSON.stringify(offer));
-        const json = await new Promise((rs) => {
-            callback = rs;
+
+        // Re-Offer over dedicated signaling (not the data channel): POST the offer
+        // and read the SFU's answer back from the HTTP response.
+        let path = '/offer/' + byId("room").value + '/' + clientId;
+        const res = await fetch(path, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(offer),
         });
-        const answer = JSON.parse(json);
+
+        const answer = await res.json();
         console.log('received answer', answer.sdp.split('\r\n'));
         try {
             rtc.setRemoteDescription(answer);
@@ -77,7 +84,16 @@ Status: <span id="ice_status">Waiting</span>
         const answer = await rtc.createAnswer();
         console.log('offer response', answer.sdp.split('\r\n'));
         rtc.setLocalDescription(answer);
-        await dataChannel.send(JSON.stringify(answer));
+
+        // Answer over dedicated signaling (not the data channel): POST the answer.
+        let path = '/answer/' + byId("room").value + '/' + clientId;
+        await fetch(path, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(answer),
+        });
     }
 
     async function startCam() {
@@ -179,11 +195,10 @@ Status: <span id="ice_status">Waiting</span>
         dataChannel.onmessage = (event) => {
             let json = JSON.parse(event.data);
             if (json.type == 'offer') {
-                // no callback probably means it's an offer
+                // TODO: How to receive Server-initiated re-offer (subscribe direction), pushed by the SFU.
+                // We answer it over dedicated signaling (POST /answer/...), not the channel.
+                // (HTTP request/response cannot push, so this remains the inbound path.)
                 handleOffer(event.data);
-            } else if (json.type == 'answer') {
-                callback(event.data);
-                callback = null;
             }
         };
         dataChannel.onopen = () => {

@@ -39,11 +39,11 @@ pub fn web_request(
     let tx = media_port_thread_map.get(&port);
 
     // Expected POST SDP Offers.
-    let mut offer_sdp = vec![];
+    let mut sdp = vec![];
     request
         .data()
         .expect("body to be available")
-        .read_to_end(&mut offer_sdp)
+        .read_to_end(&mut sdp)
         .unwrap();
 
     // The Rtc instance is shipped off to the main run loop.
@@ -79,7 +79,7 @@ pub fn web_request(
         } else if path[1] == "offer" {
             let (response_tx, response_rx) = mpsc::sync_channel(1);
 
-            let offer_str = String::from_utf8(offer_sdp).unwrap();
+            let offer_str = String::from_utf8(sdp).unwrap();
             tx.send(SignalingMessage {
                 request: Event::SessionDescription {
                     request_id: random(),
@@ -102,6 +102,35 @@ pub fn web_request(
                     assert_eq!(sdp.sdp_type, RTCSdpType::Answer);
                     Response::from_data("application/json", serde_json::to_string(&sdp).unwrap())
                 }
+                _ => Response::empty_404(),
+            }
+        } else if path[1] == "answer" {
+            let (response_tx, response_rx) = mpsc::sync_channel(1);
+
+            let answer_str = String::from_utf8(sdp).unwrap();
+            tx.send(SignalingMessage {
+                request: Event::SessionDescription {
+                    request_id: random(),
+                    room_id,
+                    client_id,
+                    sdp: serde_json::from_str::<RTCSessionDescription>(&answer_str).unwrap(),
+                },
+                response_tx,
+            })
+            .expect("to send Answer");
+
+            let response = response_rx.recv().expect("receive ok");
+            match response {
+                Event::Ok {
+                    request_id: _,
+                    room_id: _,
+                    client_id: _,
+                } => Response {
+                    status_code: 200,
+                    headers: vec![],
+                    data: ResponseBody::empty(),
+                    upgrade: None,
+                },
                 _ => Response::empty_404(),
             }
         } else {
