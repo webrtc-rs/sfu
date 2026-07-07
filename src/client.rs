@@ -1,4 +1,4 @@
-use crate::forward::PublishingTrack;
+use crate::forward::ForwardTrack;
 use crate::room::RoomId;
 use crate::{RequestId, SFUEvent};
 use log::{info, warn};
@@ -377,14 +377,14 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 }
 
 impl Client {
-    /// The publishing tracks this client is currently sending toward the SFU, read from its
+    /// The forward tracks this client is currently sending toward the SFU, read from its
     /// applied remote description. Called by `Room` right after an offer is applied, so
     /// forwarding can be wired before the first RTP packet (no wait for `OnTrack`).
     ///
     /// Only m-lines the remote is sending on (`sendrecv`/`sendonly`) with a resolvable
     /// mid and primary SSRC are returned; data channels and inactive/recvonly sections
     /// are skipped.
-    pub(crate) fn get_publishing_tracks(&self) -> Vec<PublishingTrack> {
+    pub(crate) fn get_forward_tracks(&self) -> Vec<ForwardTrack> {
         let Some(remote) = self.peer_connection.remote_description() else {
             return Vec::new();
         };
@@ -437,7 +437,7 @@ impl Client {
                 })
                 .unwrap_or_default();
 
-            tracks.push(PublishingTrack {
+            tracks.push(ForwardTrack {
                 mid,
                 kind,
                 ssrc,
@@ -452,10 +452,7 @@ impl Client {
     /// `Sendonly` transceiver (a new m-line per forwarded source, mirroring the old SFU)
     /// rather than `add_track`, which would recycle the client's own receive transceiver.
     /// Adding it triggers `OnNegotiationNeededEvent` → a subscribe offer.
-    pub(crate) fn add_forwarding_track(
-        &mut self,
-        track: MediaStreamTrack,
-    ) -> Result<RTCRtpSenderId> {
+    pub(crate) fn add_forward_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId> {
         let transceiver_id = self.peer_connection.add_transceiver_from_track(
             track,
             Some(RTCRtpTransceiverInit {
@@ -469,7 +466,7 @@ impl Client {
 
     /// Tear down a forwarding sender (publisher gone / track no longer published). Also
     /// triggers renegotiation.
-    pub(crate) fn remove_forwarding_track(&mut self, sender_id: RTCRtpSenderId) -> Result<()> {
+    pub(crate) fn remove_forward_track(&mut self, sender_id: RTCRtpSenderId) -> Result<()> {
         self.peer_connection.remove_track(sender_id)
     }
 
