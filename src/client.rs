@@ -269,6 +269,7 @@ where
             local_addr: self.local_addr,
             peer_connection: Box::new(self.peer_connection_builder.build()?),
 
+            cur_request_id: 0,
             reads: Default::default(),
             writes: Default::default(),
             events: Default::default(),
@@ -284,6 +285,7 @@ pub(crate) struct Client {
     local_addr: SocketAddr,
     peer_connection: Box<dyn PeerConnection>,
 
+    cur_request_id: RequestId,
     reads: VecDeque<RTCMessage>,
     writes: VecDeque<TaggedBytesMut>,
     events: VecDeque<ClientEvent>,
@@ -340,7 +342,19 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
         while let Some(evt) = self.peer_connection.poll_event() {
-            self.events.push_back(ClientEvent::PeerConnectionEvent(evt));
+            match evt {
+                RTCPeerConnectionEvent::OnNegotiationNeededEvent => {
+                    if let Err(err) = self.on_negotiation_needed() {
+                        warn!(
+                            "{}:{} failed to create renegotiation offer: {}",
+                            self.room_id, self.id, err
+                        );
+                    }
+                }
+                other => self
+                    .events
+                    .push_back(ClientEvent::PeerConnectionEvent(other)),
+            }
         }
 
         self.events.pop_front()
@@ -360,12 +374,38 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 }
 
 impl Client {
+    /// Generate the SFU's offer for a subscribe renegotiation and emit it upward.
+    fn on_negotiation_needed(&mut self) -> Result<()> {
+        //TODO: handle negotiation on-going case
+        let offer = self.peer_connection.create_offer(None)?;
+        self.peer_connection.set_local_description(offer)?;
+        let sdp = self
+            .peer_connection
+            .local_description()
+            .ok_or(Error::ErrPeerConnLocalDescriptionNil)?;
+
+        self.cur_request_id = self.cur_request_id.wrapping_add(1);
+
+        self.events
+            .push_back(ClientEvent::SFUEvent(SFUEvent::SessionDescription {
+                request_id: self.cur_request_id,
+                room_id: self.room_id,
+                client_id: self.id,
+                sdp,
+            }));
+        Ok(())
+    }
+
     fn handle_session_description(
         &mut self,
         request_id: RequestId,
         sdp: RTCSessionDescription,
     ) -> Result<()> {
         let sdp_type = sdp.sdp_type;
+
+        if sdp_type == RTCSdpType::Answer && request_id != self.cur_request_id {
+            return Err(Error::ErrTransactionNotExists);
+        }
 
         self.peer_connection.set_remote_description(sdp)?;
 
