@@ -1,3 +1,4 @@
+use crate::forward::PublishingTrack;
 use crate::room::RoomId;
 use crate::{RequestId, SFUEvent};
 use log::{info, warn};
@@ -16,7 +17,8 @@ use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
 use rtc::rtp_transceiver::{
-    RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverId, RTCRtpTransceiverInit,
+    RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverDirection, RTCRtpTransceiverId,
+    RTCRtpTransceiverInit,
 };
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::{Error, Result};
@@ -375,6 +377,102 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 }
 
 impl Client {
+    /// The publishing tracks this client is currently sending toward the SFU, read from its
+    /// applied remote description. Called by `Room` right after an offer is applied, so
+    /// forwarding can be wired before the first RTP packet (no wait for `OnTrack`).
+    ///
+    /// Only m-lines the remote is sending on (`sendrecv`/`sendonly`) with a resolvable
+    /// mid and primary SSRC are returned; data channels and inactive/recvonly sections
+    /// are skipped.
+    pub(crate) fn get_publishing_tracks(&self) -> Vec<PublishingTrack> {
+        let Some(remote) = self.peer_connection.remote_description() else {
+            return Vec::new();
+        };
+        let parsed = match remote.unmarshal() {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                warn!(
+                    "{}:{} failed to parse remote sdp: {}",
+                    self.room_id, self.id, err
+                );
+                return Vec::new();
+            }
+        };
+
+        let mut tracks = Vec::new();
+        for md in &parsed.media_descriptions {
+            let kind = RtpCodecKind::from(md.media_name.media.as_str());
+            if kind == RtpCodecKind::Unspecified {
+                // application/data-channel m-line — nothing to forward.
+                continue;
+            }
+            // The mid never disappears; a stopped/muted publish keeps its m-line and
+            // flips to inactive/recvonly. So liveness is "is the remote still sending",
+            // not "is the m-line present".
+            if !(md.has_attribute("sendrecv") || md.has_attribute("sendonly")) {
+                continue;
+            }
+            let Some(mid) = md.attribute("mid").flatten().map(str::to_owned) else {
+                continue;
+            };
+            // `a=ssrc:<ssrc> cname:...` — take the primary (first) SSRC.
+            let Some(ssrc) = md
+                .attribute("ssrc")
+                .flatten()
+                .and_then(|v| v.split_whitespace().next())
+                .and_then(|s| s.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            // `a=msid:<stream_id> <track_id>`
+            let (stream_id, track_id) = md
+                .attribute("msid")
+                .flatten()
+                .map(|v| {
+                    let mut it = v.split_whitespace();
+                    (
+                        it.next().unwrap_or_default().to_owned(),
+                        it.next().unwrap_or_default().to_owned(),
+                    )
+                })
+                .unwrap_or_default();
+
+            tracks.push(PublishingTrack {
+                mid,
+                kind,
+                ssrc,
+                stream_id,
+                track_id,
+            });
+        }
+        tracks
+    }
+
+    /// Add a forwarding sender for another client's publish track. Uses a dedicated
+    /// `Sendonly` transceiver (a new m-line per forwarded source, mirroring the old SFU)
+    /// rather than `add_track`, which would recycle the client's own receive transceiver.
+    /// Adding it triggers `OnNegotiationNeededEvent` → a subscribe offer.
+    pub(crate) fn add_forwarding_track(
+        &mut self,
+        track: MediaStreamTrack,
+    ) -> Result<RTCRtpSenderId> {
+        let transceiver_id = self.peer_connection.add_transceiver_from_track(
+            track,
+            Some(RTCRtpTransceiverInit {
+                direction: RTCRtpTransceiverDirection::Sendonly,
+                streams: Vec::new(),
+                send_encodings: Vec::new(),
+            }),
+        )?;
+        Ok(RTCRtpSenderId::from(transceiver_id))
+    }
+
+    /// Tear down a forwarding sender (publisher gone / track no longer published). Also
+    /// triggers renegotiation.
+    pub(crate) fn remove_forwarding_track(&mut self, sender_id: RTCRtpSenderId) -> Result<()> {
+        self.peer_connection.remove_track(sender_id)
+    }
+
     /// Generate the SFU's offer for a subscribe renegotiation and emit it upward.
     fn on_negotiation_needed(&mut self) -> Result<()> {
         if self.curr_request_id.is_some() {
