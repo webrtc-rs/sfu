@@ -1,6 +1,7 @@
 use crate::client::{Client, ClientBuilder, ClientEvent, ClientId};
 use crate::demuxer::Demuxer;
 use crate::event::SFUEvent;
+use crate::forward::{ForwardKey, ForwardTable, ForwardTrack};
 use log::warn;
 use rtc::ice::rand::{generate_pwd, generate_ufrag};
 use rtc::interceptor::Registry;
@@ -12,7 +13,7 @@ use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::Error;
 use sansio::Protocol;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Instant;
@@ -24,6 +25,7 @@ pub(crate) struct Room {
     local_addr: SocketAddr,
     demuxer: Demuxer,
     clients: HashMap<ClientId, Client>,
+    forward: ForwardTable,
 
     writes: VecDeque<TaggedBytesMut>,
     events: VecDeque<SFUEvent>,
@@ -37,6 +39,7 @@ impl Room {
 
             demuxer: Default::default(),
             clients: Default::default(),
+            forward: Default::default(),
             writes: Default::default(),
             events: Default::default(),
         }
@@ -75,6 +78,75 @@ impl Room {
             .with_media_engine(media_engine)
             .with_interceptor_registry(registry)
             .build()
+    }
+
+    /// Reconcile the forwarding graph with the room's current publish state.
+    ///
+    /// For every publisher's live publish track, each *other* client should have exactly
+    /// one forwarding sender. This diffs that desired matrix against the `ForwardTable`
+    /// (keyed by `{publisher, mid}`) and only applies the delta:
+    ///   - subscribers that left, or tracks no longer published → `remove_forwarding_track`,
+    ///   - `(publisher, mid, subscriber)` cells not yet present → `add_forwarding_track`,
+    ///   - everything already wired → left untouched.
+    ///
+    /// It is therefore idempotent: calling it after a publisher re-offers the same tracks
+    /// adds nothing. Run it whenever publish state may have changed (join / leave / an
+    /// applied session description).
+    fn reconcile(&mut self) {
+        // Snapshot publish state (immutable borrow) before mutating any client.
+        let live: HashSet<ClientId> = self.clients.keys().copied().collect();
+        let publishers: Vec<(ClientId, Vec<ForwardTrack>)> = self
+            .clients
+            .iter()
+            .map(|(id, client)| (*id, client.get_forward_tracks()))
+            .filter(|(_, tracks)| !tracks.is_empty())
+            .collect();
+
+        let desired: HashSet<ForwardKey> = publishers
+            .iter()
+            .flat_map(|(publisher, tracks)| {
+                tracks.iter().map(|track| ForwardKey {
+                    publisher: *publisher,
+                    mid: track.mid.clone(),
+                })
+            })
+            .collect();
+
+        // 1. Tear down forwardings that are no longer wanted.
+        let mut removed = Vec::new();
+        self.forward.retain(&desired, &live, &mut removed);
+        for (subscriber, sender) in removed {
+            if let Some(client) = self.clients.get_mut(&subscriber)
+                && let Err(err) = client.remove_forward_track(sender)
+            {
+                warn!("{}: failed to remove forwarding sender: {}", self.id, err);
+            }
+        }
+
+        // 2. Add the forwardings that are missing.
+        for (publisher, tracks) in &publishers {
+            for track in tracks {
+                let key = ForwardKey {
+                    publisher: *publisher,
+                    mid: track.mid.clone(),
+                };
+                for &subscriber in &live {
+                    if subscriber == *publisher || self.forward.has_subscriber(&key, &subscriber) {
+                        continue;
+                    }
+                    let forwarding_track = track.build_forward_track(*publisher);
+                    if let Some(client) = self.clients.get_mut(&subscriber) {
+                        match client.add_forward_track(forwarding_track) {
+                            Ok(sender) => self.forward.insert(key.clone(), subscriber, sender),
+                            Err(err) => warn!(
+                                "{}: failed to add forwarding {}->{} for mid {}: {}",
+                                self.id, publisher, subscriber, track.mid, err
+                            ),
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -171,21 +243,31 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
         };
 
         if let Some(client_id) = evt.client_id() {
+            // Join, Leave, and applying remote description can all
+            // change the room's publish state, so reconcile the forwarding graph after.
+            let mut needs_reconcile = false;
             let mut remove_client = false;
             if let Some(client) = self.clients.get_mut(&client_id) {
                 if let SFUEvent::Leave { .. } = &evt {
                     client.close()?;
                     remove_client = true;
+                    needs_reconcile = true;
                 } else {
+                    needs_reconcile = matches!(evt, SFUEvent::SessionDescription { .. });
                     client.handle_event(ClientEvent::SFUEvent(evt))?;
                 }
             } else if let SFUEvent::Join { .. } = &evt {
                 let client = self.build_client(client_id, room_id)?;
                 self.clients.insert(client_id, client);
+                needs_reconcile = true;
             }
 
             if remove_client {
                 self.clients.remove(&client_id);
+            }
+
+            if needs_reconcile {
+                self.reconcile();
             }
         } else if let SFUEvent::Err {
             request_id, reason, ..
@@ -234,6 +316,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
 
     fn close(&mut self) -> Result<(), Self::Error> {
         self.clients.clear();
+        self.forward.clear();
         self.writes.clear();
         self.events.clear();
         Ok(())

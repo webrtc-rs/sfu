@@ -154,7 +154,10 @@ mod tests {
     use rtc::peer_connection::RTCPeerConnectionBuilder;
     use rtc::peer_connection::configuration::media_engine::MediaEngine;
     use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
-    use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
+    use rtc::rtp_transceiver::rtp_sender::{
+        RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
+    };
+    use rtc::rtp_transceiver::{RTCRtpTransceiverDirection, RTCRtpTransceiverInit};
 
     const ROOM: RoomId = 100;
     const CLIENT: crate::ClientId = 200;
@@ -172,8 +175,25 @@ mod tests {
             .build()
             .expect("offerer peer connection should build");
 
+        // Publish sendonly with an explicit SSRC, like the real browser (chat.html), so
+        // the SFU answers recvonly rather than mirroring a sendrecv transceiver and
+        // re-offering.
         offerer
-            .add_transceiver_from_kind(RtpCodecKind::Video, None)
+            .add_transceiver_from_kind(
+                RtpCodecKind::Video,
+                Some(RTCRtpTransceiverInit {
+                    direction: RTCRtpTransceiverDirection::Sendonly,
+                    streams: Vec::new(),
+                    send_encodings: vec![RTCRtpEncodingParameters {
+                        rtp_coding_parameters: RTCRtpCodingParameters {
+                            ssrc: Some(111_111),
+                            ..Default::default()
+                        },
+                        active: true,
+                        ..Default::default()
+                    }],
+                }),
+            )
             .expect("video transceiver should be added");
 
         let offer = offerer.create_offer(None).expect("offer should be created");
@@ -183,12 +203,24 @@ mod tests {
     }
 
     fn join(sfu: &mut Sfu, request_id: RequestId) {
+        join_client(sfu, request_id, CLIENT);
+    }
+
+    fn join_client(sfu: &mut Sfu, request_id: RequestId, client_id: crate::ClientId) {
         sfu.handle_event(SFUEvent::Join {
             request_id,
             room_id: ROOM,
-            client_id: CLIENT,
+            client_id,
         })
         .expect("join should succeed");
+    }
+
+    fn drain_events(sfu: &mut Sfu) -> Vec<SFUEvent> {
+        let mut events = Vec::new();
+        while let Some(event) = sfu.poll_event() {
+            events.push(event);
+        }
+        events
     }
 
     #[test]
@@ -262,7 +294,104 @@ mod tests {
             other => panic!("expected a SessionDescription answer, got {:?}", other),
         }
 
-        // Only the answer is surfaced.
+        // Only the answer is surfaced (a lone sendonly publisher has no subscribers, so
+        // reconcile adds no forwarding senders and no subscribe offer is produced).
         assert!(sfu.poll_event().is_none());
+    }
+
+    #[test]
+    fn publish_triggers_subscribe_offer_to_other_client() {
+        const SUBSCRIBER: crate::ClientId = 300;
+
+        let mut sfu = Sfu::new(0, "0.0.0.0:0".parse().unwrap());
+        join_client(&mut sfu, 1, CLIENT);
+        join_client(&mut sfu, 2, SUBSCRIBER);
+
+        // CLIENT publishes one sendonly video track.
+        sfu.handle_event(SFUEvent::SessionDescription {
+            request_id: 3,
+            room_id: ROOM,
+            client_id: CLIENT,
+            sdp: build_offer(),
+        })
+        .expect("handling the publisher offer should succeed");
+
+        let events = drain_events(&mut sfu);
+
+        // The publisher gets its answer...
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                SFUEvent::SessionDescription { client_id, sdp, .. }
+                    if *client_id == CLIENT && sdp.sdp_type == RTCSdpType::Answer
+            )),
+            "publisher should receive an answer, got {events:?}"
+        );
+
+        // ...and reconcile forwards the track to the subscriber, whose peer connection
+        // fires OnNegotiationNeeded, producing a subscribe *offer* addressed to it.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                SFUEvent::SessionDescription { client_id, sdp, .. }
+                    if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer
+            )),
+            "subscriber should receive a server-initiated offer, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn republish_same_offer_is_idempotent() {
+        const SUBSCRIBER: crate::ClientId = 300;
+
+        let mut sfu = Sfu::new(0, "0.0.0.0:0".parse().unwrap());
+        join_client(&mut sfu, 1, CLIENT);
+        join_client(&mut sfu, 2, SUBSCRIBER);
+
+        let offer = build_offer();
+        sfu.handle_event(SFUEvent::SessionDescription {
+            request_id: 3,
+            room_id: ROOM,
+            client_id: CLIENT,
+            sdp: offer.clone(),
+        })
+        .expect("first publish should succeed");
+        let first = drain_events(&mut sfu);
+        let first_subscribe_offers = first
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    SFUEvent::SessionDescription { client_id, sdp, .. }
+                        if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer
+                )
+            })
+            .count();
+        assert_eq!(first_subscribe_offers, 1, "first publish forwards once");
+
+        // Re-applying the same publish offer must not add a duplicate forwarding sender,
+        // so no new subscribe offer is generated (reconcile is idempotent).
+        sfu.handle_event(SFUEvent::SessionDescription {
+            request_id: 4,
+            room_id: ROOM,
+            client_id: CLIENT,
+            sdp: offer,
+        })
+        .expect("re-publish should succeed");
+        let second = drain_events(&mut sfu);
+        let second_subscribe_offers = second
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    SFUEvent::SessionDescription { client_id, sdp, .. }
+                        if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer
+                )
+            })
+            .count();
+        assert_eq!(
+            second_subscribe_offers, 0,
+            "re-publishing the same track must not re-forward, got {second:?}"
+        );
     }
 }
