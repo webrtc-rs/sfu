@@ -1,4 +1,4 @@
-use crate::client::{Client, ClientBuilder, ClientEvent, ClientId};
+use crate::client::{Client, ClientBuilder, ClientEvent, ClientId, Mid};
 use crate::demuxer::Demuxer;
 use crate::event::SFUEvent;
 use crate::forward::{ForwardKey, ForwardTable, ForwardTrack};
@@ -93,11 +93,13 @@ impl Room {
     /// adds nothing. Run it whenever publish state may have changed (join / leave / an
     /// applied session description).
     fn reconcile(&mut self) {
-        // Snapshot publish state (immutable borrow) before mutating any client.
+        // Snapshot publish state before mutating any client. `get_forward_tracks` reads
+        // the negotiated receivers (needs `&mut`), so this collects owned tracks first
+        // and releases the borrow before the add/remove passes below.
         let live: HashSet<ClientId> = self.clients.keys().copied().collect();
-        let publishers: Vec<(ClientId, Vec<ForwardTrack>)> = self
+        let publishers: Vec<(ClientId, HashMap<Mid, ForwardTrack>)> = self
             .clients
-            .iter()
+            .iter_mut()
             .map(|(id, client)| (*id, client.get_forward_tracks()))
             .filter(|(_, tracks)| !tracks.is_empty())
             .collect();
@@ -105,9 +107,9 @@ impl Room {
         let desired: HashSet<ForwardKey> = publishers
             .iter()
             .flat_map(|(publisher, tracks)| {
-                tracks.iter().map(|track| ForwardKey {
+                tracks.keys().map(move |mid| ForwardKey {
                     publisher: *publisher,
-                    mid: track.mid.clone(),
+                    mid: mid.clone(),
                 })
             })
             .collect();
@@ -123,24 +125,24 @@ impl Room {
             }
         }
 
-        // 2. Add the forwardings that are missing.
+        // 2. Add the forwardings that are missing. The publisher's track
+        //    is forwarded verbatim onto a sendonly transceiver per subscriber.
         for (publisher, tracks) in &publishers {
-            for track in tracks {
+            for (mid, track) in tracks {
                 let key = ForwardKey {
                     publisher: *publisher,
-                    mid: track.mid.clone(),
+                    mid: mid.clone(),
                 };
                 for &subscriber in &live {
                     if subscriber == *publisher || self.forward.has_subscriber(&key, &subscriber) {
                         continue;
                     }
-                    let forwarding_track = track.build_forward_track(*publisher);
                     if let Some(client) = self.clients.get_mut(&subscriber) {
-                        match client.add_forward_track(forwarding_track) {
+                        match client.add_forward_track(track.build()) {
                             Ok(sender) => self.forward.insert(key.clone(), subscriber, sender),
                             Err(err) => warn!(
                                 "{}: failed to add forwarding {}->{} for mid {}: {}",
-                                self.id, publisher, subscriber, track.mid, err
+                                self.id, publisher, subscriber, mid, err
                             ),
                         }
                     }

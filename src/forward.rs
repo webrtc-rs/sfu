@@ -2,7 +2,7 @@ use crate::client::ClientId;
 use rtc::media_stream::MediaStreamTrack;
 use rtc::rtp_transceiver::RTCRtpSenderId;
 use rtc::rtp_transceiver::rtp_sender::{
-    RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
+    RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -14,44 +14,34 @@ use std::collections::{HashMap, HashSet};
 pub(crate) struct ForwardTrack {
     /// m-line id — stable across the publisher's renegotiations; the forwarding dedup key.
     pub(crate) mid: String,
-    pub(crate) kind: RtpCodecKind,
     /// Primary SSRC from `a=ssrc`, reused verbatim on the forwarding sender.
-    pub(crate) ssrc: u32,
+    pub(crate) ssrc: Option<u32>,
     pub(crate) stream_id: String,
     pub(crate) track_id: String,
+    pub(crate) label: String,
+    pub(crate) kind: RtpCodecKind,
+    pub(crate) codecs: Vec<RTCRtpCodecParameters>,
 }
 
 impl ForwardTrack {
-    /// Build the media track the SFU sends to a subscriber for one publisher track. The
-    /// publisher's SSRC is reused verbatim (the design forwards RTP without rewriting SSRC /
-    /// payload type); the codec is left default so the subscriber peer connection offers all
-    /// registered codecs of that kind and negotiates one with the browser.
-    pub(crate) fn build_forward_track(&self, publisher: ClientId) -> MediaStreamTrack {
-        let stream_id = if self.stream_id.is_empty() {
-            format!("stream-{}-{}", publisher, self.mid)
-        } else {
-            self.stream_id.clone()
-        };
-        let track_id = if self.track_id.is_empty() {
-            format!("track-{}-{}", publisher, self.mid)
-        } else {
-            self.track_id.clone()
-        };
-
+    pub(crate) fn build(&self) -> MediaStreamTrack {
         MediaStreamTrack::new(
-            stream_id,
-            track_id,
-            format!("{}-{}", publisher, self.mid),
+            self.stream_id.clone(),
+            self.track_id.clone(),
+            self.label.clone(),
             self.kind,
-            vec![RTCRtpEncodingParameters {
-                rtp_coding_parameters: RTCRtpCodingParameters {
-                    ssrc: Some(self.ssrc),
+            self.codecs
+                .iter()
+                .map(|codec| RTCRtpEncodingParameters {
+                    rtp_coding_parameters: RTCRtpCodingParameters {
+                        ssrc: self.ssrc,
+                        ..Default::default()
+                    },
+                    active: true,
+                    codec: codec.rtp_codec.clone(),
                     ..Default::default()
-                },
-                active: true,
-                codec: RTCRtpCodec::default(),
-                ..Default::default()
-            }],
+                })
+                .collect(),
         )
     }
 }

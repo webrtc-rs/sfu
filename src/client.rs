@@ -15,17 +15,20 @@ use rtc::peer_connection::event::{RTCEvent, RTCPeerConnectionEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
-use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
+use rtc::rtp_transceiver::rtp_sender::{
+    RTCPFeedback, RTCRtpCodec, RTCRtpCodecParameters, RtpCodecKind,
+};
 use rtc::rtp_transceiver::{
     RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverDirection, RTCRtpTransceiverId,
     RTCRtpTransceiverInit,
 };
+use rtc::sdp::MediaDescription;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::{Error, Result};
 use rtc::statistics::StatsSelector;
 use rtc::statistics::report::RTCStatsReport;
 use sansio::Protocol;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::time::Instant;
 
@@ -282,6 +285,10 @@ where
 
 pub type ClientId = u64;
 
+/// SDP media identification tag (`a=mid`) of one m-line — the stable key for a publish
+/// track across renegotiations.
+pub(crate) type Mid = String;
+
 pub(crate) struct Client {
     id: ClientId,
     room_id: RoomId,
@@ -377,75 +384,125 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 }
 
 impl Client {
-    /// The forward tracks this client is currently sending toward the SFU, read from its
-    /// applied remote description. Called by `Room` right after an offer is applied, so
-    /// forwarding can be wired before the first RTP packet (no wait for `OnTrack`).
+    /// The tracks this client is sending toward the SFU, keyed by m-line `mid`, ready to
+    /// be forwarded. Built **directly from the remote description's media sections** once
+    /// the offer/answer is complete — `Room::reconcile` runs it right after
+    /// `handle_session_description` applies the offer and sets the local answer, so
+    /// forwarding is wired before the first RTP packet (no wait for `OnTrack`).
     ///
-    /// Only m-lines the remote is sending on (`sendrecv`/`sendonly`) with a resolvable
-    /// mid and primary SSRC are returned; data channels and inactive/recvonly sections
-    /// are skipped.
-    pub(crate) fn get_forward_tracks(&self) -> Vec<ForwardTrack> {
+    /// Only m-lines the remote is *sending* on are publish tracks: in the browser's remote
+    /// description `sendrecv`/`sendonly` (and a bare m-line, which defaults to `sendrecv`)
+    /// means it publishes here, while `recvonly`/`inactive` are the SFU's own subscribe
+    /// senders echoed back. Data-channel (`application`) sections and m-lines without an
+    /// SSRC or RID to identify the stream are skipped.
+    pub(crate) fn get_forward_tracks(&mut self) -> HashMap<Mid, ForwardTrack> {
+        let mut tracks = HashMap::new();
+
         let Some(remote) = self.peer_connection.remote_description() else {
-            return Vec::new();
+            return tracks;
         };
-        let parsed = match remote.unmarshal() {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                warn!(
-                    "{}:{} failed to parse remote sdp: {}",
-                    self.room_id, self.id, err
-                );
-                return Vec::new();
-            }
+        let Ok(parsed) = remote.unmarshal() else {
+            return tracks;
         };
 
-        let mut tracks = Vec::new();
-        for md in &parsed.media_descriptions {
-            let kind = RtpCodecKind::from(md.media_name.media.as_str());
+        for media in &parsed.media_descriptions {
+            let kind = RtpCodecKind::from(media.media_name.media.as_str());
             if kind == RtpCodecKind::Unspecified {
                 // application/data-channel m-line — nothing to forward.
                 continue;
             }
-            // The mid never disappears; a stopped/muted publish keeps its m-line and
-            // flips to inactive/recvonly. So liveness is "is the remote still sending",
-            // not "is the m-line present".
-            if !(md.has_attribute("sendrecv") || md.has_attribute("sendonly")) {
+            if media.has_attribute("recvonly") || media.has_attribute("inactive") {
                 continue;
             }
-            let Some(mid) = md.attribute("mid").flatten().map(str::to_owned) else {
+            let Some(mid) = media.attribute("mid").flatten().map(str::to_owned) else {
                 continue;
             };
-            // `a=ssrc:<ssrc> cname:...` — take the primary (first) SSRC.
-            let Some(ssrc) = md
-                .attribute("ssrc")
-                .flatten()
-                .and_then(|v| v.split_whitespace().next())
-                .and_then(|s| s.parse::<u32>().ok())
-            else {
+            let Some(track) = self.track_from_media_description(&mid, kind, media) else {
                 continue;
             };
-            // `a=msid:<stream_id> <track_id>`
-            let (stream_id, track_id) = md
-                .attribute("msid")
-                .flatten()
-                .map(|v| {
-                    let mut it = v.split_whitespace();
-                    (
-                        it.next().unwrap_or_default().to_owned(),
-                        it.next().unwrap_or_default().to_owned(),
-                    )
-                })
-                .unwrap_or_default();
 
-            tracks.push(ForwardTrack {
-                mid,
-                kind,
-                ssrc,
-                stream_id,
-                track_id,
-            });
+            tracks.insert(mid, track);
         }
         tracks
+    }
+
+    /// Construct the `ForwardTrack` for one sending m-line: its SSRC
+    /// (`a=ssrc`) / RID (`a=rid`), stream & track ids (`a=msid`), and primary codec. `None`
+    /// if the m-line carries neither an SSRC nor a RID
+    fn track_from_media_description(
+        &self,
+        mid: &str,
+        kind: RtpCodecKind,
+        media: &MediaDescription,
+    ) -> Option<ForwardTrack> {
+        // `a=ssrc:<ssrc> ...` — primary (first) SSRC
+        let ssrc = media
+            .attribute("ssrc")
+            .flatten()
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse::<u32>().ok());
+        /*TODO: Simulcast:
+        let rid = media
+            .attribute("rid")
+            .flatten()
+            .and_then(|value| value.split_whitespace().next())
+            .map(str::to_owned)
+            .unwrap_or_default();
+        */
+
+        // `a=msid:<stream_id> <track_id>`, synthesizing from the mid when absent.
+        let (mut stream_id, mut track_id) = media
+            .attribute("msid")
+            .flatten()
+            .map(|value| {
+                let mut it = value.split_whitespace();
+                (
+                    it.next().unwrap_or_default().to_owned(),
+                    it.next().unwrap_or_default().to_owned(),
+                )
+            })
+            .unwrap_or_default();
+        if stream_id.is_empty() {
+            stream_id = format!("stream-{}-{}", self.id, mid);
+        }
+        if track_id.is_empty() {
+            track_id = format!("track-{}-{}", self.id, mid);
+        }
+        let label = format!("{}-{}", self.id, mid);
+
+        let mut codecs = vec![];
+        for (payload_type, codec) in media.codecs() {
+            codecs.push(RTCRtpCodecParameters {
+                rtp_codec: RTCRtpCodec {
+                    mime_type: format!("{}/{}", media.media_name.media, codec.name),
+                    clock_rate: codec.clock_rate,
+                    channels: codec.encoding_parameters.parse().unwrap_or(0),
+                    sdp_fmtp_line: codec.fmtp.to_string(),
+                    rtcp_feedback: codec
+                        .rtcp_feedback
+                        .iter()
+                        .map(|raw| {
+                            let mut parts = raw.splitn(2, ' ');
+                            RTCPFeedback {
+                                typ: parts.next().unwrap_or_default().to_owned(),
+                                parameter: parts.next().unwrap_or_default().to_owned(),
+                            }
+                        })
+                        .collect(),
+                },
+                payload_type,
+            });
+        }
+
+        Some(ForwardTrack {
+            mid: mid.to_string(),
+            ssrc,
+            stream_id,
+            track_id,
+            label,
+            kind,
+            codecs,
+        })
     }
 
     /// Add a forwarding sender for another client's publish track. Uses a dedicated

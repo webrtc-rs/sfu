@@ -299,6 +299,47 @@ mod tests {
         assert!(sfu.poll_event().is_none());
     }
 
+    /// The forwarding track carries every codec the publisher advertised (one per coding),
+    /// so the subscriber's server-initiated offer advertises them all — not just the
+    /// primary — letting it receive whichever codec the publisher actually sends.
+    #[test]
+    fn subscribe_offer_advertises_all_publisher_codecs() {
+        const SUBSCRIBER: crate::ClientId = 300;
+
+        let mut sfu = Sfu::new(0, "0.0.0.0:0".parse().unwrap());
+        join_client(&mut sfu, 1, CLIENT);
+        join_client(&mut sfu, 2, SUBSCRIBER);
+
+        sfu.handle_event(SFUEvent::SessionDescription {
+            request_id: 3,
+            room_id: ROOM,
+            client_id: CLIENT,
+            sdp: build_offer(),
+        })
+        .expect("handling the publisher offer should succeed");
+
+        let events = drain_events(&mut sfu);
+        let offer = events
+            .iter()
+            .find_map(|event| match event {
+                SFUEvent::SessionDescription { client_id, sdp, .. }
+                    if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer =>
+                {
+                    Some(&sdp.sdp)
+                }
+                _ => None,
+            })
+            .expect("subscriber should receive a server-initiated offer");
+
+        // The default video media engine registers many codecs; the forwarded m-line must
+        // advertise more than the single primary one.
+        let codec_count = offer.matches("a=rtpmap:").count();
+        assert!(
+            codec_count > 1,
+            "subscribe offer should advertise all publisher codecs, got {codec_count} rtpmap(s)"
+        );
+    }
+
     #[test]
     fn publish_triggers_subscribe_offer_to_other_client() {
         const SUBSCRIBER: crate::ClientId = 300;
