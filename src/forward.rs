@@ -1,50 +1,6 @@
 use crate::client::ClientId;
-use rtc::media_stream::MediaStreamTrack;
 use rtc::rtp_transceiver::RTCRtpSenderId;
-use rtc::rtp_transceiver::rtp_sender::{
-    RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
-};
 use std::collections::{HashMap, HashSet};
-
-/// One forward track advertised by a client's *remote* description (i.e. media the
-/// client is sending toward the SFU). Extracted at `set_remote_description` time — as
-/// soon as the offer is applied, before any RTP arrives — so the SFU can immediately set
-/// up the subscribe forwarding to other clients (see `Room::reconcile`).
-#[derive(Debug, Clone)]
-pub(crate) struct ForwardTrack {
-    /// m-line id — stable across the publisher's renegotiations; the forwarding dedup key.
-    pub(crate) mid: String,
-    /// Primary SSRC from `a=ssrc`, reused verbatim on the forwarding sender.
-    pub(crate) ssrc: Option<u32>,
-    pub(crate) stream_id: String,
-    pub(crate) track_id: String,
-    pub(crate) label: String,
-    pub(crate) kind: RtpCodecKind,
-    pub(crate) codecs: Vec<RTCRtpCodecParameters>,
-}
-
-impl ForwardTrack {
-    pub(crate) fn build(&self) -> MediaStreamTrack {
-        MediaStreamTrack::new(
-            self.stream_id.clone(),
-            self.track_id.clone(),
-            self.label.clone(),
-            self.kind,
-            self.codecs
-                .iter()
-                .map(|codec| RTCRtpEncodingParameters {
-                    rtp_coding_parameters: RTCRtpCodingParameters {
-                        ssrc: self.ssrc,
-                        ..Default::default()
-                    },
-                    active: true,
-                    codec: codec.rtp_codec.clone(),
-                    ..Default::default()
-                })
-                .collect(),
-        )
-    }
-}
 
 /// Identity of one publishing track being forwarded: the publishing client plus the
 /// **mid** of its m-line. The mid is stable across the publisher's renegotiations

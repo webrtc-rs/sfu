@@ -1,4 +1,3 @@
-use crate::forward::ForwardTrack;
 use crate::room::RoomId;
 use crate::{RequestId, SFUEvent};
 use log::{info, warn};
@@ -16,7 +15,7 @@ use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::rtp_transceiver::rtp_sender::{
-    RTCPFeedback, RTCRtpCodec, RTCRtpCodecParameters, RtpCodecKind,
+    RTCPFeedback, RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
 };
 use rtc::rtp_transceiver::{
     RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverDirection, RTCRtpTransceiverId,
@@ -395,7 +394,7 @@ impl Client {
     /// means it publishes here, while `recvonly`/`inactive` are the SFU's own subscribe
     /// senders echoed back. Data-channel (`application`) sections and m-lines without an
     /// SSRC or RID to identify the stream are skipped.
-    pub(crate) fn get_forward_tracks(&mut self) -> HashMap<Mid, ForwardTrack> {
+    pub(crate) fn get_forward_tracks(&mut self) -> HashMap<Mid, MediaStreamTrack> {
         let mut tracks = HashMap::new();
 
         let Some(remote) = self.peer_connection.remote_description() else {
@@ -426,7 +425,7 @@ impl Client {
         tracks
     }
 
-    /// Construct the `ForwardTrack` for one sending m-line: its SSRC
+    /// Construct the forwarding `MediaStreamTrack` for one sending m-line: its SSRC
     /// (`a=ssrc`) / RID (`a=rid`), stream & track ids (`a=msid`), and primary codec. `None`
     /// if the m-line carries neither an SSRC nor a RID
     fn track_from_media_description(
@@ -434,7 +433,7 @@ impl Client {
         mid: &str,
         kind: RtpCodecKind,
         media: &MediaDescription,
-    ) -> Option<ForwardTrack> {
+    ) -> Option<MediaStreamTrack> {
         // `a=ssrc:<ssrc> ...` — primary (first) SSRC
         let ssrc = media
             .attribute("ssrc")
@@ -470,10 +469,16 @@ impl Client {
         }
         let label = format!("{}-{}", self.id, mid);
 
-        let mut codecs = vec![];
-        for (payload_type, codec) in media.codecs() {
-            codecs.push(RTCRtpCodecParameters {
-                rtp_codec: RTCRtpCodec {
+        let codings = media
+            .codecs()
+            .into_values()
+            .map(|codec| RTCRtpEncodingParameters {
+                rtp_coding_parameters: RTCRtpCodingParameters {
+                    ssrc,
+                    ..Default::default()
+                },
+                active: true,
+                codec: RTCRtpCodec {
                     mime_type: format!("{}/{}", media.media_name.media, codec.name),
                     clock_rate: codec.clock_rate,
                     channels: codec.encoding_parameters.parse().unwrap_or(0),
@@ -490,19 +495,13 @@ impl Client {
                         })
                         .collect(),
                 },
-                payload_type,
-            });
-        }
+                ..Default::default()
+            })
+            .collect();
 
-        Some(ForwardTrack {
-            mid: mid.to_string(),
-            ssrc,
-            stream_id,
-            track_id,
-            label,
-            kind,
-            codecs,
-        })
+        Some(MediaStreamTrack::new(
+            stream_id, track_id, label, kind, codings,
+        ))
     }
 
     /// Add a forwarding sender for another client's publish track. Uses a dedicated

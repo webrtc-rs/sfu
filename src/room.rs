@@ -1,10 +1,11 @@
 use crate::client::{Client, ClientBuilder, ClientEvent, ClientId, Mid};
 use crate::demuxer::Demuxer;
 use crate::event::SFUEvent;
-use crate::forward::{ForwardKey, ForwardTable, ForwardTrack};
+use crate::forward::{ForwardKey, ForwardTable};
 use log::warn;
 use rtc::ice::rand::{generate_pwd, generate_ufrag};
 use rtc::interceptor::Registry;
+use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
@@ -97,7 +98,7 @@ impl Room {
         // the negotiated receivers (needs `&mut`), so this collects owned tracks first
         // and releases the borrow before the add/remove passes below.
         let live: HashSet<ClientId> = self.clients.keys().copied().collect();
-        let publishers: Vec<(ClientId, HashMap<Mid, ForwardTrack>)> = self
+        let publishers: Vec<(ClientId, HashMap<Mid, MediaStreamTrack>)> = self
             .clients
             .iter_mut()
             .map(|(id, client)| (*id, client.get_forward_tracks()))
@@ -138,7 +139,7 @@ impl Room {
                         continue;
                     }
                     if let Some(client) = self.clients.get_mut(&subscriber) {
-                        match client.add_forward_track(track.build()) {
+                        match client.add_forward_track(track.clone()) {
                             Ok(sender) => self.forward.insert(key.clone(), subscriber, sender),
                             Err(err) => warn!(
                                 "{}: failed to add forwarding {}->{} for mid {}: {}",
