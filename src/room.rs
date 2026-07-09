@@ -206,13 +206,23 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
             while let Some(msg) = reads.pop_front() {
                 for (peer_id, peer) in &mut self.clients {
                     //TODO: Selective Forwarding RTP Packets by using ForwardTable?
-                    if client_id != *peer_id
-                        && let Err(err) = peer.handle_write(msg.clone())
-                    {
-                        warn!(
-                            "{}: {}->{} forward packet got err: {}",
-                            self.id, client_id, peer_id, err
-                        );
+                    if client_id != *peer_id {
+                        let result = match &msg {
+                            RTCMessage::RtpPacket(_, rtp_packet) => {
+                                peer.write_rtp(0.into() /*TODO*/, rtp_packet.clone())
+                            }
+                            RTCMessage::RtcpPacket(_, rtcp_packet) => {
+                                peer.write_rtcp(0.into() /*TODO*/, rtcp_packet.clone())
+                            }
+                            _ => Ok(()),
+                        };
+
+                        if let Err(err) = result {
+                            warn!(
+                                "{}: {}->{} forward packet got err: {}",
+                                self.id, client_id, peer_id, err
+                            )
+                        }
                     }
                 }
             }

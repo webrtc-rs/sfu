@@ -26,9 +26,11 @@ use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::{Error, Result};
 use rtc::statistics::StatsSelector;
 use rtc::statistics::report::RTCStatsReport;
+use rtc::{rtcp, rtp};
 use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::ops::{Deref, DerefMut};
 use std::time::Instant;
 
 pub(crate) trait PeerConnection:
@@ -82,6 +84,13 @@ pub(crate) trait PeerConnection:
         init: Option<RTCRtpTransceiverInit>,
     ) -> Result<RTCRtpTransceiverId>;
     fn get_stats(&mut self, now: Instant, selector: StatsSelector) -> RTCStatsReport;
+
+    fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: rtp::Packet) -> Result<()>;
+    fn write_rtcp(
+        &mut self,
+        sender_id: RTCRtpSenderId,
+        packets: Vec<Box<dyn rtcp::Packet>>,
+    ) -> Result<()>;
 }
 
 impl<I> PeerConnection for RTCPeerConnection<I>
@@ -200,6 +209,22 @@ where
     fn get_stats(&mut self, now: Instant, selector: StatsSelector) -> RTCStatsReport {
         RTCPeerConnection::get_stats(self, now, selector)
     }
+
+    fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: rtp::Packet) -> Result<()> {
+        RTCPeerConnection::rtp_sender(self, sender_id)
+            .ok_or(Error::ErrRTPSenderNotExisted)?
+            .write_rtp(packet)
+    }
+
+    fn write_rtcp(
+        &mut self,
+        sender_id: RTCRtpSenderId,
+        packets: Vec<Box<dyn rtcp::Packet>>,
+    ) -> Result<()> {
+        RTCPeerConnection::rtp_sender(self, sender_id)
+            .ok_or(Error::ErrRTPSenderNotExisted)?
+            .write_rtcp(packets)
+    }
 }
 
 pub(crate) struct ClientBuilder<I = NoopInterceptor>
@@ -298,6 +323,20 @@ pub(crate) struct Client {
     reads: VecDeque<RTCMessage>,
     writes: VecDeque<TaggedBytesMut>,
     events: VecDeque<ClientEvent>,
+}
+
+impl Deref for Client {
+    type Target = Box<dyn PeerConnection>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.peer_connection
+    }
+}
+
+impl DerefMut for Client {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.peer_connection
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
