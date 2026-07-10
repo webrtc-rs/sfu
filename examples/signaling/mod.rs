@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use bytes::BytesMut;
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use rand::random;
 use rouille::{Request, Response, ResponseBody};
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
@@ -259,6 +259,23 @@ fn ok_200() -> Response {
     }
 }
 
+/// Log one signaling SDP exchange: a concise summary at `info!` and the full SDP at
+/// `trace!`. `label` names the exchange (Offer / Answer / Re-Offer / Re-Answer) and
+/// `direction` its flow (`browser->SFU` or `SFU->browser`).
+fn log_sdp(
+    label: &str,
+    direction: &str,
+    room_id: RoomId,
+    client_id: ClientId,
+    request_id: RequestId,
+    sdp: &RTCSessionDescription,
+) {
+    trace!(
+        "{label:<9} {direction:<11} room={room_id} client={client_id} req={request_id} SDP {}:\n{}",
+        sdp.sdp_type, sdp.sdp
+    );
+}
+
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.
 pub fn run(
@@ -375,6 +392,16 @@ fn poll_event(
                 sdp,
             } => {
                 if sdp.sdp_type == RTCSdpType::Answer {
+                    // The SFU's Answer to a browser Offer, returned over the pending
+                    // `POST /offer` HTTP response.
+                    log_sdp(
+                        "Answer",
+                        "SFU->browser",
+                        room_id,
+                        client_id,
+                        request_id,
+                        &sdp,
+                    );
                     match pending_offers.remove(&request_id) {
                         Some(response_tx) => {
                             let _ = response_tx.send(SFUEvent::SessionDescription {
@@ -387,7 +414,16 @@ fn poll_event(
                         None => warn!("no pending POST /offer for answer request {}", request_id),
                     }
                 } else {
-                    // Server-initiated offer -> push to the client's SSE stream.
+                    // Server-initiated subscribe Re-Offer -> push to the client's SSE
+                    // stream; the browser answers it via `POST /answer` (the Re-Answer).
+                    log_sdp(
+                        "Re-Offer",
+                        "SFU->browser",
+                        room_id,
+                        client_id,
+                        request_id,
+                        &sdp,
+                    );
                     push_to_subscriber(subscribers, client_id, &sdp);
                 }
             }
@@ -414,7 +450,13 @@ fn push_to_subscriber(
         Ok(payload) => {
             if tx.send(payload).is_err() {
                 // Browser closed the SSE stream.
+                warn!(
+                    "SSE stream for client {} closed; dropping Re-Offer",
+                    client_id
+                );
                 subscribers.remove(&client_id);
+            } else {
+                trace!("Re-Offer pushed to SSE stream for client {}", client_id);
             }
         }
         Err(err) => error!("failed to serialize server-initiated offer: {}", err),
@@ -535,8 +577,9 @@ fn handle_join_message(
     client_id: ClientId,
     response_tx: SyncSender<SFUEvent>,
 ) -> anyhow::Result<()> {
+    info!("Join      browser->SFU room={room_id} client={client_id} req={request_id}");
+
     let mut try_handle = || -> anyhow::Result<()> {
-        log::info!("handle_join_message: {}/{}", room_id, client_id);
         Ok(sfu.handle_event(SFUEvent::Join {
             request_id,
             room_id,
@@ -576,13 +619,10 @@ fn handle_session_description(
     pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
 ) -> anyhow::Result<()> {
     let is_offer = sdp.sdp_type == RTCSdpType::Offer;
-    log::info!(
-        "handle_session_description({}): {}/{}/{}",
-        sdp.sdp_type,
-        room_id,
-        client_id,
-        sdp.sdp,
-    );
+    // Offer (POST /offer): the browser publishes or renegotiates its send tracks.
+    // Re-Answer (POST /answer): the browser answers a server-initiated subscribe Re-Offer.
+    let label = if is_offer { "Offer" } else { "Re-Answer" };
+    log_sdp(label, "browser->SFU", room_id, client_id, request_id, &sdp);
 
     match sfu.handle_event(SFUEvent::SessionDescription {
         request_id,
@@ -620,8 +660,11 @@ fn handle_leave_message(
     reason: String,
     response_tx: SyncSender<SFUEvent>,
 ) -> anyhow::Result<()> {
+    info!(
+        "Leave     browser->SFU room={room_id} client={client_id} req={request_id} reason={reason:?}"
+    );
+
     let try_handle = || -> anyhow::Result<()> {
-        log::info!("handle_leave_message: {}/{}", room_id, client_id);
         Ok(sfu.handle_event(SFUEvent::Leave {
             request_id,
             room_id,
