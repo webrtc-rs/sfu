@@ -1,6 +1,6 @@
 use crate::room::RoomId;
 use crate::{RequestId, SFUEvent};
-use log::{info, warn};
+use log::{trace, warn};
 use rtc::ice::candidate::CandidateConfig;
 use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
@@ -411,6 +411,11 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
         while let Some(evt) = self.peer_connection.poll_event() {
             match evt {
                 RTCPeerConnectionEvent::OnNegotiationNeededEvent => {
+                    trace!(
+                        "[{}/{}] got negotiation needed event",
+                        self.room_id, self.id
+                    );
+
                     if let Err(err) = self.on_negotiation_needed() {
                         warn!(
                             "{}:{} failed to create renegotiation offer: {}",
@@ -584,6 +589,7 @@ impl Client {
     fn on_negotiation_needed(&mut self) -> Result<()> {
         if self.curr_request_id.is_some() {
             // negotiation is ongoing ...
+            trace!("[{}/{}] negotiation is ongoing ...", self.room_id, self.id);
             return Ok(());
         }
 
@@ -596,6 +602,11 @@ impl Client {
 
         self.next_request_id = self.next_request_id.wrapping_add(1);
         self.curr_request_id = Some(self.next_request_id);
+
+        trace!(
+            "[{}/{}] creates SDP {}:\n{}",
+            self.room_id, self.id, sdp.sdp_type, sdp.sdp
+        );
 
         self.events
             .push_back(ClientEvent::SFUEvent(SFUEvent::SessionDescription {
@@ -644,15 +655,22 @@ impl Client {
 
             self.peer_connection.set_local_description(answer)?;
 
+            let sdp_answer = self
+                .peer_connection
+                .local_description()
+                .ok_or(Error::ErrPeerConnLocalDescriptionNil)?;
+
+            trace!(
+                "[{}/{}] creates SDP {}:\n{}",
+                self.room_id, self.id, sdp_answer.sdp_type, sdp_answer.sdp
+            );
+
             self.events
                 .push_back(ClientEvent::SFUEvent(SFUEvent::SessionDescription {
                     request_id,
                     room_id: self.room_id,
                     client_id: self.id,
-                    sdp: self
-                        .peer_connection
-                        .local_description()
-                        .ok_or(Error::ErrPeerConnLocalDescriptionNil)?,
+                    sdp: sdp_answer,
                 }))
         }
 
@@ -678,13 +696,13 @@ impl Client {
 
         match evt {
             SFUEvent::Ok { request_id, .. } => {
-                warn!("{}:{}:{} receives ok", request_id, self.room_id, self.id,);
+                warn!("{}:[{}/{}] receives ok", request_id, self.room_id, self.id,);
             }
             SFUEvent::Err {
                 request_id, reason, ..
             } => {
                 warn!(
-                    "{}:{}:{} receives err due to {}",
+                    "{}:[{}/{}] receives err due to {}",
                     request_id, self.room_id, self.id, reason
                 );
             }
@@ -694,7 +712,7 @@ impl Client {
                 client_id,
             } => {
                 warn!(
-                    "{}:{}:{} has already joined",
+                    "{}:[{}/{}] has already joined",
                     request_id, room_id, client_id
                 );
             }
@@ -704,8 +722,8 @@ impl Client {
                 client_id,
                 sdp,
             } => {
-                info!(
-                    "{}:{}:{} receives sdp type {} and {}",
+                trace!(
+                    "{}:[{}/{}] receives SDP {}:\n{}",
                     request_id, room_id, client_id, sdp.sdp_type, sdp.sdp
                 );
                 self.handle_session_description(request_id, sdp)?;
@@ -716,8 +734,8 @@ impl Client {
                 client_id,
                 candidate,
             } => {
-                info!(
-                    "{}:{}:{} receives ice candidate {}",
+                trace!(
+                    "{}:[{}/{}] receives ice candidate {}",
                     request_id, room_id, client_id, candidate.candidate
                 );
                 self.peer_connection.add_remote_candidate(candidate)?;
@@ -729,7 +747,7 @@ impl Client {
                 reason,
             } => {
                 warn!(
-                    "{}:{}:{} has already left due to {}",
+                    "{}:[{}/{}] has already left due to {}",
                     request_id, room_id, client_id, reason
                 );
             }
