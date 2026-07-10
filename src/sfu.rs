@@ -202,6 +202,33 @@ mod tests {
         offer
     }
 
+    fn build_offer_with_extra_video_codec(
+        payload_type: u8,
+        codec_name: &str,
+    ) -> RTCSessionDescription {
+        let mut offer = build_offer();
+        let mut lines: Vec<String> = offer.sdp.split("\r\n").map(str::to_owned).collect();
+
+        let video_line = lines
+            .iter_mut()
+            .find(|line| line.starts_with("m=video "))
+            .expect("offer should contain a video m-line");
+        video_line.push_str(&format!(" {payload_type}"));
+
+        let insert_at = lines
+            .iter()
+            .rposition(|line| !line.is_empty())
+            .map(|idx| idx + 1)
+            .unwrap_or(lines.len());
+        lines.insert(
+            insert_at,
+            format!("a=rtpmap:{payload_type} {codec_name}/90000"),
+        );
+
+        offer.sdp = lines.join("\r\n");
+        offer
+    }
+
     fn join(sfu: &mut Sfu, request_id: RequestId) {
         join_client(sfu, request_id, CLIENT);
     }
@@ -378,6 +405,42 @@ mod tests {
                     if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer
             )),
             "subscriber should receive a server-initiated offer, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn subscribe_offer_filters_unsupported_publisher_codecs() {
+        const SUBSCRIBER: crate::ClientId = 300;
+        const UNSUPPORTED_PT: u8 = 123;
+
+        let mut sfu = Sfu::new(0, "0.0.0.0:0".parse().unwrap());
+        join_client(&mut sfu, 1, CLIENT);
+        join_client(&mut sfu, 2, SUBSCRIBER);
+
+        sfu.handle_event(SFUEvent::SessionDescription {
+            request_id: 3,
+            room_id: ROOM,
+            client_id: CLIENT,
+            sdp: build_offer_with_extra_video_codec(UNSUPPORTED_PT, "UNSUPPORTED"),
+        })
+        .expect("handling the publisher offer should succeed");
+
+        let events = drain_events(&mut sfu);
+        let subscribe_offer = events
+            .iter()
+            .find_map(|event| match event {
+                SFUEvent::SessionDescription { client_id, sdp, .. }
+                    if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer =>
+                {
+                    Some(&sdp.sdp)
+                }
+                _ => None,
+            })
+            .expect("subscriber should still receive a server-initiated offer");
+
+        assert!(
+            !subscribe_offer.contains(&format!("a=rtpmap:{UNSUPPORTED_PT} UNSUPPORTED/90000")),
+            "subscribe offer should not advertise unsupported passthrough codecs: {subscribe_offer}"
         );
     }
 

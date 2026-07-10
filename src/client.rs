@@ -15,7 +15,7 @@ use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::rtp_transceiver::rtp_sender::{
-    RTCPFeedback, RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
+    RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpReceiveParameters, RtpCodecKind,
 };
 use rtc::rtp_transceiver::{
     RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverDirection, RTCRtpTransceiverId,
@@ -97,11 +97,16 @@ pub(crate) trait PeerConnection:
     fn transceiver_mid(&mut self, transceiver_id: RTCRtpTransceiverId) -> Option<Mid>;
 
     /// The negotiated receive track for a receiver (`receiver.track()`, cloned): kind,
-    /// stream/track ids, and the codings the core folded in from the remote description
-    /// during `set_remote_description`. (The concrete `rtp_receiver` accessor borrows
-    /// with the interceptor generic and can't cross the `dyn` boundary, hence the owned
-    /// clone.)
+    /// stream/track ids, and any track-level coding metadata already available.
     fn receiver_track(&mut self, receiver_id: RTCRtpReceiverId) -> Option<MediaStreamTrack>;
+
+    /// The receiver's negotiated RTP parameters, including the filtered codec list that
+    /// is valid for this peer connection's receive side before `OnTrack` populates
+    /// deferred track codings.
+    fn receiver_parameters(
+        &mut self,
+        receiver_id: RTCRtpReceiverId,
+    ) -> Option<RTCRtpReceiveParameters>;
 }
 
 impl<I> PeerConnection for RTCPeerConnection<I>
@@ -243,6 +248,13 @@ where
 
     fn receiver_track(&mut self, receiver_id: RTCRtpReceiverId) -> Option<MediaStreamTrack> {
         Some(self.rtp_receiver(receiver_id)?.track().clone())
+    }
+
+    fn receiver_parameters(
+        &mut self,
+        receiver_id: RTCRtpReceiverId,
+    ) -> Option<RTCRtpReceiveParameters> {
+        Some(self.rtp_receiver(receiver_id)?.get_parameters().clone())
     }
 }
 
@@ -447,11 +459,12 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 
 impl Client {
     /// The tracks this client is sending toward the SFU, keyed by m-line `mid`, ready to
-    /// be forwarded. The base track for each receiving m-line comes from the **negotiated
-    /// receiver** (`receiver.track()` — kind, stream/track ids, and the codings the core
-    /// folded in from the remote description; anything there is by construction supported
-    /// on the receive side). The remote description then supplies the send-side SSRC
-    /// (`a=ssrc`) for m-lines whose negotiated codings don't carry one yet.
+    /// be forwarded. The base track for each receiving m-line comes from the negotiated
+    /// receiver's track identity (`receiver.track()`) plus its negotiated receive codec
+    /// list (`receiver.get_parameters()`), which is already filtered to what this core
+    /// supports even before `OnTrack` populates deferred track codings. The remote
+    /// description then supplies the send-side SSRC (`a=ssrc`) for m-lines whose
+    /// negotiated codings don't carry one yet.
     ///
     /// The SSRCs on the returned tracks seed the SSRC-based routing in the forward table
     /// (`Room::reconcile` binds them). A track without any SSRC (a bare m-line without
@@ -477,6 +490,9 @@ impl Client {
             let Some(mut track) = self.peer_connection.receiver_track(receiver_id) else {
                 continue;
             };
+            let Some(parameters) = self.peer_connection.receiver_parameters(receiver_id) else {
+                continue;
+            };
 
             if let Some(media) = parsed.as_ref().and_then(|parsed| {
                 parsed
@@ -484,7 +500,8 @@ impl Client {
                     .iter()
                     .find(|media| media.attribute("mid").flatten() == Some(mid.as_str()))
             }) {
-                track = Client::track_with_codings_from_media_description(&track, media);
+                track =
+                    Client::track_with_codings_from_media_description(&track, &parameters, media);
             }
 
             tracks.insert(mid, track);
@@ -493,17 +510,20 @@ impl Client {
     }
 
     /// Rebuild `track` (keeping the negotiated receiver's identity: stream/track ids,
-    /// label, kind) with **all codings from the remote description's m-line**: one coding
-    /// per offered codec (`a=rtpmap`/`a=fmtp`/`a=rtcp-fb`), each carrying the send-side
-    /// primary SSRC (`a=ssrc`) when the offer names it. Every codec the publisher may
-    /// send is thus advertised on the forwarding sender, and the SSRC seeds the
-    /// SSRC-based forward routing.
+    /// label, kind) from the receiver's negotiated parameters, then fill in the
+    /// publish-side primary SSRC (`a=ssrc`) from the remote description when it is known.
+    ///
+    /// This keeps only codecs the SFU side already matched as supported instead of copying
+    /// every raw offered codec from the browser m-line, which can include codecs the
+    /// forwarding sender cannot advertise. If receiver parameters have not exposed any
+    /// codec yet, fall back to whatever coding metadata the track already carries.
     ///
     /// A simulcast track (negotiated RID codings) is returned unchanged — its per-layer
     /// SSRCs are only knowable at packet time (`OnTrack(OnOpen)`).
     /// TODO: merge codecs into simulcast RID codings.
     fn track_with_codings_from_media_description(
         track: &MediaStreamTrack,
+        parameters: &RTCRtpReceiveParameters,
         media: &MediaDescription,
     ) -> MediaStreamTrack {
         // `a=ssrc:<ssrc> ...` — primary (first) SSRC; `None` for a bare m-line, whose
@@ -514,39 +534,20 @@ impl Client {
             .and_then(|value| value.split_whitespace().next())
             .and_then(|value| value.parse::<u32>().ok());
 
-        let codings: Vec<RTCRtpEncodingParameters> = media
-            .codecs()
-            .into_values()
+        let codings = parameters
+            .rtp_parameters
+            .codecs
+            .iter()
             .map(|codec| RTCRtpEncodingParameters {
                 rtp_coding_parameters: RTCRtpCodingParameters {
                     ssrc,
                     ..Default::default()
                 },
                 active: true,
-                codec: RTCRtpCodec {
-                    mime_type: format!("{}/{}", media.media_name.media, codec.name),
-                    clock_rate: codec.clock_rate,
-                    channels: codec.encoding_parameters.parse().unwrap_or(0),
-                    sdp_fmtp_line: codec.fmtp.to_string(),
-                    rtcp_feedback: codec
-                        .rtcp_feedback
-                        .iter()
-                        .map(|raw| {
-                            let mut parts = raw.splitn(2, ' ');
-                            RTCPFeedback {
-                                typ: parts.next().unwrap_or_default().to_owned(),
-                                parameter: parts.next().unwrap_or_default().to_owned(),
-                            }
-                        })
-                        .collect(),
-                },
+                codec: codec.rtp_codec.clone(),
                 ..Default::default()
             })
             .collect();
-        if codings.is_empty() {
-            // No rtpmap on the m-line — keep whatever the receiver negotiated.
-            return track.clone();
-        }
 
         MediaStreamTrack::new(
             track.stream_id().clone(),
@@ -760,6 +761,7 @@ impl Client {
 mod tests {
     use super::*;
     use rtc::peer_connection::configuration::RTCConfigurationBuilder;
+    use rtc::rtp_transceiver::rtp_sender::{RTCRtpCodec, RTCRtpCodecParameters, RTCRtpParameters};
 
     #[test]
     fn builds_default_peer_connection_client() {
@@ -819,5 +821,43 @@ mod tests {
             .with_interceptor_registry(Registry::new())
             .build()
             .expect("client should build");
+    }
+
+    #[test]
+    fn forwarding_track_uses_receiver_parameters_when_track_codings_are_empty() {
+        let track = MediaStreamTrack::new(
+            "stream".into(),
+            "track".into(),
+            "label".into(),
+            RtpCodecKind::Video,
+            vec![],
+        );
+        let parameters = RTCRtpReceiveParameters {
+            rtp_parameters: RTCRtpParameters {
+                codecs: vec![RTCRtpCodecParameters {
+                    rtp_codec: RTCRtpCodec {
+                        mime_type: "video/VP8".into(),
+                        clock_rate: 90_000,
+                        channels: 0,
+                        sdp_fmtp_line: String::new(),
+                        rtcp_feedback: vec![],
+                    },
+                    payload_type: 96,
+                }],
+                ..Default::default()
+            },
+        };
+        let media = MediaDescription::default()
+            .with_value_attribute("ssrc".to_owned(), "424242 cname:test".to_owned());
+
+        let rebuilt =
+            Client::track_with_codings_from_media_description(&track, &parameters, &media);
+
+        assert_eq!(rebuilt.codings().len(), 1);
+        assert_eq!(rebuilt.codings()[0].codec.mime_type, "video/VP8");
+        assert_eq!(
+            rebuilt.codings()[0].rtp_coding_parameters.ssrc,
+            Some(424242)
+        );
     }
 }
