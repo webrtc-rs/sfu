@@ -121,18 +121,21 @@ pub fn web_request(
         return Response::empty_406();
     };
 
-    // Expected POST SDP Offers/Answers.
+    // Read the POST body. Only `/offer` and `/answer` carry an SDP; `/join` and `/leave`
+    // have none, so an empty/absent body is fine here and is rejected later only if the
+    // handler actually needs it.
     let mut sdp = vec![];
-    request
-        .data()
-        .expect("body to be available")
-        .read_to_end(&mut sdp)
-        .unwrap();
+    if let Some(mut data) = request.data()
+        && let Err(err) = data.read_to_end(&mut sdp)
+    {
+        warn!("{}: failed to read request body: {}", path[1], err);
+        return Response::text("failed to read body").with_status_code(400);
+    }
 
     match path[1].as_str() {
         "join" => {
             let (response_tx, response_rx) = mpsc::sync_channel(1);
-            send_signal(
+            if let Err(resp) = send_signal(
                 tx,
                 SFUEvent::Join {
                     request_id: random(),
@@ -140,57 +143,80 @@ pub fn web_request(
                     client_id,
                 },
                 response_tx,
-            );
-            match response_rx.recv() {
-                Ok(SFUEvent::Ok { .. }) => ok_200(),
-                _ => Response::empty_404(),
+            ) {
+                return resp;
             }
+            recv_ack(&response_rx, "join")
         }
         "offer" => {
+            let sdp = match parse_sdp("offer", sdp) {
+                Ok(sdp) => sdp,
+                Err(resp) => return resp,
+            };
             let (response_tx, response_rx) = mpsc::sync_channel(1);
-            let offer_str = String::from_utf8(sdp).unwrap();
-            send_signal(
+            if let Err(resp) = send_signal(
                 tx,
                 SFUEvent::SessionDescription {
                     request_id: random(),
                     room_id,
                     client_id,
-                    sdp: serde_json::from_str::<RTCSessionDescription>(&offer_str).unwrap(),
+                    sdp,
                 },
                 response_tx,
-            );
+            ) {
+                return resp;
+            }
             // The answer is produced by the SFU and delivered asynchronously by the
-            // run loop (see `drain_events`), so wait for it here.
+            // run loop (see `poll_event`), so wait for it here.
             match response_rx.recv_timeout(OFFER_ANSWER_TIMEOUT) {
                 Ok(SFUEvent::SessionDescription { sdp, .. })
                     if sdp.sdp_type == RTCSdpType::Answer =>
                 {
-                    Response::from_data("application/json", serde_json::to_string(&sdp).unwrap())
+                    match serde_json::to_string(&sdp) {
+                        Ok(json) => Response::from_data("application/json", json),
+                        Err(err) => {
+                            error!("offer: failed to serialize answer: {}", err);
+                            Response::text("failed to serialize answer").with_status_code(500)
+                        }
+                    }
                 }
-                _ => Response::empty_404(),
+                Ok(SFUEvent::Err { reason, .. }) => {
+                    warn!("offer for {}/{} rejected: {}", room_id, client_id, reason);
+                    Response::text(reason).with_status_code(422)
+                }
+                Ok(other) => {
+                    warn!("offer for {}/{} got unexpected {:?}", room_id, client_id, other);
+                    Response::empty_404()
+                }
+                Err(err) => {
+                    error!("offer for {}/{} timed out: {}", room_id, client_id, err);
+                    Response::text("timeout waiting for answer").with_status_code(504)
+                }
             }
         }
         "answer" => {
+            let sdp = match parse_sdp("answer", sdp) {
+                Ok(sdp) => sdp,
+                Err(resp) => return resp,
+            };
             let (response_tx, response_rx) = mpsc::sync_channel(1);
-            let answer_str = String::from_utf8(sdp).unwrap();
-            send_signal(
+            if let Err(resp) = send_signal(
                 tx,
                 SFUEvent::SessionDescription {
                     request_id: random(),
                     room_id,
                     client_id,
-                    sdp: serde_json::from_str::<RTCSessionDescription>(&answer_str).unwrap(),
+                    sdp,
                 },
                 response_tx,
-            );
-            match response_rx.recv() {
-                Ok(SFUEvent::Ok { .. }) => ok_200(),
-                _ => Response::empty_404(),
+            ) {
+                return resp;
             }
+            recv_ack(&response_rx, "answer")
         }
         "leave" => {
             let (response_tx, response_rx) = mpsc::sync_channel(1);
-            send_signal(
+            if let Err(resp) = send_signal(
                 tx,
                 SFUEvent::Leave {
                     request_id: random(),
@@ -199,9 +225,10 @@ pub fn web_request(
                     reason: "user left".to_string(),
                 },
                 response_tx,
-            );
-            let _ = response_rx.recv();
-            ok_200()
+            ) {
+                return resp;
+            }
+            recv_ack(&response_rx, "leave")
         }
         _ => Response::empty_404(),
     }
@@ -242,12 +269,56 @@ fn subscribe_events(
     }
 }
 
-fn send_signal(tx: &SyncSender<Command>, request: SFUEvent, response_tx: SyncSender<SFUEvent>) {
+/// Hand a signaling command to the media run loop. Returns a `503` response (instead of
+/// panicking) if that run loop is gone, so a dead media thread surfaces as an HTTP error.
+fn send_signal(
+    tx: &SyncSender<Command>,
+    request: SFUEvent,
+    response_tx: SyncSender<SFUEvent>,
+) -> Result<(), Response> {
     tx.send(Command::Signal(SignalingMessage {
         request,
         response_tx,
     }))
-    .expect("to send signaling command");
+    .map_err(|err| {
+        error!("signaling run loop unavailable: {}", err);
+        Response::text("signaling unavailable").with_status_code(503)
+    })
+}
+
+/// Parse a POSTed SDP body into an `RTCSessionDescription`, logging and returning a `400`
+/// (with the reason) on bad UTF-8 or bad JSON — so a malformed `/offer` or `/answer`
+/// surfaces as a diagnosable error instead of an opaque `500` panic.
+fn parse_sdp(kind: &str, body: Vec<u8>) -> Result<RTCSessionDescription, Response> {
+    let text = String::from_utf8(body).map_err(|err| {
+        warn!("{}: request body is not valid UTF-8: {}", kind, err);
+        Response::text("body is not valid UTF-8").with_status_code(400)
+    })?;
+
+    serde_json::from_str::<RTCSessionDescription>(&text).map_err(|err| {
+        warn!("{}: failed to parse SDP JSON: {}; body was:\n{}", kind, err, text);
+        Response::text(format!("invalid SDP JSON: {err}")).with_status_code(400)
+    })
+}
+
+/// Wait for the SFU's `Ok`/`Err` reply to an applied answer (or any request that only
+/// needs an ack), turning it into an HTTP response and never blocking forever.
+fn recv_ack(response_rx: &Receiver<SFUEvent>, kind: &str) -> Response {
+    match response_rx.recv_timeout(OFFER_ANSWER_TIMEOUT) {
+        Ok(SFUEvent::Ok { .. }) => ok_200(),
+        Ok(SFUEvent::Err { reason, .. }) => {
+            warn!("{}: SFU rejected request: {}", kind, reason);
+            Response::text(reason).with_status_code(422)
+        }
+        Ok(other) => {
+            warn!("{}: unexpected SFU reply {:?}", kind, other);
+            Response::empty_404()
+        }
+        Err(err) => {
+            error!("{}: timed out waiting for SFU reply: {}", kind, err);
+            Response::text("timeout waiting for SFU").with_status_code(504)
+        }
+    }
 }
 
 fn ok_200() -> Response {
