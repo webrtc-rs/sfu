@@ -91,6 +91,17 @@ pub(crate) trait PeerConnection:
         sender_id: RTCRtpSenderId,
         packets: Vec<Box<dyn rtcp::Packet>>,
     ) -> Result<()>;
+
+    /// The mid of a transceiver, if assigned — the stable forwarding key (it is not
+    /// carried on the `MediaStreamTrack`).
+    fn transceiver_mid(&mut self, transceiver_id: RTCRtpTransceiverId) -> Option<Mid>;
+
+    /// The negotiated receive track for a receiver (`receiver.track()`, cloned): kind,
+    /// stream/track ids, and the codings the core folded in from the remote description
+    /// during `set_remote_description`. (The concrete `rtp_receiver` accessor borrows
+    /// with the interceptor generic and can't cross the `dyn` boundary, hence the owned
+    /// clone.)
+    fn receiver_track(&mut self, receiver_id: RTCRtpReceiverId) -> Option<MediaStreamTrack>;
 }
 
 impl<I> PeerConnection for RTCPeerConnection<I>
@@ -224,6 +235,14 @@ where
         RTCPeerConnection::rtp_sender(self, sender_id)
             .ok_or(Error::ErrRTPSenderNotExisted)?
             .write_rtcp(packets)
+    }
+
+    fn transceiver_mid(&mut self, transceiver_id: RTCRtpTransceiverId) -> Option<Mid> {
+        self.rtp_transceiver(transceiver_id)?.mid().clone()
+    }
+
+    fn receiver_track(&mut self, receiver_id: RTCRtpReceiverId) -> Option<MediaStreamTrack> {
+        Some(self.rtp_receiver(receiver_id)?.track().clone())
     }
 }
 
@@ -423,92 +442,74 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 
 impl Client {
     /// The tracks this client is sending toward the SFU, keyed by m-line `mid`, ready to
-    /// be forwarded. Built **directly from the remote description's media sections** once
-    /// the offer/answer is complete — `Room::reconcile` runs it right after
-    /// `handle_session_description` applies the offer and sets the local answer, so
-    /// forwarding is wired before the first RTP packet (no wait for `OnTrack`).
+    /// be forwarded. The base track for each receiving m-line comes from the **negotiated
+    /// receiver** (`receiver.track()` — kind, stream/track ids, and the codings the core
+    /// folded in from the remote description; anything there is by construction supported
+    /// on the receive side). The remote description then supplies the send-side SSRC
+    /// (`a=ssrc`) for m-lines whose negotiated codings don't carry one yet.
     ///
-    /// Only m-lines the remote is *sending* on are publish tracks: in the browser's remote
-    /// description `sendrecv`/`sendonly` (and a bare m-line, which defaults to `sendrecv`)
-    /// means it publishes here, while `recvonly`/`inactive` are the SFU's own subscribe
-    /// senders echoed back. Data-channel (`application`) sections and m-lines without an
-    /// SSRC or RID to identify the stream are skipped.
+    /// The SSRCs on the returned tracks seed the SSRC-based routing in the forward table
+    /// (`Room::reconcile` binds them). A track without any SSRC (a bare m-line without
+    /// `a=ssrc`, or RID-based simulcast) is **still returned** so the subscriber leg is
+    /// negotiated immediately; its SSRC routing entry is deferred until the publisher's
+    /// `OnTrack(OnOpen)` delivers the wire SSRC (`Room::poll_event` binds it).
+    ///
+    /// `get_receivers()` lists only currently-receiving m-lines, so the SFU's own sendonly
+    /// forwarding transceivers and muted/stopped publishes (`recvonly`/`inactive`) drop
+    /// out here, and data-channel sections never appear.
     pub(crate) fn get_forward_tracks(&mut self) -> HashMap<Mid, MediaStreamTrack> {
         let mut tracks = HashMap::new();
 
-        let Some(remote) = self.peer_connection.remote_description() else {
-            return tracks;
-        };
-        let Ok(parsed) = remote.unmarshal() else {
-            return tracks;
-        };
+        let parsed = self
+            .peer_connection
+            .remote_description()
+            .and_then(|remote| remote.unmarshal().ok());
 
-        for media in &parsed.media_descriptions {
-            let kind = RtpCodecKind::from(media.media_name.media.as_str());
-            if kind == RtpCodecKind::Unspecified {
-                // application/data-channel m-line — nothing to forward.
-                continue;
-            }
-            if media.has_attribute("recvonly") || media.has_attribute("inactive") {
-                continue;
-            }
-            let Some(mid) = media.attribute("mid").flatten().map(str::to_owned) else {
+        for receiver_id in self.peer_connection.get_receivers() {
+            let Some(mid) = self.peer_connection.transceiver_mid(receiver_id.into()) else {
                 continue;
             };
-            let Some(track) = self.track_from_media_description(&mid, kind, media) else {
+            let Some(mut track) = self.peer_connection.receiver_track(receiver_id) else {
                 continue;
             };
+
+            if let Some(media) = parsed.as_ref().and_then(|parsed| {
+                parsed
+                    .media_descriptions
+                    .iter()
+                    .find(|media| media.attribute("mid").flatten() == Some(mid.as_str()))
+            }) {
+                track = Client::track_with_codings_from_media_description(&track, media);
+            }
 
             tracks.insert(mid, track);
         }
         tracks
     }
 
-    /// Construct the forwarding `MediaStreamTrack` for one sending m-line: its SSRC
-    /// (`a=ssrc`) / RID (`a=rid`), stream & track ids (`a=msid`), and primary codec. `None`
-    /// if the m-line carries neither an SSRC nor a RID
-    fn track_from_media_description(
-        &self,
-        mid: &str,
-        kind: RtpCodecKind,
+    /// Rebuild `track` (keeping the negotiated receiver's identity: stream/track ids,
+    /// label, kind) with **all codings from the remote description's m-line**: one coding
+    /// per offered codec (`a=rtpmap`/`a=fmtp`/`a=rtcp-fb`), each carrying the send-side
+    /// primary SSRC (`a=ssrc`) when the offer names it. Every codec the publisher may
+    /// send is thus advertised on the forwarding sender, and the SSRC seeds the
+    /// SSRC-based forward routing.
+    ///
+    /// A simulcast track (negotiated RID codings) is returned unchanged — its per-layer
+    /// SSRCs are only knowable at packet time (`OnTrack(OnOpen)`).
+    /// TODO: merge codecs into simulcast RID codings.
+    fn track_with_codings_from_media_description(
+        track: &MediaStreamTrack,
         media: &MediaDescription,
-    ) -> Option<MediaStreamTrack> {
-        // `a=ssrc:<ssrc> ...` — primary (first) SSRC
+    ) -> MediaStreamTrack {
+        // `a=ssrc:<ssrc> ...` — primary (first) SSRC; `None` for a bare m-line, whose
+        // wire SSRC is bound later from OnTrack(OnOpen).
         let ssrc = media
             .attribute("ssrc")
             .flatten()
             .and_then(|value| value.split_whitespace().next())
             .and_then(|value| value.parse::<u32>().ok());
-        /*TODO: Simulcast:
-        let rid = media
-            .attribute("rid")
-            .flatten()
-            .and_then(|value| value.split_whitespace().next())
-            .map(str::to_owned)
-            .unwrap_or_default();
-        */
 
-        // `a=msid:<stream_id> <track_id>`, synthesizing from the mid when absent.
-        let (mut stream_id, mut track_id) = media
-            .attribute("msid")
-            .flatten()
-            .map(|value| {
-                let mut it = value.split_whitespace();
-                (
-                    it.next().unwrap_or_default().to_owned(),
-                    it.next().unwrap_or_default().to_owned(),
-                )
-            })
-            .unwrap_or_default();
-        if stream_id.is_empty() {
-            stream_id = format!("stream-{}-{}", self.id, mid);
-        }
-        if track_id.is_empty() {
-            track_id = format!("track-{}-{}", self.id, mid);
-        }
-        let label = format!("{}-{}", self.id, mid);
-
-        let codings = media
+        let codings: Vec<RTCRtpEncodingParameters> = media
             .codecs()
             .into_values()
             .map(|codec| RTCRtpEncodingParameters {
@@ -537,10 +538,24 @@ impl Client {
                 ..Default::default()
             })
             .collect();
+        if codings.is_empty() {
+            // No rtpmap on the m-line — keep whatever the receiver negotiated.
+            return track.clone();
+        }
 
-        Some(MediaStreamTrack::new(
-            stream_id, track_id, label, kind, codings,
-        ))
+        MediaStreamTrack::new(
+            track.stream_id().clone(),
+            track.track_id().clone(),
+            track.label().clone(),
+            track.kind(),
+            codings,
+        )
+    }
+
+    /// The mid of the m-line a receiver belongs to — used by `Room` to bind a
+    /// packet-time SSRC (from `OnTrack(OnOpen)`) to its `ForwardKey`.
+    pub(crate) fn transceiver_mid(&mut self, receiver_id: RTCRtpReceiverId) -> Option<Mid> {
+        self.peer_connection.transceiver_mid(receiver_id.into())
     }
 
     /// Add a forwarding sender for another client's publish track. Uses a dedicated

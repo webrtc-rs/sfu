@@ -2,13 +2,14 @@ use crate::client::{Client, ClientBuilder, ClientEvent, ClientId, Mid};
 use crate::demuxer::Demuxer;
 use crate::event::SFUEvent;
 use crate::forward::{ForwardKey, ForwardTable};
-use log::warn;
+use log::{trace, warn};
 use rtc::ice::rand::{generate_pwd, generate_ufrag};
 use rtc::interceptor::Registry;
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
+use rtc::peer_connection::event::{RTCPeerConnectionEvent, RTCTrackEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::shared::TaggedBytesMut;
@@ -134,6 +135,14 @@ impl Room {
                     publisher: *publisher,
                     mid: mid.clone(),
                 };
+
+                // Bind the publisher's wire SSRC(s) for packet routing (idempotent).
+                // Tracks whose SSRC the SDP couldn't name (bare m-line, RID simulcast)
+                // are bound later from the publisher's OnTrack(OnOpen) in poll_event.
+                for ssrc in track.ssrcs() {
+                    self.forward.bind_ssrc(ssrc, key.clone());
+                }
+
                 for &subscriber in &live {
                     if subscriber == *publisher || self.forward.has_subscriber(&key, &subscriber) {
                         continue;
@@ -202,28 +211,80 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
             }
         }
 
+        // Selective forwarding: resolve each packet's SSRC through the forward table to
+        // the per-subscriber senders it fans out to. Packets whose SSRC is not bound yet
+        // (first packets of a bare-m-line/simulcast publish, racing OnTrack) are dropped
+        // quietly — the binding lands in this same drive iteration via poll_event.
         for (client_id, mut reads) in forwardings.drain() {
             while let Some(msg) = reads.pop_front() {
-                for (peer_id, peer) in &mut self.clients {
-                    //TODO: Selective Forwarding RTP Packets by using ForwardTable?
-                    if client_id != *peer_id {
-                        let result = match &msg {
-                            RTCMessage::RtpPacket(_, rtp_packet) => {
-                                peer.write_rtp(0.into() /*TODO*/, rtp_packet.clone())
-                            }
-                            RTCMessage::RtcpPacket(_, rtcp_packet) => {
-                                peer.write_rtcp(0.into() /*TODO*/, rtcp_packet.clone())
-                            }
-                            _ => Ok(()),
+                match &msg {
+                    RTCMessage::RtpPacket(_, rtp_packet) => {
+                        let ssrc = rtp_packet.header.ssrc;
+                        let Some((key, subscribers)) = self.forward.route_by_ssrc(ssrc) else {
+                            trace!(
+                                "{}: no forward binding for rtp ssrc {} from {}",
+                                self.id, ssrc, client_id
+                            );
+                            continue;
                         };
-
-                        if let Err(err) = result {
+                        if key.publisher != client_id {
                             warn!(
-                                "{}: {}->{} forward packet got err: {}",
-                                self.id, client_id, peer_id, err
-                            )
+                                "{}: rtp ssrc {} from {} is bound to publisher {} — dropping",
+                                self.id, ssrc, client_id, key.publisher
+                            );
+                            continue;
+                        }
+                        for (subscriber, sender_id) in subscribers {
+                            if let Some(peer) = self.clients.get_mut(subscriber)
+                                && let Err(err) = peer.write_rtp(*sender_id, rtp_packet.clone())
+                            {
+                                warn!(
+                                    "{}: {}->{} forward rtp ssrc {} err: {}",
+                                    self.id, client_id, subscriber, ssrc, err
+                                );
+                            }
                         }
                     }
+                    RTCMessage::RtcpPacket(_, rtcp_packets) => {
+                        // Route by the SSRCs the compound packet describes (a publisher's
+                        // SenderReport carries its media SSRC).
+                        let route = rtcp_packets
+                            .iter()
+                            .flat_map(|packet| packet.destination_ssrc())
+                            .find_map(|ssrc| {
+                                self.forward
+                                    .route_by_ssrc(ssrc)
+                                    .map(|(key, subscribers)| (ssrc, key, subscribers))
+                            });
+                        let Some((ssrc, key, subscribers)) = route else {
+                            trace!(
+                                "{}: no forward binding for rtcp from {}",
+                                self.id, client_id
+                            );
+                            continue;
+                        };
+                        if key.publisher != client_id {
+                            // Subscriber feedback (RR/NACK/PLI) about a publisher's
+                            // stream. Upstream feedback forwarding is TODO — the SFU's
+                            // own interceptors already generate feedback on each leg.
+                            trace!(
+                                "{}: rtcp about ssrc {} from subscriber {} — not forwarded",
+                                self.id, ssrc, client_id
+                            );
+                            continue;
+                        }
+                        for (subscriber, sender_id) in subscribers {
+                            if let Some(peer) = self.clients.get_mut(subscriber)
+                                && let Err(err) = peer.write_rtcp(*sender_id, rtcp_packets.clone())
+                            {
+                                warn!(
+                                    "{}: {}->{} forward rtcp ssrc {} err: {}",
+                                    self.id, client_id, subscriber, ssrc, err
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -295,14 +356,36 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
     }
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
-        for client in self.clients.values_mut() {
+        for (client_id, client) in &mut self.clients {
             while let Some(event) = client.poll_event() {
                 match event {
                     ClientEvent::SFUEvent(evt) => {
                         self.events.push_back(evt);
                     }
+                    ClientEvent::PeerConnectionEvent(RTCPeerConnectionEvent::OnTrack(
+                        RTCTrackEvent::OnOpen(init),
+                    )) => {
+                        // Packet-time SSRC binding: the definitive wire SSRC for publish
+                        // streams the SDP couldn't name up front (bare m-line without
+                        // `a=ssrc`, or RID-based simulcast — one OnOpen per layer, all
+                        // binding to the same {publisher, mid} key).
+                        if let Some(mid) = client.transceiver_mid(init.receiver_id) {
+                            self.forward.bind_ssrc(
+                                init.ssrc,
+                                ForwardKey {
+                                    publisher: *client_id,
+                                    mid,
+                                },
+                            );
+                        } else {
+                            warn!(
+                                "{}: OnTrack(OnOpen) ssrc {} from {} has no mid — not bound",
+                                self.id, init.ssrc, client_id
+                            );
+                        }
+                    }
                     ClientEvent::PeerConnectionEvent(_) => {
-                        //TODO:
+                        //TODO: remaining peer connection events
                     }
                 }
             }
