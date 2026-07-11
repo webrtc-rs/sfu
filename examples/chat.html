@@ -160,28 +160,36 @@ Status: <span id="ice_status">Waiting</span>
         console.log('ontrack', e.track);
         const track = e.track;
         const domId = `media-${track.id}`;
-        const el = document.createElement('video');
         if (byId(domId)) {
             // we aleady have this track
             return;
         }
+        const el = document.createElement('video');
         el.id = domId;
         el.width = 500;
         byId('media').appendChild(el);
         el.controls = true;
         el.autoplay = true;
-        setTimeout(() => {
-            const media = new MediaStream();
-            media.addTrack(track);
-            el.srcObject = media;
-        }, 1);
+        el.playsInline = true;
+        el.hidden = track.muted;
+        const media = new MediaStream();
+        media.addTrack(track);
+        el.srcObject = media;
+        const playVideo = () => {
+            el.play().catch((error) => {
+                console.log('video.play() failed', error);
+            });
+        };
+        el.addEventListener('loadedmetadata', playVideo);
+        playVideo();
         track.addEventListener('mute', () => {
             console.log('track muted', track);
-            el.parentNode.removeChild(el);
+            el.hidden = true;
         });
         track.addEventListener('unmute', () => {
             console.log('track unmuted', track);
-            byId('media').appendChild(el);
+            el.hidden = false;
+            playVideo();
         });
     };
 

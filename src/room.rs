@@ -235,6 +235,15 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
                             continue;
                         }
                         for (subscriber, sender_id) in subscribers {
+                            trace!(
+                                "{}: {}->{} forward rtp ssrc {} pt {} via sender {:?}",
+                                self.id,
+                                client_id,
+                                subscriber,
+                                ssrc,
+                                rtp_packet.header.payload_type,
+                                sender_id
+                            );
                             if let Some(peer) = self.clients.get_mut(subscriber)
                                 && let Err(err) = peer.write_rtp(*sender_id, rtp_packet.clone())
                             {
