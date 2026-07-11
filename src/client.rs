@@ -24,7 +24,7 @@ use rtc::rtp_transceiver::{
 };
 use rtc::sdp::MediaDescription;
 use rtc::shared::TaggedBytesMut;
-use rtc::shared::error::{Error, Result};
+use rtc::shared::error::{Error, Result, flatten_errs};
 use rtc::statistics::StatsSelector;
 use rtc::statistics::report::RTCStatsReport;
 use rtc::{rtcp, rtp};
@@ -32,7 +32,7 @@ use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(crate) trait PeerConnection:
     Protocol<
@@ -353,13 +353,16 @@ pub type ClientId = u64;
 /// track across renegotiations.
 pub(crate) type Mid = String;
 
+//TODO: make it configurable
+const ONGOING_NEGOTIATION_TIMEOUT_IN_SECOND: Duration = Duration::from_secs(5);
+
 pub(crate) struct Client {
     id: ClientId,
     room_id: RoomId,
     local_addr: SocketAddr,
     peer_connection: Box<dyn PeerConnection>,
     next_request_id: RequestId,
-    curr_request_id: Option<RequestId>,
+    curr_request_id: Option<(RequestId, Instant)>,
     reads: VecDeque<RTCMessage>,
     writes: VecDeque<TaggedBytesMut>,
     events: VecDeque<ClientEvent>,
@@ -454,11 +457,35 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
     }
 
     fn handle_timeout(&mut self, now: Self::Time) -> std::result::Result<(), Self::Error> {
-        self.peer_connection.handle_timeout(now)
+        let mut errs: Vec<Error> = vec![];
+
+        if let Err(err) = self.peer_connection.handle_timeout(now) {
+            errs.push(err);
+        }
+
+        if let Some((_, next_timeout)) = self.curr_request_id.as_ref()
+            && next_timeout <= &now
+        {
+            if let Some(mut sdp) = self.peer_connection.local_description() {
+                sdp.sdp_type = RTCSdpType::Rollback;
+                if let Err(err) = self.peer_connection.set_local_description(sdp) {
+                    errs.push(err);
+                }
+            }
+
+            // mark current negotiation done
+            self.curr_request_id = None;
+        }
+
+        flatten_errs(errs)
     }
 
     fn poll_timeout(&mut self) -> Option<Self::Time> {
-        self.peer_connection.poll_timeout()
+        let mut eto: Option<Instant> = self.peer_connection.poll_timeout();
+        if let Some((_, next)) = self.curr_request_id.as_ref() {
+            eto = Some(eto.map_or(*next, |curr| std::cmp::min(curr, *next)));
+        }
+        eto
     }
 
     fn close(&mut self) -> std::result::Result<(), Self::Error> {
@@ -672,11 +699,11 @@ impl Client {
 
     /// Generate the SFU's offer for a subscribe renegotiation and emit it upward.
     fn on_negotiation_needed(&mut self) -> Result<()> {
-        if let Some(curr_request_id) = self.curr_request_id.as_ref() {
+        if let Some((request_id, _)) = self.curr_request_id.as_ref() {
             // negotiation is ongoing ...
             trace!(
                 "{}:[{}/{}] negotiation is ongoing ...",
-                curr_request_id, self.room_id, self.id
+                request_id, self.room_id, self.id
             );
             return Ok(());
         }
@@ -689,7 +716,10 @@ impl Client {
             .ok_or(Error::ErrPeerConnLocalDescriptionNil)?;
 
         self.next_request_id = self.next_request_id.wrapping_add(1);
-        self.curr_request_id = Some(self.next_request_id);
+        self.curr_request_id = Some((
+            self.next_request_id,
+            Instant::now() + ONGOING_NEGOTIATION_TIMEOUT_IN_SECOND,
+        ));
 
         trace!(
             "{}:[{}/{}] creates SDP {}:\n{}",
@@ -714,7 +744,11 @@ impl Client {
         let sdp_type = sdp.sdp_type;
 
         if sdp_type == RTCSdpType::Answer {
-            if self.curr_request_id.is_none() || self.curr_request_id != Some(request_id) {
+            if self.curr_request_id.is_none() {
+                return Err(Error::ErrTransactionNotExists);
+            } else if let Some((current_request_id, _)) = self.curr_request_id.as_ref()
+                && *current_request_id != request_id
+            {
                 return Err(Error::ErrTransactionNotExists);
             }
             // mark current negotiation done

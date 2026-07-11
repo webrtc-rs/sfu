@@ -3,7 +3,7 @@ use crate::event::SFUEvent;
 use crate::room::{Room, RoomId};
 use log::{info, warn};
 use rtc::shared::TaggedBytesMut;
-use rtc::shared::error::Error;
+use rtc::shared::error::{Error, flatten_errs};
 use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
@@ -122,10 +122,13 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Sfu {
     }
 
     fn handle_timeout(&mut self, now: Self::Time) -> Result<(), Self::Error> {
+        let mut errs: Vec<Error> = vec![];
         for room in self.rooms.values_mut() {
-            let _ = room.handle_timeout(now);
+            if let Err(err) = room.handle_timeout(now) {
+                errs.push(err);
+            }
         }
-        Ok(())
+        flatten_errs(errs)
     }
 
     fn poll_timeout(&mut self) -> Option<Self::Time> {

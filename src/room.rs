@@ -13,7 +13,7 @@ use rtc::peer_connection::event::{RTCPeerConnectionEvent, RTCTrackEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::shared::TaggedBytesMut;
-use rtc::shared::error::Error;
+use rtc::shared::error::{Error, flatten_errs};
 use sansio::Protocol;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
@@ -434,10 +434,13 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
     }
 
     fn handle_timeout(&mut self, now: Self::Time) -> Result<(), Self::Error> {
+        let mut errs: Vec<Error> = vec![];
         for client in self.clients.values_mut() {
-            let _ = client.handle_timeout(now);
+            if let Err(err) = client.handle_timeout(now) {
+                errs.push(err);
+            }
         }
-        Ok(())
+        flatten_errs(errs)
     }
 
     fn poll_timeout(&mut self) -> Option<Self::Time> {
