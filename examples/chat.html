@@ -31,7 +31,17 @@ Status: <span id="ice_status">Waiting</span>
     let streamMic;
     let dataChannel;
     let ws;
-    let rtc = new RTCPeerConnection();
+    let rtc;
+
+    // Create a fresh RTCPeerConnection and attach its handlers. Called on each Join so a
+    // rejoin after Leave starts from a clean connection with live handlers — a new
+    // RTCPeerConnection created without re-attaching ontrack/oniceconnectionstatechange
+    // would silently never fire them (no remote video, stuck state).
+    function newRtc() {
+        rtc = new RTCPeerConnection();
+        rtc.oniceconnectionstatechange = onIceStateChange;
+        rtc.ontrack = onTrack;
+    }
 
     // Single bi-directional signaling channel (borrowed from AppRTC/Collider): the browser
     // registers {room, client} once, then exchanges SDP as {cmd, sdp} frames; the SFU
@@ -43,7 +53,7 @@ Status: <span id="ice_status">Waiting</span>
             console.log('WS not open; dropping', obj.cmd);
         }
     }
-    rtc.oniceconnectionstatechange = () => {
+    function onIceStateChange() {
         byId('ice_status').innerText = rtc.iceConnectionState;
         if (rtc.iceConnectionState == 'disconnected' || rtc.iceConnectionState == 'failed') {
             if (streamCam) {
@@ -58,7 +68,7 @@ Status: <span id="ice_status">Waiting</span>
             byId('cam').disabled = true;
             byId('mic').disabled = true;
         }
-    };
+    }
 
     async function negotiate() {
         const offer = await rtc.createOffer();
@@ -158,7 +168,7 @@ Status: <span id="ice_status">Waiting</span>
         await negotiate();
     }
 
-    rtc.ontrack = (e) => {
+    function onTrack(e) {
         console.log('ontrack', e.track);
         const track = e.track;
         const domId = `media-${track.id}`;
@@ -193,9 +203,11 @@ Status: <span id="ice_status">Waiting</span>
             el.hidden = false;
             playVideo();
         });
-    };
+    }
 
     async function startRtc() {
+        // Start from a fresh peer connection with handlers attached.
+        newRtc();
         byId('ice_status').innerText = 'Connecting';
         byId('chan_status').innerText = 'Joining room ' + byId("room").value + ' as client ' + clientId;
         byId("room").disabled = true;
@@ -229,20 +241,37 @@ Status: <span id="ice_status">Waiting</span>
     }
 
     async function leaveRtc() {
-        byId('ice_status').innerText = 'Waiting';
-        byId('chan_status').innerText = 'Click Join Button...'
-        byId("room").disabled = false;
-        byId('join').disabled = false;
-        byId('leave').disabled = true;
-
+        // Tell the SFU we're leaving, then tear the whole session down and return every
+        // control to its initial "not joined" state so a later Join starts clean.
         sendSignal({ cmd: 'leave' });
-        rtc.close();
+
         if (ws) {
             ws.close();
             ws = null;
         }
+        if (rtc) {
+            rtc.close();
+            rtc = null;
+        }
+        dataChannel = null;
 
-        rtc = new RTCPeerConnection();
+        // Stop any local capture and drop the references.
+        streamCam?.getTracks().forEach((t) => t.stop());
+        streamMic?.getTracks().forEach((t) => t.stop());
+        streamCam = undefined;
+        streamMic = undefined;
+
+        // Remove any remote <video> elements we appended for other participants.
+        byId('media').innerHTML = '';
+
+        // Reset all controls and status text to the initial state.
+        byId('ice_status').innerText = 'Waiting';
+        byId('chan_status').innerText = 'Click Join Button...';
+        byId("room").disabled = false;
+        byId('join').disabled = false;
+        byId('leave').disabled = true;
+        byId('cam').disabled = true;
+        byId('mic').disabled = true;
     }
 </script>
 </body>
