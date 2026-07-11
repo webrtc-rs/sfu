@@ -666,11 +666,18 @@ impl Client {
         self.peer_connection.remove_track(sender_id)
     }
 
+    pub(crate) fn is_negotiation_ongoing(&self) -> bool {
+        self.curr_request_id.is_some()
+    }
+
     /// Generate the SFU's offer for a subscribe renegotiation and emit it upward.
     fn on_negotiation_needed(&mut self) -> Result<()> {
-        if self.curr_request_id.is_some() {
+        if let Some(curr_request_id) = self.curr_request_id.as_ref() {
             // negotiation is ongoing ...
-            trace!("[{}/{}] negotiation is ongoing ...", self.room_id, self.id);
+            trace!(
+                "{}:[{}/{}] negotiation is ongoing ...",
+                curr_request_id, self.room_id, self.id
+            );
             return Ok(());
         }
 
@@ -685,8 +692,8 @@ impl Client {
         self.curr_request_id = Some(self.next_request_id);
 
         trace!(
-            "[{}/{}] creates SDP {}:\n{}",
-            self.room_id, self.id, sdp.sdp_type, sdp.sdp
+            "{}:[{}/{}] creates SDP {}:\n{}",
+            self.next_request_id, self.room_id, self.id, sdp.sdp_type, sdp.sdp
         );
 
         self.events
