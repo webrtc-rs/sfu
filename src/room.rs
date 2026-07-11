@@ -220,6 +220,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
                 match &msg {
                     RTCMessage::RtpPacket(_, rtp_packet) => {
                         let ssrc = rtp_packet.header.ssrc;
+                        let inbound_payload_type = rtp_packet.header.payload_type;
                         let Some((key, subscribers)) = self.forward.route_by_ssrc(ssrc) else {
                             trace!(
                                 "{}: no forward binding for rtp ssrc {} from {}",
@@ -234,19 +235,49 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
                             );
                             continue;
                         }
+                        let Some(incoming_codec) =
+                            self.clients.get_mut(&client_id).and_then(|publisher| {
+                                publisher.incoming_codec_for_rtp(ssrc, inbound_payload_type)
+                            })
+                        else {
+                            warn!(
+                                "{}: unable to resolve incoming codec for {} rtp ssrc {} pt {}",
+                                self.id, client_id, ssrc, inbound_payload_type
+                            );
+                            continue;
+                        };
                         for (subscriber, sender_id) in subscribers {
+                            let Some(peer) = self.clients.get_mut(subscriber) else {
+                                continue;
+                            };
+                            let Some(outbound_payload_type) =
+                                peer.outgoing_payload_type_for_codec(*sender_id, &incoming_codec)
+                            else {
+                                warn!(
+                                    "{}: unable to map codec {} for {}->{} rtp ssrc {} via sender {:?}",
+                                    self.id,
+                                    incoming_codec.mime_type.as_str(),
+                                    client_id,
+                                    subscriber,
+                                    ssrc,
+                                    sender_id
+                                );
+                                continue;
+                            };
+                            let mut forwarded_rtp = rtp_packet.clone();
+                            forwarded_rtp.header.payload_type = outbound_payload_type;
                             trace!(
-                                "{}: {}->{} forward rtp ssrc {} pt {} via sender {:?}",
+                                "{}: {}->{} forward rtp ssrc {} pt {} -> {} via sender {:?} codec {}",
                                 self.id,
                                 client_id,
                                 subscriber,
                                 ssrc,
-                                rtp_packet.header.payload_type,
-                                sender_id
+                                inbound_payload_type,
+                                outbound_payload_type,
+                                sender_id,
+                                incoming_codec.mime_type.as_str()
                             );
-                            if let Some(peer) = self.clients.get_mut(subscriber)
-                                && let Err(err) = peer.write_rtp(*sender_id, rtp_packet.clone())
-                            {
+                            if let Err(err) = peer.write_rtp(*sender_id, forwarded_rtp) {
                                 warn!(
                                     "{}: {}->{} forward rtp ssrc {} err: {}",
                                     self.id, client_id, subscriber, ssrc, err

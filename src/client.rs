@@ -15,7 +15,8 @@ use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::rtp_transceiver::rtp_sender::{
-    RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpReceiveParameters, RtpCodecKind,
+    RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpReceiveParameters,
+    RTCRtpSendParameters, RtpCodecKind,
 };
 use rtc::rtp_transceiver::{
     RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverDirection, RTCRtpTransceiverId,
@@ -107,6 +108,10 @@ pub(crate) trait PeerConnection:
         &mut self,
         receiver_id: RTCRtpReceiverId,
     ) -> Option<RTCRtpReceiveParameters>;
+
+    /// The sender's negotiated RTP parameters, including the subscriber leg payload
+    /// types currently valid for that sender.
+    fn sender_parameters(&mut self, sender_id: RTCRtpSenderId) -> Option<RTCRtpSendParameters>;
 }
 
 impl<I> PeerConnection for RTCPeerConnection<I>
@@ -255,6 +260,10 @@ where
         receiver_id: RTCRtpReceiverId,
     ) -> Option<RTCRtpReceiveParameters> {
         Some(self.rtp_receiver(receiver_id)?.get_parameters().clone())
+    }
+
+    fn sender_parameters(&mut self, sender_id: RTCRtpSenderId) -> Option<RTCRtpSendParameters> {
+        Some(self.rtp_sender(sender_id)?.get_parameters().clone())
     }
 }
 
@@ -458,6 +467,39 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 }
 
 impl Client {
+    pub(crate) fn incoming_codec_for_rtp(
+        &mut self,
+        ssrc: u32,
+        payload_type: u8,
+    ) -> Option<RTCRtpCodec> {
+        for receiver_id in self.peer_connection.get_receivers() {
+            let Some(track) = self.peer_connection.receiver_track(receiver_id) else {
+                continue;
+            };
+            if !track.ssrcs().any(|track_ssrc| track_ssrc == ssrc) {
+                continue;
+            }
+
+            let Some(parameters) = self.peer_connection.receiver_parameters(receiver_id) else {
+                continue;
+            };
+            if let Some(codec) = Client::codec_for_payload_type(&parameters, payload_type) {
+                return Some(codec);
+            }
+        }
+
+        None
+    }
+
+    pub(crate) fn outgoing_payload_type_for_codec(
+        &mut self,
+        sender_id: RTCRtpSenderId,
+        codec: &RTCRtpCodec,
+    ) -> Option<u8> {
+        let parameters = self.peer_connection.sender_parameters(sender_id)?;
+        Client::payload_type_for_codec(&parameters, codec)
+    }
+
     /// The tracks this client is sending toward the SFU, keyed by m-line `mid`, ready to
     /// be forwarded. The base track for each receiving m-line comes from the negotiated
     /// receiver's track identity (`receiver.track()`) plus its negotiated receive codec
@@ -556,6 +598,44 @@ impl Client {
             track.kind(),
             codings,
         )
+    }
+
+    fn codec_for_payload_type(
+        parameters: &RTCRtpReceiveParameters,
+        payload_type: u8,
+    ) -> Option<RTCRtpCodec> {
+        parameters
+            .rtp_parameters
+            .codecs
+            .iter()
+            .find(|codec| codec.payload_type == payload_type)
+            .map(|codec| codec.rtp_codec.clone())
+    }
+
+    fn payload_type_for_codec(
+        parameters: &RTCRtpSendParameters,
+        codec: &RTCRtpCodec,
+    ) -> Option<u8> {
+        parameters
+            .rtp_parameters
+            .codecs
+            .iter()
+            .find(|candidate| {
+                candidate
+                    .rtp_codec
+                    .mime_type
+                    .eq_ignore_ascii_case(&codec.mime_type)
+                    && candidate.rtp_codec.sdp_fmtp_line == codec.sdp_fmtp_line
+            })
+            .or_else(|| {
+                parameters.rtp_parameters.codecs.iter().find(|candidate| {
+                    candidate
+                        .rtp_codec
+                        .mime_type
+                        .eq_ignore_ascii_case(&codec.mime_type)
+                })
+            })
+            .map(|matched| matched.payload_type)
     }
 
     /// The mid of the m-line a receiver belongs to — used by `Room` to bind a
@@ -761,7 +841,9 @@ impl Client {
 mod tests {
     use super::*;
     use rtc::peer_connection::configuration::RTCConfigurationBuilder;
-    use rtc::rtp_transceiver::rtp_sender::{RTCRtpCodec, RTCRtpCodecParameters, RTCRtpParameters};
+    use rtc::rtp_transceiver::rtp_sender::{
+        RTCRtpCodec, RTCRtpCodecParameters, RTCRtpParameters, RTCRtpSendParameters,
+    };
 
     #[test]
     fn builds_default_peer_connection_client() {
@@ -858,6 +940,44 @@ mod tests {
         assert_eq!(
             rebuilt.codings()[0].rtp_coding_parameters.ssrc,
             Some(424242)
+        );
+    }
+
+    #[test]
+    fn outgoing_payload_type_maps_codec_across_legs() {
+        let codec = RTCRtpCodec {
+            mime_type: "video/H265".into(),
+            clock_rate: 90_000,
+            channels: 0,
+            sdp_fmtp_line: "level-id=186;profile-id=1;tier-flag=0;tx-mode=SRST".into(),
+            rtcp_feedback: vec![],
+        };
+        let parameters = RTCRtpSendParameters {
+            rtp_parameters: RTCRtpParameters {
+                codecs: vec![
+                    RTCRtpCodecParameters {
+                        rtp_codec: RTCRtpCodec {
+                            mime_type: "video/ulpfec".into(),
+                            clock_rate: 90_000,
+                            channels: 0,
+                            sdp_fmtp_line: String::new(),
+                            rtcp_feedback: vec![],
+                        },
+                        payload_type: 116,
+                    },
+                    RTCRtpCodecParameters {
+                        rtp_codec: codec.clone(),
+                        payload_type: 126,
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            Client::payload_type_for_codec(&parameters, &codec),
+            Some(126)
         );
     }
 }
