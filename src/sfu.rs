@@ -501,4 +501,66 @@ mod tests {
             "re-publishing the same track must not re-forward, got {second:?}"
         );
     }
+
+    #[test]
+    fn subscribe_offer_after_publisher_published() {
+        const SUBSCRIBER: crate::ClientId = 300;
+
+        let mut sfu = Sfu::new(0, "0.0.0.0:0".parse().unwrap());
+        join_client(&mut sfu, 1, CLIENT);
+
+        // CLIENT publishes one sendonly video track.
+        sfu.handle_event(SFUEvent::SessionDescription {
+            request_id: 2,
+            room_id: ROOM,
+            client_id: CLIENT,
+            sdp: build_offer(),
+        })
+        .expect("handling the publisher offer should succeed");
+
+        // Now SUBSCRIBER joins
+        join_client(&mut sfu, 3, SUBSCRIBER);
+
+        // Check that joining does not immediately trigger subscribe offer (because subscriber hasn't set remote description yet)
+        let events_after_join = drain_events(&mut sfu);
+        let has_offer_after_join = events_after_join.iter().any(|e| {
+            matches!(
+                e,
+                SFUEvent::SessionDescription { client_id, sdp, .. }
+                    if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer
+            )
+        });
+        assert!(!has_offer_after_join, "should not send subscribe offer immediately on Join");
+
+        // SUBSCRIBER sends bootstrap offer (SDP offer)
+        let mut media_engine = MediaEngine::default();
+        media_engine
+            .register_default_codecs()
+            .expect("default codecs should register");
+        let mut subscriber_pc = RTCPeerConnectionBuilder::new()
+            .with_media_engine(media_engine)
+            .build()
+            .expect("subscriber pc should build");
+        subscriber_pc.create_data_channel("bootstrap", None).expect("create data channel");
+        let subscriber_offer = subscriber_pc.create_offer(None).expect("create offer");
+
+        sfu.handle_event(SFUEvent::SessionDescription {
+            request_id: 4,
+            room_id: ROOM,
+            client_id: SUBSCRIBER,
+            sdp: subscriber_offer,
+        })
+        .expect("handling subscriber bootstrap offer should succeed");
+
+        let events_after_bootstrap = drain_events(&mut sfu);
+        // SUBSCRIBER should receive a subscribe offer (re-offer)
+        assert!(
+            events_after_bootstrap.iter().any(|e| matches!(
+                e,
+                SFUEvent::SessionDescription { client_id, sdp, .. }
+                    if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer
+            )),
+            "subscriber should receive a server-initiated offer, got {events_after_bootstrap:?}"
+        );
+    }
 }

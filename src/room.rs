@@ -419,7 +419,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
             } else if let SFUEvent::Join { .. } = &evt {
                 let client = self.build_client(client_id, room_id)?;
                 self.clients.insert(client_id, client);
-                needs_reconcile = true;
+                needs_reconcile = false;
             }
 
             if remove_client {
