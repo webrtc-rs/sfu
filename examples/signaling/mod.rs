@@ -1,354 +1,411 @@
 #![allow(dead_code)]
 
+//! WebSocket signaling for the SFU chat example.
+//!
+//! Borrowed from AppRTC's Collider: each browser opens **one** WebSocket and, over that
+//! single full-duplex channel, `register`s `{room, client}` then exchanges SDP. The SFU
+//! answers and pushes server-initiated subscribe re-offers back on the *same* socket —
+//! so, unlike the old SSE + `POST` transport, server→browser frames flush immediately
+//! (no buffering stall) and there is no request/response correlation to manage.
+//!
+//! We own the TCP + TLS listener directly (no rouille): a small hand-rolled HTTP layer
+//! serves `GET /` (the page) and upgrades `/ws` to a `tungstenite` WebSocket.
+
 use bytes::BytesMut;
 use log::{error, info, trace, warn};
 use rand::random;
-use rouille::{Request, Response, ResponseBody};
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
+use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use sansio::Protocol;
-use sfu::{ClientId, RequestId, RoomId, SFUEvent, Sfu};
-use std::collections::{HashMap, VecDeque};
-use std::io::{ErrorKind, Read};
-use std::net::UdpSocket;
-use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::{Arc, mpsc};
+use sfu::{ClientId, RoomId, SFUEvent, Sfu};
+use std::collections::HashMap;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
+use tungstenite::handshake::derive_accept_key;
+use tungstenite::protocol::Role;
+use tungstenite::{Message, WebSocket};
 
-/// How long a `POST /offer` will wait for the SFU's answer before giving up.
-const OFFER_ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
+/// A WebSocket `read()` blocks at most this long, so the connection thread can interleave
+/// server→browser writes (a pushed re-offer reaches the browser within one interval).
+const WS_READ_TIMEOUT: Duration = Duration::from_millis(50);
 
-/// Messages the web (rouille) threads hand to a media port's run loop.
+/// Commands a client's WebSocket thread hands to a media port's run loop.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// A request/response signaling message (`/join`, `/offer`, `/answer`, `/leave`).
-    Signal(SignalingMessage),
-    /// A browser subscribing to server-initiated push (the `GET /events/...` SSE stream).
-    /// The run loop keeps `event_tx` and pushes server-initiated SDP (e.g. subscribe
-    /// re-offers) to it; the SSE handler streams whatever arrives to the browser.
-    Subscribe {
+    /// The client registered on its socket: bind its server→browser channel and `Join`.
+    Register {
         room_id: RoomId,
         client_id: ClientId,
-        event_tx: SyncSender<String>,
+        out_tx: SyncSender<String>,
     },
+    /// A signaling event from the client's socket (offer / answer / leave).
+    Signal(SFUEvent),
 }
 
-pub struct SignalingMessage {
-    pub request: SFUEvent,
-    pub response_tx: SyncSender<SFUEvent>,
+/// JSON envelope the browser sends over the WebSocket (AppRTC/Collider style):
+/// `{cmd:"register", roomid, clientid}` once, then `{cmd:"offer"|"answer", sdp}` or
+/// `{cmd:"leave"}`.
+#[derive(serde::Deserialize)]
+struct WsClientMsg {
+    cmd: String,
+    #[serde(default)]
+    roomid: Option<RoomId>,
+    #[serde(default)]
+    clientid: Option<ClientId>,
+    #[serde(default)]
+    sdp: Option<RTCSessionDescription>,
 }
 
-/// Streaming body for a Server-Sent Events response. Blocks on the per-client
-/// receiver and emits each payload as an SSE `data:` frame, holding the HTTP
-/// connection open. Returns EOF once the run loop drops the sender (client left).
-struct SseReader {
-    rx: Receiver<String>,
-    pending: VecDeque<u8>,
-}
+/// What a WebSocket binds to once it has `register`ed: its room/client and the run loop
+/// that owns that room.
+type Bound = (RoomId, ClientId, SyncSender<Command>);
 
-impl SseReader {
-    fn new(rx: Receiver<String>) -> Self {
-        // A comment keeps EventSource reconnects from looking like errors, and nudges
-        // the browser's retry interval.
-        let mut pending = VecDeque::new();
-        pending.extend(b": connected\nretry: 2000\n\n");
-        Self { rx, pending }
-    }
-}
+/// A blocking rustls TLS stream over a `TcpStream` (the underlying socket is reachable via
+/// `.sock` for the WebSocket read timeout).
+type Tls = StreamOwned<ServerConnection, TcpStream>;
 
-impl Read for SseReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.pending.is_empty() {
-            match self.rx.recv() {
-                // SSE frame: "data: <json>\n\n"
-                Ok(data) => self
-                    .pending
-                    .extend(format!("data: {}\n\n", data).into_bytes()),
-                // Sender dropped (client left / run loop gone) => end the stream.
-                Err(_) => return Ok(0),
-            }
-        }
-        let n = buf.len().min(self.pending.len());
-        for slot in buf.iter_mut().take(n) {
-            *slot = self.pending.pop_front().unwrap();
-        }
-        Ok(n)
-    }
-}
+// ───────────────────────────── TLS + HTTP + WebSocket ──────────────────────────────
 
-/// Pick the media port (run loop) that owns a given room.
-fn port_for_room(map: &HashMap<u16, SyncSender<Command>>, room_id: RoomId) -> Option<u16> {
-    let mut ports: Vec<u16> = map.keys().copied().collect();
-    ports.sort();
-    if ports.is_empty() {
-        return None;
-    }
-    Some(ports[(room_id as usize) % ports.len()])
-}
-
-// Handle a web request.
-pub fn web_request(
-    request: &Request,
+/// Accept TLS connections until `stop_rx` fires; serve `GET /` and upgrade `/ws`.
+pub fn serve(
+    stop_rx: crossbeam_channel::Receiver<()>,
+    listener: TcpListener,
+    tls_config: Arc<ServerConfig>,
     media_port_thread_map: Arc<HashMap<u16, SyncSender<Command>>>,
-) -> Response {
-    // "/offer/433774451/456773342", "/leave/433774451/456773342", "/events/.../..."
-    let path: Vec<String> = request.url().split('/').map(|s| s.to_owned()).collect();
+) {
+    listener
+        .set_nonblocking(true)
+        .expect("set signaling listener non-blocking");
 
-    if request.method() == "GET" {
-        // GET /events/{room}/{client} => open a Server-Sent Events stream for
-        // server-initiated push (subscribe re-offers). Any other GET serves the page.
-        if path.len() == 4 && path[1] == "events" {
-            return match (path[2].parse::<RoomId>(), path[3].parse::<ClientId>()) {
-                (Ok(room_id), Ok(client_id)) => {
-                    subscribe_events(room_id, client_id, &media_port_thread_map)
-                }
-                _ => Response::empty_400(),
-            };
+    loop {
+        // Stop on an explicit signal *or* when the sender drops (the single `()` is
+        // consumed by one receiver, so everyone else sees disconnect on shutdown).
+        match stop_rx.try_recv() {
+            Ok(_) => break,
+            Err(err) if err.is_disconnected() => break,
+            Err(_) => {}
         }
-        return Response::html(include_str!("../chat.html"));
-    }
-
-    if path.len() != 4 || path[2].parse::<u64>().is_err() || path[3].parse::<u64>().is_err() {
-        return Response::empty_400();
-    }
-
-    let room_id = path[2].parse::<RoomId>().unwrap();
-    let client_id = path[3].parse::<ClientId>().unwrap();
-
-    let Some(port) = port_for_room(&media_port_thread_map, room_id) else {
-        return Response::empty_406();
-    };
-    let Some(tx) = media_port_thread_map.get(&port) else {
-        return Response::empty_406();
-    };
-
-    // Read the POST body. Only `/offer` and `/answer` carry an SDP; `/join` and `/leave`
-    // have none, so an empty/absent body is fine here and is rejected later only if the
-    // handler actually needs it.
-    let mut sdp = vec![];
-    if let Some(mut data) = request.data()
-        && let Err(err) = data.read_to_end(&mut sdp)
-    {
-        warn!("{}: failed to read request body: {}", path[1], err);
-        return Response::text("failed to read body").with_status_code(400);
-    }
-
-    match path[1].as_str() {
-        "join" => {
-            let (response_tx, response_rx) = mpsc::sync_channel(1);
-            if let Err(resp) = send_signal(
-                tx,
-                SFUEvent::Join {
-                    request_id: random(),
-                    room_id,
-                    client_id,
-                },
-                response_tx,
-            ) {
-                return resp;
+        match listener.accept() {
+            Ok((tcp, _peer)) => {
+                let tls_config = tls_config.clone();
+                let media_port_thread_map = media_port_thread_map.clone();
+                std::thread::spawn(move || {
+                    if let Err(err) = handle_connection(tcp, tls_config, &media_port_thread_map) {
+                        trace!("connection ended: {}", err);
+                    }
+                });
             }
-            recv_ack(&response_rx, "join")
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(err) => warn!("accept error: {}", err),
         }
-        "offer" => {
-            let sdp = match parse_sdp("offer", sdp) {
-                Ok(sdp) => sdp,
-                Err(resp) => return resp,
-            };
-            let (response_tx, response_rx) = mpsc::sync_channel(1);
-            if let Err(resp) = send_signal(
-                tx,
-                SFUEvent::SessionDescription {
-                    request_id: random(),
-                    room_id,
-                    client_id,
-                    sdp,
-                },
-                response_tx,
-            ) {
-                return resp;
+    }
+    info!("signaling server stopped");
+}
+
+/// One accepted connection: TLS handshake, read the HTTP request head, then either serve
+/// the page or upgrade to a WebSocket.
+fn handle_connection(
+    tcp: TcpStream,
+    tls_config: Arc<ServerConfig>,
+    media_port_thread_map: &HashMap<u16, SyncSender<Command>>,
+) -> anyhow::Result<()> {
+    // The accepted stream can inherit the listener's non-blocking flag; the TLS handshake
+    // and request-head read need blocking I/O (the per-frame read timeout is set later,
+    // only for the WebSocket poll loop).
+    tcp.set_nonblocking(false)?;
+    // rustls performs the handshake lazily on the first read/write.
+    let conn = ServerConnection::new(tls_config)?;
+    let mut tls: Tls = StreamOwned::new(conn, tcp);
+    let head = read_http_head(&mut tls)?;
+    let request = HttpRequest::parse(&head);
+
+    let is_ws = request
+        .header("upgrade")
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+        && request.header("sec-websocket-key").is_some();
+
+    if is_ws {
+        // Complete the RFC 6455 handshake ourselves (tiny_http's opaque upgrade stream
+        // can't expose a read timeout), then hand the raw stream to tungstenite.
+        let key = request.header("sec-websocket-key").unwrap();
+        let accept = derive_accept_key(key.as_bytes());
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Accept: {accept}\r\n\r\n"
+        );
+        tls.write_all(response.as_bytes())?;
+        tls.flush()?;
+
+        tls.sock.set_read_timeout(Some(WS_READ_TIMEOUT))?;
+        let ws = WebSocket::from_raw_socket(tls, Role::Server, None);
+        ws_session(ws, media_port_thread_map);
+    } else {
+        serve_static(&mut tls, &request.path)?;
+    }
+    Ok(())
+}
+
+/// Read bytes until the end of the HTTP request head (`\r\n\r\n`). WebSocket clients send
+/// nothing after the head until they receive the `101`, and `GET /` has no body, so this
+/// consumes exactly the head.
+fn read_http_head(tls: &mut Tls) -> anyhow::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    loop {
+        let n = tls.read(&mut chunk)?;
+        if n == 0 {
+            anyhow::bail!("connection closed before request head");
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+        anyhow::ensure!(buf.len() <= 64 * 1024, "request head too large");
+    }
+    Ok(buf)
+}
+
+struct HttpRequest {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+}
+
+impl HttpRequest {
+    fn parse(head: &[u8]) -> Self {
+        let text = String::from_utf8_lossy(head);
+        let mut lines = text.split("\r\n");
+        let mut request_line = lines.next().unwrap_or("").split_whitespace();
+        let method = request_line.next().unwrap_or("").to_owned();
+        let path = request_line.next().unwrap_or("/").to_owned();
+        let headers = lines
+            .take_while(|line| !line.is_empty())
+            .filter_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                Some((key.trim().to_owned(), value.trim().to_owned()))
+            })
+            .collect();
+        HttpRequest {
+            method,
+            path,
+            headers,
+        }
+    }
+
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// Serve the chat page for `GET /`, `404` otherwise.
+fn serve_static(tls: &mut Tls, path: &str) -> anyhow::Result<()> {
+    let (status, content_type, body) = if path == "/" {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            include_str!("../chat.html"),
+        )
+    } else {
+        ("404 Not Found", "text/plain; charset=utf-8", "not found")
+    };
+    let response = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
+    tls.write_all(response.as_bytes())?;
+    tls.flush()?;
+    Ok(())
+}
+
+/// Drive one client's WebSocket for its lifetime: read client frames → run loop, and
+/// drain server→browser pushes → client.
+fn ws_session(mut ws: WebSocket<Tls>, media_port_thread_map: &HashMap<u16, SyncSender<Command>>) {
+    // Server→browser channel; its sender is handed to the run loop on `register`.
+    let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(64);
+    let mut bound: Option<Bound> = None;
+
+    loop {
+        // 1. Read one client frame (blocks up to WS_READ_TIMEOUT).
+        match ws.read() {
+            Ok(Message::Text(text)) => {
+                handle_ws_text(text.as_str(), &mut bound, &out_tx, media_port_thread_map)
             }
-            // The answer is produced by the SFU and delivered asynchronously by the
-            // run loop (see `poll_event`), so wait for it here.
-            match response_rx.recv_timeout(OFFER_ANSWER_TIMEOUT) {
-                Ok(SFUEvent::SessionDescription { sdp, .. })
-                    if sdp.sdp_type == RTCSdpType::Answer =>
-                {
-                    match serde_json::to_string(&sdp) {
-                        Ok(json) => Response::from_data("application/json", json),
-                        Err(err) => {
-                            error!("offer: failed to serialize answer: {}", err);
-                            Response::text("failed to serialize answer").with_status_code(500)
-                        }
+            Ok(Message::Ping(payload)) => {
+                let _ = ws.send(Message::Pong(payload));
+            }
+            Ok(Message::Close(_)) => break,
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(err))
+                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut => {}
+            Err(err) => {
+                trace!("ws read ended: {}", err);
+                break;
+            }
+        }
+
+        // 2. Flush server→browser pushes (answers and subscribe re-offers).
+        loop {
+            match out_rx.try_recv() {
+                Ok(payload) => {
+                    if let Some((room_id, client_id, _)) = &bound {
+                        trace!(
+                            "ws->browser room={} client={} pushing {} bytes",
+                            room_id,
+                            client_id,
+                            payload.len()
+                        );
+                    }
+                    if let Err(err) = ws.send(Message::text(payload)) {
+                        trace!("ws send failed: {}", err);
+                        teardown(&bound);
+                        return;
                     }
                 }
-                Ok(SFUEvent::Err { reason, .. }) => {
-                    warn!("offer for {}/{} rejected: {}", room_id, client_id, reason);
-                    Response::text(reason).with_status_code(422)
-                }
-                Ok(other) => {
-                    warn!("offer for {}/{} got unexpected {:?}", room_id, client_id, other);
-                    Response::empty_404()
-                }
-                Err(err) => {
-                    error!("offer for {}/{} timed out: {}", room_id, client_id, err);
-                    Response::text("timeout waiting for answer").with_status_code(504)
-                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
             }
         }
-        "answer" => {
-            let sdp = match parse_sdp("answer", sdp) {
-                Ok(sdp) => sdp,
-                Err(resp) => return resp,
+    }
+
+    teardown(&bound);
+}
+
+/// Dispatch one client `{cmd:...}` message.
+fn handle_ws_text(
+    text: &str,
+    bound: &mut Option<Bound>,
+    out_tx: &SyncSender<String>,
+    media_port_thread_map: &HashMap<u16, SyncSender<Command>>,
+) {
+    let msg: WsClientMsg = match serde_json::from_str(text) {
+        Ok(msg) => msg,
+        Err(err) => {
+            warn!("bad ws message: {}; text was:\n{}", err, text);
+            return;
+        }
+    };
+
+    match msg.cmd.as_str() {
+        "register" => {
+            let (Some(room_id), Some(client_id)) = (msg.roomid, msg.clientid) else {
+                warn!("register missing roomid/clientid");
+                return;
             };
-            let (response_tx, response_rx) = mpsc::sync_channel(1);
-            if let Err(resp) = send_signal(
-                tx,
-                SFUEvent::SessionDescription {
-                    request_id: random(),
+            if bound.is_some() {
+                warn!("duplicate register for {}/{}", room_id, client_id);
+                return;
+            }
+            let Some(tx) = port_tx_for_room(media_port_thread_map, room_id) else {
+                warn!("no media port for room {}", room_id);
+                return;
+            };
+            info!(
+                "Register  browser->SFU room={} client={}",
+                room_id, client_id
+            );
+            if tx
+                .send(Command::Register {
                     room_id,
                     client_id,
-                    sdp,
-                },
-                response_tx,
-            ) {
-                return resp;
+                    out_tx: out_tx.clone(),
+                })
+                .is_err()
+            {
+                error!(
+                    "run loop unavailable for register {}/{}",
+                    room_id, client_id
+                );
+                return;
             }
-            recv_ack(&response_rx, "answer")
+            *bound = Some((room_id, client_id, tx));
+        }
+        "offer" | "answer" => {
+            let Some((room_id, client_id, tx)) = bound.as_ref() else {
+                warn!("{} before register", msg.cmd);
+                return;
+            };
+            let Some(sdp) = msg.sdp else {
+                warn!("{} missing sdp", msg.cmd);
+                return;
+            };
+            // Offer: browser publishes/renegotiates. Answer (Re-Answer): browser answers a
+            // server-initiated subscribe re-offer.
+            let label = if msg.cmd == "offer" {
+                "Offer"
+            } else {
+                "Re-Answer"
+            };
+            log_sdp(label, "browser->SFU", *room_id, *client_id, &sdp);
+            let _ = tx.send(Command::Signal(SFUEvent::SessionDescription {
+                request_id: random(),
+                room_id: *room_id,
+                client_id: *client_id,
+                sdp,
+            }));
         }
         "leave" => {
-            let (response_tx, response_rx) = mpsc::sync_channel(1);
-            if let Err(resp) = send_signal(
-                tx,
-                SFUEvent::Leave {
+            if let Some((room_id, client_id, tx)) = bound.as_ref() {
+                info!(
+                    "Leave     browser->SFU room={} client={}",
+                    room_id, client_id
+                );
+                let _ = tx.send(Command::Signal(SFUEvent::Leave {
                     request_id: random(),
-                    room_id,
-                    client_id,
-                    reason: "user left".to_string(),
-                },
-                response_tx,
-            ) {
-                return resp;
+                    room_id: *room_id,
+                    client_id: *client_id,
+                    reason: "user left".to_owned(),
+                }));
             }
-            recv_ack(&response_rx, "leave")
         }
-        _ => Response::empty_404(),
+        other => warn!("unknown ws cmd: {}", other),
     }
 }
 
-fn subscribe_events(
+/// A closed socket means the client is gone: tell the run loop to `Leave` it.
+fn teardown(bound: &Option<Bound>) {
+    if let Some((room_id, client_id, tx)) = bound {
+        info!(
+            "Leave     browser->SFU room={} client={} (ws closed)",
+            room_id, client_id
+        );
+        let _ = tx.send(Command::Signal(SFUEvent::Leave {
+            request_id: random(),
+            room_id: *room_id,
+            client_id: *client_id,
+            reason: "ws closed".to_owned(),
+        }));
+    }
+}
+
+/// The run loop that owns the room, keyed by room id (mirrors the old `port_for_room`).
+fn port_tx_for_room(
+    map: &HashMap<u16, SyncSender<Command>>,
     room_id: RoomId,
-    client_id: ClientId,
-    media_port_thread_map: &HashMap<u16, SyncSender<Command>>,
-) -> Response {
-    let Some(port) = port_for_room(media_port_thread_map, room_id) else {
-        return Response::empty_406();
-    };
-    let Some(tx) = media_port_thread_map.get(&port) else {
-        return Response::empty_406();
-    };
-
-    let (event_tx, event_rx) = mpsc::sync_channel::<String>(16);
-    if tx
-        .send(Command::Subscribe {
-            room_id,
-            client_id,
-            event_tx,
-        })
-        .is_err()
-    {
-        return Response::empty_406();
-    }
-
-    Response {
-        status_code: 200,
-        headers: vec![
-            ("Content-Type".into(), "text/event-stream".into()),
-            ("Cache-Control".into(), "no-cache".into()),
-        ],
-        data: ResponseBody::from_reader(SseReader::new(event_rx)),
-        upgrade: None,
-    }
+) -> Option<SyncSender<Command>> {
+    let mut ports: Vec<u16> = map.keys().copied().collect();
+    ports.sort();
+    let port = *ports.get((room_id as usize) % ports.len().max(1))?;
+    map.get(&port).cloned()
 }
 
-/// Hand a signaling command to the media run loop. Returns a `503` response (instead of
-/// panicking) if that run loop is gone, so a dead media thread surfaces as an HTTP error.
-fn send_signal(
-    tx: &SyncSender<Command>,
-    request: SFUEvent,
-    response_tx: SyncSender<SFUEvent>,
-) -> Result<(), Response> {
-    tx.send(Command::Signal(SignalingMessage {
-        request,
-        response_tx,
-    }))
-    .map_err(|err| {
-        error!("signaling run loop unavailable: {}", err);
-        Response::text("signaling unavailable").with_status_code(503)
-    })
-}
+// ───────────────────────────────── media run loop ──────────────────────────────────
 
-/// Parse a POSTed SDP body into an `RTCSessionDescription`, logging and returning a `400`
-/// (with the reason) on bad UTF-8 or bad JSON — so a malformed `/offer` or `/answer`
-/// surfaces as a diagnosable error instead of an opaque `500` panic.
-fn parse_sdp(kind: &str, body: Vec<u8>) -> Result<RTCSessionDescription, Response> {
-    let text = String::from_utf8(body).map_err(|err| {
-        warn!("{}: request body is not valid UTF-8: {}", kind, err);
-        Response::text("body is not valid UTF-8").with_status_code(400)
-    })?;
-
-    serde_json::from_str::<RTCSessionDescription>(&text).map_err(|err| {
-        warn!("{}: failed to parse SDP JSON: {}; body was:\n{}", kind, err, text);
-        Response::text(format!("invalid SDP JSON: {err}")).with_status_code(400)
-    })
-}
-
-/// Wait for the SFU's `Ok`/`Err` reply to an applied answer (or any request that only
-/// needs an ack), turning it into an HTTP response and never blocking forever.
-fn recv_ack(response_rx: &Receiver<SFUEvent>, kind: &str) -> Response {
-    match response_rx.recv_timeout(OFFER_ANSWER_TIMEOUT) {
-        Ok(SFUEvent::Ok { .. }) => ok_200(),
-        Ok(SFUEvent::Err { reason, .. }) => {
-            warn!("{}: SFU rejected request: {}", kind, reason);
-            Response::text(reason).with_status_code(422)
-        }
-        Ok(other) => {
-            warn!("{}: unexpected SFU reply {:?}", kind, other);
-            Response::empty_404()
-        }
-        Err(err) => {
-            error!("{}: timed out waiting for SFU reply: {}", kind, err);
-            Response::text("timeout waiting for SFU").with_status_code(504)
-        }
-    }
-}
-
-fn ok_200() -> Response {
-    Response {
-        status_code: 200,
-        headers: vec![],
-        data: ResponseBody::empty(),
-        upgrade: None,
-    }
-}
-
-/// Log one signaling SDP exchange: a concise summary at `info!` and the full SDP at
-/// `trace!`. `label` names the exchange (Offer / Answer / Re-Offer / Re-Answer) and
-/// `direction` its flow (`browser->SFU` or `SFU->browser`).
-fn log_sdp(
-    label: &str,
-    direction: &str,
-    room_id: RoomId,
-    client_id: ClientId,
-    request_id: RequestId,
-    sdp: &RTCSessionDescription,
-) {
-    trace!(
-        "{label:<9} {direction:<11} room={room_id} client={client_id} req={request_id} SDP {}:\n{}",
-        sdp.sdp_type, sdp.sdp
-    );
-}
-
-/// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
-/// and forwards media data between clients.
+/// The media run loop for one UDP port: drives the SFU, forwards RTP/RTCP, and pushes
+/// SFU-emitted SDP (answers and subscribe re-offers) back to each client's WebSocket.
 pub fn run(
     stop_rx: crossbeam_channel::Receiver<()>,
     socket: UdpSocket,
@@ -358,51 +415,43 @@ pub fn run(
 
     let mut sfu = Sfu::new(random(), socket.local_addr()?);
 
-    // Per-client SSE push channels (server -> browser), and the answer channels of
-    // in-flight `POST /offer` requests awaiting the SFU's answer.
+    // Per-client server→browser channels (the WebSocket writers).
     let mut subscribers: HashMap<ClientId, SyncSender<String>> = HashMap::new();
-    let mut pending_offers: HashMap<RequestId, SyncSender<SFUEvent>> = HashMap::new();
 
     let mut buf = vec![0; 2000];
     loop {
         match stop_rx.try_recv() {
             Ok(_) => break,
-            Err(err) => {
-                if err.is_disconnected() {
-                    break;
-                }
-            }
-        };
+            Err(err) if err.is_disconnected() => break,
+            Err(_) => {}
+        }
 
         while let Some(transmit) = sfu.poll_write() {
             socket.send_to(&transmit.message, transmit.transport.peer_addr)?;
         }
 
-        // Spawn new incoming command from the signaling server thread.
         if let Ok(command) = rx.try_recv() {
-            if let Err(err) =
-                handle_command(&mut sfu, command, &mut pending_offers, &mut subscribers)
-            {
-                error!("handle_command got error:{}", err);
-                continue;
-            }
+            handle_command(&mut sfu, command, &mut subscribers);
         }
 
-        // Drain SFU-emitted events: answers -> the pending POST /offer; server-initiated
-        // offers -> the target client's SSE stream.
-        poll_event(&mut sfu, &mut pending_offers, &mut subscribers);
+        // Drain SFU-emitted SDP: every answer and subscribe re-offer is pushed to the
+        // target client's WebSocket (no request/response correlation with WS transport).
+        drain_sfu_events(&mut sfu, &mut subscribers);
 
         while let Some(msg) = sfu.poll_read() {
             info!("process sfu's poll_read {:?}, should always be None", msg);
         }
 
-        // Poll clients until they return timeout
         let eto = sfu
             .poll_timeout()
-            .unwrap_or_else(|| Instant::now() + Duration::from_millis(100)); //TODO: DEFAULT_TIMEOUT_DURATION
+            .unwrap_or_else(|| Instant::now() + Duration::from_millis(100));
+        // Cap the socket wait so incoming WebSocket commands (offers/answers arrive
+        // out-of-band, not on this UDP socket) are picked up within one tick even when the
+        // SFU's next timer is far away.
         let delay_from_now = eto
             .checked_duration_since(Instant::now())
-            .unwrap_or(Duration::from_secs(0));
+            .unwrap_or(Duration::from_secs(0))
+            .min(Duration::from_millis(50));
         if delay_from_now.is_zero() {
             sfu.handle_timeout(Instant::now())?;
             continue;
@@ -422,17 +471,14 @@ pub fn run(
                 },
                 message: BytesMut::from(&buf[..n]),
             }),
-
-            Err(e) => match e.kind() {
-                // Expected error for set_read_timeout(). One for windows, one for the rest.
+            Err(err) => match err.kind() {
                 ErrorKind::WouldBlock | ErrorKind::TimedOut => None,
-                _ => panic!("UdpSocket read failed: {e:?}"),
+                _ => panic!("UdpSocket read failed: {err:?}"),
             },
         } {
             sfu.handle_read(packet)?;
         }
 
-        // Drive time forward in all clients.
         sfu.handle_timeout(Instant::now())?;
     }
 
@@ -440,66 +486,64 @@ pub fn run(
         "media server on {} is gracefully down",
         socket.local_addr()?
     );
-
     Ok(())
 }
 
-/// Drain every event the SFU has produced and route it:
-/// - a `SessionDescription` **answer** completes an in-flight `POST /offer`;
-/// - a `SessionDescription` **offer** is server-initiated (e.g. a subscribe re-offer)
-///   and is pushed to that client's SSE stream, so the browser can answer it via
-///   `POST /answer` — no data channel involved.
-fn poll_event(
+fn handle_command(
     sfu: &mut Sfu,
-    pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
+    command: Command,
     subscribers: &mut HashMap<ClientId, SyncSender<String>>,
 ) {
+    match command {
+        Command::Register {
+            room_id,
+            client_id,
+            out_tx,
+        } => {
+            // Replace any stale writer (browser reconnected on a fresh socket).
+            subscribers.insert(client_id, out_tx);
+            if let Err(err) = sfu.handle_event(SFUEvent::Join {
+                request_id: random(),
+                room_id,
+                client_id,
+            }) {
+                error!("join failed for {}/{}: {}", room_id, client_id, err);
+            }
+        }
+        Command::Signal(evt) => {
+            let leaving = match &evt {
+                SFUEvent::Leave { client_id, .. } => Some(*client_id),
+                _ => None,
+            };
+            if let Err(err) = sfu.handle_event(evt) {
+                error!("handle_event failed: {}", err);
+            }
+            if let Some(client_id) = leaving {
+                subscribers.remove(&client_id);
+            }
+        }
+    }
+}
+
+/// Push every SFU-emitted SDP to the target client's WebSocket. An `Answer` is the reply
+/// to that client's offer; an `Offer` is a server-initiated subscribe re-offer.
+fn drain_sfu_events(sfu: &mut Sfu, subscribers: &mut HashMap<ClientId, SyncSender<String>>) {
     while let Some(evt) = sfu.poll_event() {
         match evt {
             SFUEvent::SessionDescription {
-                request_id,
                 room_id,
                 client_id,
                 sdp,
+                ..
             } => {
-                if sdp.sdp_type == RTCSdpType::Answer {
-                    // The SFU's Answer to a browser Offer, returned over the pending
-                    // `POST /offer` HTTP response.
-                    log_sdp(
-                        "Answer",
-                        "SFU->browser",
-                        room_id,
-                        client_id,
-                        request_id,
-                        &sdp,
-                    );
-                    match pending_offers.remove(&request_id) {
-                        Some(response_tx) => {
-                            let _ = response_tx.send(SFUEvent::SessionDescription {
-                                request_id,
-                                room_id,
-                                client_id,
-                                sdp,
-                            });
-                        }
-                        None => warn!("no pending POST /offer for answer request {}", request_id),
-                    }
+                let label = if sdp.sdp_type == RTCSdpType::Answer {
+                    "Answer"
                 } else {
-                    // Server-initiated subscribe Re-Offer -> push to the client's SSE
-                    // stream; the browser answers it via `POST /answer` (the Re-Answer).
-                    log_sdp(
-                        "Re-Offer",
-                        "SFU->browser",
-                        room_id,
-                        client_id,
-                        request_id,
-                        &sdp,
-                    );
-                    push_to_subscriber(subscribers, client_id, &sdp);
-                }
+                    "Re-Offer"
+                };
+                log_sdp(label, "SFU->browser", room_id, client_id, &sdp);
+                push_to_subscriber(subscribers, client_id, &sdp);
             }
-            // The SFU does not yet emit trickle ICE toward signaling; when it does,
-            // route Event::IceCandidate here to `push_to_subscriber` as well.
             other => warn!("run loop dropped unroutable SFU event {:?}", other),
         }
     }
@@ -511,250 +555,56 @@ fn push_to_subscriber(
     sdp: &RTCSessionDescription,
 ) {
     let Some(tx) = subscribers.get(&client_id) else {
-        warn!(
-            "server-initiated offer for client {} but it has no SSE stream",
-            client_id
-        );
+        warn!("SFU emitted SDP for client {} with no WebSocket", client_id);
         return;
     };
     match serde_json::to_string(sdp) {
         Ok(payload) => {
-            if tx.send(payload).is_err() {
-                // Browser closed the SSE stream.
+            if tx.try_send(payload).is_err() {
                 warn!(
-                    "SSE stream for client {} closed; dropping Re-Offer",
+                    "WebSocket for client {} is gone/full; dropping SDP",
                     client_id
                 );
                 subscribers.remove(&client_id);
-            } else {
-                trace!("Re-Offer pushed to SSE stream for client {}", client_id);
             }
         }
-        Err(err) => error!("failed to serialize server-initiated offer: {}", err),
+        Err(err) => error!("failed to serialize SDP for client {}: {}", client_id, err),
     }
 }
 
-fn handle_command(
-    sfu: &mut Sfu,
-    command: Command,
-    pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
-    subscribers: &mut HashMap<ClientId, SyncSender<String>>,
-) -> anyhow::Result<()> {
-    match command {
-        Command::Subscribe {
-            room_id: _,
-            client_id,
-            event_tx,
-        } => {
-            // Replace any stale stream (EventSource auto-reconnect).
-            subscribers.insert(client_id, event_tx);
-            Ok(())
-        }
-        Command::Signal(msg) => {
-            // Tear down a client's SSE stream when it leaves.
-            let leaving = match &msg.request {
-                SFUEvent::Leave { client_id, .. } => Some(*client_id),
-                _ => None,
-            };
-            let result = handle_signaling_message(sfu, msg, pending_offers);
-            if let Some(client_id) = leaving {
-                subscribers.remove(&client_id);
-            }
-            result
-        }
-    }
+// ───────────────────────────────────── logging ─────────────────────────────────────
+
+/// Concise SDP summary for `info!` flow logs; the full SDP goes to `trace!`.
+fn sdp_summary(sdp: &RTCSessionDescription) -> String {
+    let m_lines = sdp
+        .sdp
+        .lines()
+        .filter(|line| line.starts_with("m="))
+        .count();
+    format!(
+        "{} ({} bytes, {} m-line{})",
+        sdp.sdp_type,
+        sdp.sdp.len(),
+        m_lines,
+        if m_lines == 1 { "" } else { "s" }
+    )
 }
 
-pub fn handle_signaling_message(
-    sfu: &mut Sfu,
-    signaling_msg: SignalingMessage,
-    pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
-) -> anyhow::Result<()> {
-    match signaling_msg.request {
-        SFUEvent::Join {
-            request_id,
-            room_id,
-            client_id,
-        } => handle_join_message(
-            sfu,
-            request_id,
-            room_id,
-            client_id,
-            signaling_msg.response_tx,
-        ),
-        SFUEvent::SessionDescription {
-            request_id,
-            room_id,
-            client_id,
-            sdp,
-        } => handle_session_description(
-            sfu,
-            request_id,
-            room_id,
-            client_id,
-            sdp,
-            signaling_msg.response_tx,
-            pending_offers,
-        ),
-        SFUEvent::Leave {
-            request_id,
-            room_id,
-            client_id,
-            reason,
-        } => handle_leave_message(
-            sfu,
-            request_id,
-            room_id,
-            client_id,
-            reason,
-            signaling_msg.response_tx,
-        ),
-        SFUEvent::IceCandidate {
-            request_id,
-            room_id,
-            client_id,
-            candidate: _,
-        } => Ok(signaling_msg.response_tx.send(SFUEvent::Err {
-            request_id,
-            room_id: Some(room_id),
-            client_id: Some(client_id),
-            reason: "Unsupported Request yet".to_string(),
-        })?),
-        SFUEvent::Ok {
-            request_id,
-            room_id,
-            client_id,
-            ..
-        }
-        | SFUEvent::Err {
-            request_id,
-            room_id,
-            client_id,
-            reason: _,
-            ..
-        } => Ok(signaling_msg.response_tx.send(SFUEvent::Err {
-            request_id,
-            room_id,
-            client_id,
-            reason: "Invalid Request".to_string(),
-        })?),
-    }
-}
-
-fn handle_join_message(
-    sfu: &mut Sfu,
-    request_id: RequestId,
+/// Log one SDP exchange: a summary at `info!` and the full SDP at `trace!`. `label` names
+/// the exchange (Offer / Answer / Re-Offer / Re-Answer), `direction` its flow.
+fn log_sdp(
+    label: &str,
+    direction: &str,
     room_id: RoomId,
     client_id: ClientId,
-    response_tx: SyncSender<SFUEvent>,
-) -> anyhow::Result<()> {
-    info!("Join      browser->SFU room={room_id} client={client_id} req={request_id}");
-
-    let mut try_handle = || -> anyhow::Result<()> {
-        Ok(sfu.handle_event(SFUEvent::Join {
-            request_id,
-            room_id,
-            client_id,
-        })?)
-    };
-
-    match try_handle() {
-        Ok(_) => Ok(response_tx.send(SFUEvent::Ok {
-            request_id,
-            room_id: Some(room_id),
-            client_id: Some(client_id),
-        })?),
-        Err(err) => Ok(response_tx.send(SFUEvent::Err {
-            request_id,
-            room_id: Some(room_id),
-            client_id: Some(client_id),
-            reason: err.to_string(),
-        })?),
-    }
-}
-
-/// Feed an incoming SDP into the SFU.
-///
-/// - **Offer** (`POST /offer`): the SFU answers asynchronously. We stash `response_tx`
-///   in `pending_offers` keyed by `request_id`; the run loop delivers the answer once
-///   `poll_event` yields it (see `drain_events`).
-/// - **Answer** (`POST /answer`, in reply to a server-initiated re-offer): the SFU only
-///   applies it, so we reply `Ok` immediately.
-fn handle_session_description(
-    sfu: &mut Sfu,
-    request_id: RequestId,
-    room_id: RoomId,
-    client_id: ClientId,
-    sdp: RTCSessionDescription,
-    response_tx: SyncSender<SFUEvent>,
-    pending_offers: &mut HashMap<RequestId, SyncSender<SFUEvent>>,
-) -> anyhow::Result<()> {
-    let is_offer = sdp.sdp_type == RTCSdpType::Offer;
-    // Offer (POST /offer): the browser publishes or renegotiates its send tracks.
-    // Re-Answer (POST /answer): the browser answers a server-initiated subscribe Re-Offer.
-    let label = if is_offer { "Offer" } else { "Re-Answer" };
-    log_sdp(label, "browser->SFU", room_id, client_id, request_id, &sdp);
-
-    match sfu.handle_event(SFUEvent::SessionDescription {
-        request_id,
-        room_id,
-        client_id,
-        sdp,
-    }) {
-        Ok(_) => {
-            if is_offer {
-                // Answer delivered later by drain_events, correlated by request_id.
-                pending_offers.insert(request_id, response_tx);
-                Ok(())
-            } else {
-                Ok(response_tx.send(SFUEvent::Ok {
-                    request_id,
-                    room_id: Some(room_id),
-                    client_id: Some(client_id),
-                })?)
-            }
-        }
-        Err(err) => Ok(response_tx.send(SFUEvent::Err {
-            request_id,
-            room_id: Some(room_id),
-            client_id: Some(client_id),
-            reason: err.to_string(),
-        })?),
-    }
-}
-
-fn handle_leave_message(
-    sfu: &mut Sfu,
-    request_id: RequestId,
-    room_id: RoomId,
-    client_id: ClientId,
-    reason: String,
-    response_tx: SyncSender<SFUEvent>,
-) -> anyhow::Result<()> {
+    sdp: &RTCSessionDescription,
+) {
     info!(
-        "Leave     browser->SFU room={room_id} client={client_id} req={request_id} reason={reason:?}"
+        "{label:<9} {direction:<11} room={room_id} client={client_id}  {}",
+        sdp_summary(sdp)
     );
-
-    let try_handle = || -> anyhow::Result<()> {
-        Ok(sfu.handle_event(SFUEvent::Leave {
-            request_id,
-            room_id,
-            client_id,
-            reason,
-        })?)
-    };
-
-    match try_handle() {
-        Ok(_) => Ok(response_tx.send(SFUEvent::Ok {
-            request_id,
-            room_id: Some(room_id),
-            client_id: Some(client_id),
-        })?),
-        Err(err) => Ok(response_tx.send(SFUEvent::Err {
-            request_id,
-            room_id: Some(room_id),
-            client_id: Some(client_id),
-            reason: err.to_string(),
-        })?),
-    }
+    trace!(
+        "{label:<9} {direction:<11} room={room_id} client={client_id} full SDP:\n{}",
+        sdp.sdp
+    );
 }

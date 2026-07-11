@@ -30,8 +30,19 @@ Status: <span id="ice_status">Waiting</span>
     let streamCam;
     let streamMic;
     let dataChannel;
-    let eventSource;
+    let ws;
     let rtc = new RTCPeerConnection();
+
+    // Single bi-directional signaling channel (borrowed from AppRTC/Collider): the browser
+    // registers {room, client} once, then exchanges SDP as {cmd, sdp} frames; the SFU
+    // pushes answers and server-initiated re-offers back on the same socket.
+    function sendSignal(obj) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(obj));
+        } else {
+            console.log('WS not open; dropping', obj.cmd);
+        }
+    }
     rtc.oniceconnectionstatechange = () => {
         byId('ice_status').innerText = rtc.iceConnectionState;
         if (rtc.iceConnectionState == 'disconnected' || rtc.iceConnectionState == 'failed') {
@@ -54,18 +65,12 @@ Status: <span id="ice_status">Waiting</span>
         console.log('do offer', offer.sdp.split('\r\n'));
         rtc.setLocalDescription(offer);
 
-        // Re-Offer over dedicated signaling (not the data channel): POST the offer
-        // and read the SFU's answer back from the HTTP response.
-        let path = '/offer/' + byId("room").value + '/' + clientId;
-        const res = await fetch(path, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(offer),
-        });
+        // Send the offer over the WebSocket; the SFU's answer arrives asynchronously on
+        // the same socket (see onWsMessage).
+        sendSignal({ cmd: 'offer', sdp: offer });
+    }
 
-        const answer = await res.json();
+    async function handleAnswer(answer) {
         console.log('received answer', answer.sdp.split('\r\n'));
         try {
             rtc.setRemoteDescription(answer);
@@ -74,8 +79,7 @@ Status: <span id="ice_status">Waiting</span>
         }
     }
 
-    async function handleOffer(json) {
-        const offer = JSON.parse(json);
+    async function handleOffer(offer) {
         console.log('handle offer', offer.sdp.split('\r\n'));
         try {
             rtc.setRemoteDescription(offer);
@@ -86,15 +90,21 @@ Status: <span id="ice_status">Waiting</span>
         console.log('offer response', answer.sdp.split('\r\n'));
         rtc.setLocalDescription(answer);
 
-        // Answer over dedicated signaling (not the data channel): POST the answer.
-        let path = '/answer/' + byId("room").value + '/' + clientId;
-        await fetch(path, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(answer),
-        });
+        // Answer the SFU's server-initiated re-offer over the same WebSocket.
+        sendSignal({ cmd: 'answer', sdp: answer });
+    }
+
+    // Server->browser: the SFU pushes bare SDP JSON ({type, sdp}). An 'answer' completes
+    // our offer; an 'offer' is a subscribe re-offer we must answer.
+    function onWsMessage(event) {
+        const sdp = JSON.parse(event.data);
+        if (sdp.type === 'answer') {
+            handleAnswer(sdp);
+        } else if (sdp.type === 'offer') {
+            handleOffer(sdp);
+        } else {
+            console.log('unexpected WS message', event.data);
+        }
     }
 
     async function startCam() {
@@ -176,25 +186,14 @@ Status: <span id="ice_status">Waiting</span>
     };
 
     async function startRtc() {
-        let joinPath = '/join/' + byId("room").value + '/' + clientId;
-        const joinRes = await fetch(joinPath, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-        });
-
-        //TODO: check join Result?
-
-        let path = '/offer/' + byId("room").value + '/' + clientId;
         byId('ice_status').innerText = 'Connecting';
         byId('chan_status').innerText = 'Joining room ' + byId("room").value + ' as client ' + clientId;
         byId("room").disabled = true;
         byId('join').disabled = true;
         byId('leave').disabled = false;
-        // The data channel is only a transport bootstrap now: the initial offer needs at
-        // least one m-line to establish DTLS/ICE, and its onopen tells us the connection
-        // is ready. It is NOT used for signaling anymore — SDP goes over HTTP/SSE.
+
+        // The data channel is a transport bootstrap: the initial offer needs at least one
+        // m-line to establish DTLS/ICE, and its onopen tells us the connection is ready.
         dataChannel = rtc.createDataChannel("bootstrap");
         dataChannel.onopen = () => {
             byId('chan_status').innerText = 'Joined room ' + byId("room").value + ' as client ' + clientId;
@@ -202,34 +201,21 @@ Status: <span id="ice_status">Waiting</span>
             byId('cam').disabled = false;
         };
 
-        // Server-initiated re-offers (the SFU's subscribe direction) are pushed to the
-        // browser over Server-Sent Events; we answer each via POST /answer (handleOffer).
-        // This replaces receiving offers over the data channel.
-        eventSource = new EventSource('/events/' + byId("room").value + '/' + clientId);
-        eventSource.onmessage = (event) => {
-            let json = JSON.parse(event.data);
-            if (json.type == 'offer') {
-                handleOffer(event.data);
-            }
-        };
-        eventSource.onerror = (e) => {
-            console.log('EventSource error (will auto-reconnect):', e);
-        };
-        const offer = await rtc.createOffer();
-        rtc.setLocalDescription(offer);
-        console.log('POST offer', offer.sdp.split('\r\n'));
+        // One WebSocket carries all signaling, both directions. On open we register, then
+        // send our initial offer; the SFU's answer and any re-offers arrive on onmessage.
+        ws = new WebSocket('wss://' + location.host + '/ws');
+        ws.onopen = async () => {
+            console.log('WS open; registering ' + byId("room").value + '/' + clientId);
+            sendSignal({ cmd: 'register', roomid: Number(byId("room").value), clientid: clientId });
 
-        const res = await fetch(path, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(offer),
-        });
-
-        const answer = await res.json();
-        rtc.setRemoteDescription(answer);
-        console.log('POST answer', answer.sdp.split('\r\n'));
+            const offer = await rtc.createOffer();
+            rtc.setLocalDescription(offer);
+            console.log('send offer', offer.sdp.split('\r\n'));
+            sendSignal({ cmd: 'offer', sdp: offer });
+        };
+        ws.onmessage = onWsMessage;
+        ws.onclose = (e) => console.log('WS closed:', e.code, e.reason);
+        ws.onerror = (e) => console.log('WS error:', e);
     }
 
     async function leaveRtc() {
@@ -238,20 +224,13 @@ Status: <span id="ice_status">Waiting</span>
         byId("room").disabled = false;
         byId('join').disabled = false;
         byId('leave').disabled = true;
+
+        sendSignal({ cmd: 'leave' });
         rtc.close();
-
-        if (eventSource) {
-            eventSource.close();
-            eventSource = null;
+        if (ws) {
+            ws.close();
+            ws = null;
         }
-
-        let path = '/leave/' + byId("room").value + '/' + clientId;
-        const res = await fetch(path, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
 
         rtc = new RTCPeerConnection();
     }

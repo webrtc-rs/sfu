@@ -24,7 +24,9 @@ clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.11"
 chrono = "0.4.45"
 anyhow = "1"
-rouille = { version = "3.6", features = ["ssl"] }
+tungstenite = "0.28"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
 systemstat = "0.2"
 
 wg = "0.7"

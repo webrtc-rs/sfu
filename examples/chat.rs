@@ -1,8 +1,10 @@
 use clap::Parser;
 use env_logger::Target;
-use rouille::Server;
+use rustls::ServerConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::collections::HashMap;
-use std::net::{IpAddr, UdpSocket};
+use std::io::BufReader;
+use std::net::{IpAddr, TcpListener, UdpSocket};
 use std::sync::Arc;
 use std::sync::mpsc::{self};
 use std::{fs::OpenOptions, io::Write, str::FromStr};
@@ -130,30 +132,36 @@ fn main() -> anyhow::Result<()> {
 
     let media_port_thread_map = Arc::new(media_port_thread_map);
     let signal_port = cli.signal_port;
-    let (signal_handle, signal_cancel_tx) = if cli.force_local_loop {
-        // for integration test, no ssl
-        let signal_server = Server::new(format!("{}:{}", host_addr, signal_port), move |request| {
-            web_request(request, media_port_thread_map.clone())
+
+    // TLS-only signaling: serve the page over HTTPS and upgrade `/ws` to a WebSocket.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("install rustls crypto provider");
+    let certs: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut BufReader::new(&certificate[..]))
+            .collect::<Result<_, _>>()
+            .expect("parse TLS certificate chain");
+    let key: PrivateKeyDer<'static> =
+        rustls_pemfile::private_key(&mut BufReader::new(&private_key[..]))
+            .expect("read TLS private key")
+            .expect("no private key found in key.pem");
+    let tls_config = Arc::new(
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("build rustls server config"),
+    );
+
+    let listener = TcpListener::bind(format!("{}:{}", host_addr, signal_port))
+        .unwrap_or_else(|e| panic!("binding signaling port {signal_port}: {e}"));
+    println!("Connect a browser to https://{}:{}", host_addr, signal_port);
+
+    let signal_handle = {
+        let stop_rx = stop_rx.clone();
+        let media_port_thread_map = media_port_thread_map.clone();
+        std::thread::spawn(move || {
+            signaling::serve(stop_rx, listener, tls_config, media_port_thread_map);
         })
-        .expect("starting the signal server");
-
-        let port = signal_server.server_addr().port();
-        println!("Connect a browser to https://{}:{}", host_addr, port);
-
-        signal_server.stoppable()
-    } else {
-        let signal_server = Server::new_ssl(
-            format!("{}:{}", host_addr, signal_port),
-            move |request| web_request(request, media_port_thread_map.clone()),
-            certificate,
-            private_key,
-        )
-        .expect("starting the signal server");
-
-        let port = signal_server.server_addr().port();
-        println!("Connect a browser to https://{}:{}", host_addr, port);
-
-        signal_server.stoppable()
     };
 
     println!("Press Ctrl-C to stop");
@@ -169,7 +177,6 @@ fn main() -> anyhow::Result<()> {
     let _ = stop_rx.recv();
     println!("Wait for Signaling Sever and Media Server Gracefully Shutdown...");
     wait_group.wait();
-    let _ = signal_cancel_tx.send(());
     println!("signaling server is gracefully down");
     let _ = signal_handle.join();
 
