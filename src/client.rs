@@ -436,15 +436,9 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 
     fn handle_event(&mut self, evt: ClientEvent) -> std::result::Result<(), Self::Error> {
         match evt {
-            ClientEvent::SFUEvent(evt) => {
-                self.handle_sfu_event(evt)?;
-            }
-            ClientEvent::PeerConnectionEvent(_) => {
-                //TODO:
-            }
+            ClientEvent::SFUEvent(evt) => self.handle_sfu_event(evt),
+            ClientEvent::PeerConnectionEvent(_) => Ok(()),
         }
-
-        Ok(())
     }
 
     fn poll_event(&mut self) -> Option<Self::Eout> {

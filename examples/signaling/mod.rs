@@ -488,10 +488,19 @@ pub fn run(
                 _ => panic!("UdpSocket read failed: {err:?}"),
             },
         } {
-            sfu.handle_read(packet)?;
+            // A single client's transient read error must not kill the media loop that
+            // serves every client on this port. E.g. a DTLS packet that races ahead of the
+            // peer connection's start_transports, or a stale packet for a client that is
+            // mid-teardown, returns an error here — DTLS/ICE simply retransmit, so log and
+            // keep serving the other clients rather than tearing the whole thread down.
+            if let Err(err) = sfu.handle_read(packet) {
+                warn!("sfu.handle_read dropped a packet: {err}");
+            }
         }
 
-        sfu.handle_timeout(Instant::now())?;
+        if let Err(err) = sfu.handle_timeout(Instant::now()) {
+            warn!("sfu.handle_timeout: {err}");
+        }
     }
 
     println!(
