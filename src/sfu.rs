@@ -530,7 +530,10 @@ mod tests {
                     if *client_id == SUBSCRIBER && sdp.sdp_type == RTCSdpType::Offer
             )
         });
-        assert!(!has_offer_after_join, "should not send subscribe offer immediately on Join");
+        assert!(
+            !has_offer_after_join,
+            "should not send subscribe offer immediately on Join"
+        );
 
         // SUBSCRIBER sends bootstrap offer (SDP offer)
         let mut media_engine = MediaEngine::default();
@@ -541,7 +544,9 @@ mod tests {
             .with_media_engine(media_engine)
             .build()
             .expect("subscriber pc should build");
-        subscriber_pc.create_data_channel("bootstrap", None).expect("create data channel");
+        subscriber_pc
+            .create_data_channel("bootstrap", None)
+            .expect("create data channel");
         let subscriber_offer = subscriber_pc.create_offer(None).expect("create offer");
 
         sfu.handle_event(SFUEvent::SessionDescription {
