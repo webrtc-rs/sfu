@@ -340,6 +340,8 @@ where
 
             next_request_id: 0,
             curr_request_id: None,
+            negotiation_needed_state: NegotiationNeededState::Empty,
+
             reads: Default::default(),
             writes: Default::default(),
             events: Default::default(),
@@ -356,13 +358,27 @@ pub(crate) type Mid = String;
 //TODO: make it configurable
 const ONGOING_NEGOTIATION_TIMEOUT_IN_SECOND: Duration = Duration::from_secs(5);
 
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+enum NegotiationNeededState {
+    /// NegotiationNeededStateEmpty not running and queue is empty
+    #[default]
+    Empty,
+    /// NegotiationNeededStateEmpty running and queue is empty
+    Run,
+    /// NegotiationNeededStateEmpty running and queue
+    Queue,
+}
+
 pub(crate) struct Client {
     id: ClientId,
     room_id: RoomId,
     local_addr: SocketAddr,
     peer_connection: Box<dyn PeerConnection>,
+
     next_request_id: RequestId,
     curr_request_id: Option<(RequestId, Instant)>,
+    negotiation_needed_state: NegotiationNeededState,
+
     reads: VecDeque<RTCMessage>,
     writes: VecDeque<TaggedBytesMut>,
     events: VecDeque<ClientEvent>,
@@ -475,6 +491,9 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 
             // mark current negotiation done
             self.curr_request_id = None;
+            if let Err(err) = self.mark_curr_negotiation_complete() {
+                errs.push(err);
+            }
         }
 
         flatten_errs(errs)
@@ -697,16 +716,53 @@ impl Client {
         self.curr_request_id.is_some()
     }
 
+    pub(crate) fn is_negotiation_needed(&self) -> bool {
+        self.negotiation_needed_state == NegotiationNeededState::Queue
+    }
+
+    fn do_negotiation_needed(&mut self) -> bool {
+        if self.negotiation_needed_state == NegotiationNeededState::Run {
+            self.negotiation_needed_state = NegotiationNeededState::Queue;
+            false
+        } else if self.negotiation_needed_state == NegotiationNeededState::Queue {
+            false
+        } else {
+            self.negotiation_needed_state = NegotiationNeededState::Run;
+            true
+        }
+    }
+
+    fn mark_curr_negotiation_complete(&mut self) -> Result<()> {
+        if self.negotiation_needed_state == NegotiationNeededState::Run {
+            self.negotiation_needed_state = NegotiationNeededState::Empty;
+        } else if self.negotiation_needed_state == NegotiationNeededState::Queue {
+            self.negotiation_needed_state = NegotiationNeededState::Empty;
+            return self.on_negotiation_needed();
+        }
+
+        Ok(())
+    }
+
     /// Generate the SFU's offer for a subscribe renegotiation and emit it upward.
     fn on_negotiation_needed(&mut self) -> Result<()> {
-        if let Some((request_id, _)) = self.curr_request_id.as_ref() {
-            // negotiation is ongoing ...
-            trace!(
-                "{}:[{}/{}] negotiation is ongoing ...",
-                request_id, self.room_id, self.id
-            );
-            return Ok(());
+        if !self.do_negotiation_needed() {
+            if let Some((request_id, _)) = self.curr_request_id.as_ref() {
+                // negotiation is ongoing ...
+                trace!(
+                    "{}:[{}/{}] negotiation is ongoing ...",
+                    request_id, self.room_id, self.id
+                );
+                return Ok(());
+            } else {
+                return Err(Error::ErrNegotiatedWithoutID);
+            }
         }
+
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        self.curr_request_id = Some((
+            self.next_request_id,
+            Instant::now() + ONGOING_NEGOTIATION_TIMEOUT_IN_SECOND,
+        ));
 
         let offer = self.peer_connection.create_offer(None)?;
         self.peer_connection.set_local_description(offer)?;
@@ -714,12 +770,6 @@ impl Client {
             .peer_connection
             .local_description()
             .ok_or(Error::ErrPeerConnLocalDescriptionNil)?;
-
-        self.next_request_id = self.next_request_id.wrapping_add(1);
-        self.curr_request_id = Some((
-            self.next_request_id,
-            Instant::now() + ONGOING_NEGOTIATION_TIMEOUT_IN_SECOND,
-        ));
 
         trace!(
             "{}:[{}/{}] creates SDP {}:\n{}",
@@ -751,8 +801,8 @@ impl Client {
             {
                 return Err(Error::ErrTransactionNotExists);
             }
-            // mark current negotiation done
-            self.curr_request_id = None;
+        } else if sdp_type == RTCSdpType::Offer && self.curr_request_id.is_some() {
+            return Err(Error::ErrTransactionExists);
         }
 
         self.peer_connection.set_remote_description(sdp)?;
@@ -794,6 +844,10 @@ impl Client {
                     client_id: self.id,
                     sdp: sdp_answer,
                 }))
+        } else if sdp_type == RTCSdpType::Answer {
+            // mark current negotiation done
+            self.curr_request_id = None;
+            self.mark_curr_negotiation_complete()?;
         }
 
         Ok(())
