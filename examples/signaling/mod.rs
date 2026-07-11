@@ -423,9 +423,10 @@ pub fn run(
     socket: UdpSocket,
     rx: Receiver<Command>,
 ) -> anyhow::Result<()> {
-    println!("listening {}...", socket.local_addr()?);
+    let local_addr = socket.local_addr()?;
+    println!("listening {}...", local_addr);
 
-    let mut sfu = Sfu::new(random(), socket.local_addr()?);
+    let mut sfu = Sfu::new(random(), local_addr);
 
     // Per-client server→browser channels (the WebSocket writers).
     let mut subscribers: HashMap<ClientId, SyncSender<String>> = HashMap::new();
@@ -439,7 +440,9 @@ pub fn run(
         }
 
         while let Some(transmit) = sfu.poll_write() {
-            socket.send_to(&transmit.message, transmit.transport.peer_addr)?;
+            if let Err(err) = socket.send_to(&transmit.message, transmit.transport.peer_addr) {
+                warn!("failed to send message to socket with error: {}", err);
+            }
         }
 
         if let Ok(command) = rx.try_recv() {
@@ -465,7 +468,9 @@ pub fn run(
             .unwrap_or(Duration::from_secs(0))
             .min(Duration::from_millis(50));
         if delay_from_now.is_zero() {
-            sfu.handle_timeout(Instant::now())?;
+            if let Err(err) = sfu.handle_timeout(Instant::now()) {
+                warn!("failed to handle timeout, {}", err);
+            }
             continue;
         }
 
@@ -503,10 +508,7 @@ pub fn run(
         }
     }
 
-    println!(
-        "media server on {} is gracefully down",
-        socket.local_addr()?
-    );
+    println!("media server on {} is gracefully down", local_addr);
     Ok(())
 }
 
