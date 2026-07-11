@@ -18,7 +18,7 @@ use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use sansio::Protocol;
-use sfu::{ClientId, RoomId, SFUEvent, Sfu};
+use sfu::{ClientId, RequestId, RoomId, SFUEvent, Sfu};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
@@ -47,8 +47,10 @@ pub enum Command {
 }
 
 /// JSON envelope the browser sends over the WebSocket (AppRTC/Collider style):
-/// `{cmd:"register", roomid, clientid}` once, then `{cmd:"offer"|"answer", sdp}` or
-/// `{cmd:"leave"}`.
+/// `{cmd:"register", roomid, clientid}` once, then `{cmd:"offer"|"answer", sdp,
+/// request_id?}` or `{cmd:"leave"}`. `request_id` is required only when answering an
+/// SFU-initiated re-offer so the SFU can correlate that answer to its outstanding
+/// transaction.
 #[derive(serde::Deserialize)]
 struct WsClientMsg {
     cmd: String,
@@ -58,6 +60,16 @@ struct WsClientMsg {
     clientid: Option<ClientId>,
     #[serde(default)]
     sdp: Option<RTCSessionDescription>,
+    #[serde(default)]
+    request_id: Option<RequestId>,
+}
+
+#[derive(serde::Serialize)]
+struct WsServerSdp<'a> {
+    #[serde(flatten)]
+    sdp: &'a RTCSessionDescription,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<RequestId>,
 }
 
 /// What a WebSocket binds to once it has `register`ed: its room/client and the run loop
@@ -351,7 +363,7 @@ fn handle_ws_text(
             };
             log_sdp(label, "browser->SFU", *room_id, *client_id, &sdp);
             let _ = tx.send(Command::Signal(SFUEvent::SessionDescription {
-                request_id: random(),
+                request_id: msg.request_id.unwrap_or_else(random),
                 room_id: *room_id,
                 client_id: *client_id,
                 sdp,
@@ -531,10 +543,10 @@ fn drain_sfu_events(sfu: &mut Sfu, subscribers: &mut HashMap<ClientId, SyncSende
     while let Some(evt) = sfu.poll_event() {
         match evt {
             SFUEvent::SessionDescription {
+                request_id,
                 room_id,
                 client_id,
                 sdp,
-                ..
             } => {
                 let label = if sdp.sdp_type == RTCSdpType::Answer {
                     "Answer"
@@ -542,7 +554,12 @@ fn drain_sfu_events(sfu: &mut Sfu, subscribers: &mut HashMap<ClientId, SyncSende
                     "Re-Offer"
                 };
                 log_sdp(label, "SFU->browser", room_id, client_id, &sdp);
-                push_to_subscriber(subscribers, client_id, &sdp);
+                push_to_subscriber(
+                    subscribers,
+                    client_id,
+                    &sdp,
+                    (sdp.sdp_type == RTCSdpType::Offer).then_some(request_id),
+                );
             }
             other => warn!("run loop dropped unroutable SFU event {:?}", other),
         }
@@ -553,12 +570,13 @@ fn push_to_subscriber(
     subscribers: &mut HashMap<ClientId, SyncSender<String>>,
     client_id: ClientId,
     sdp: &RTCSessionDescription,
+    request_id: Option<RequestId>,
 ) {
     let Some(tx) = subscribers.get(&client_id) else {
         warn!("SFU emitted SDP for client {} with no WebSocket", client_id);
         return;
     };
-    match serde_json::to_string(sdp) {
+    match serde_json::to_string(&WsServerSdp { sdp, request_id }) {
         Ok(payload) => {
             if tx.try_send(payload).is_err() {
                 warn!(

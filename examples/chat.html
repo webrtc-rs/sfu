@@ -90,12 +90,14 @@ Status: <span id="ice_status">Waiting</span>
         console.log('offer response', answer.sdp.split('\r\n'));
         rtc.setLocalDescription(answer);
 
-        // Answer the SFU's server-initiated re-offer over the same WebSocket.
-        sendSignal({ cmd: 'answer', sdp: answer });
+        // Echo the SFU's request_id so its outstanding local offer transaction can be
+        // completed when this re-answer comes back.
+        sendSignal({ cmd: 'answer', sdp: answer, request_id: offer.request_id });
     }
 
-    // Server->browser: the SFU pushes bare SDP JSON ({type, sdp}). An 'answer' completes
-    // our offer; an 'offer' is a subscribe re-offer we must answer.
+    // Server->browser: the SFU pushes SDP JSON ({type, sdp, request_id?}). An 'answer'
+    // completes our offer; an 'offer' is a subscribe re-offer we must answer with the
+    // same request_id echoed back.
     function onWsMessage(event) {
         const sdp = JSON.parse(event.data);
         if (sdp.type === 'answer') {
