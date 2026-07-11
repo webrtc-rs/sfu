@@ -738,9 +738,25 @@ impl Client {
                 .receiver_track(*id)
                 .is_some_and(|track| track.ssrcs().any(|ssrc| ssrc == media_ssrc))
         });
-        if let Some(receiver_id) = receiver_id {
-            self.peer_connection
-                .write_receiver_rtcp(receiver_id, packets)?;
+        match receiver_id {
+            Some(receiver_id) => {
+                trace!(
+                    "[{}/{}] forwarding {} keyframe request(s) to publisher receiver {:?} for ssrc {}",
+                    self.room_id,
+                    self.id,
+                    packets.len(),
+                    receiver_id,
+                    media_ssrc
+                );
+                self.peer_connection
+                    .write_receiver_rtcp(receiver_id, packets)?;
+            }
+            None => {
+                trace!(
+                    "[{}/{}] no receiver carries ssrc {} — keyframe request dropped",
+                    self.room_id, self.id, media_ssrc
+                );
+            }
         }
         Ok(())
     }

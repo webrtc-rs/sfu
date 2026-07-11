@@ -2,6 +2,7 @@ use crate::client::{Client, ClientBuilder, ClientEvent, ClientId, Mid};
 use crate::demuxer::Demuxer;
 use crate::event::SFUEvent;
 use crate::forward::{ForwardKey, ForwardTable};
+use crate::rtcp_forwarder::RtcpForwarderBuilder;
 use log::{trace, warn};
 use rtc::ice::rand::{generate_pwd, generate_ufrag};
 use rtc::interceptor::Registry;
@@ -78,6 +79,10 @@ impl Room {
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
         let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
+        // Outermost layer: surface inbound RTCP (a subscriber's PLI/FIR keyframe requests)
+        // to poll_read so the SFU can relay them upstream to the publisher; the default
+        // chain would otherwise consume RTCP before the application sees it.
+        let registry = registry.with(RtcpForwarderBuilder::new().build());
         ClientBuilder::new(client_id, room_id, self.local_addr)
             .with_setting_engine(setting_engine)
             .with_media_engine(media_engine)
@@ -322,14 +327,34 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
                                 })
                                 .map(|packet| packet.cloned())
                                 .collect();
-                            if !keyframe_requests.is_empty()
-                                && let Some(publisher) = self.clients.get_mut(&publisher_id)
-                                && let Err(err) =
+                            if keyframe_requests.is_empty() {
+                                trace!(
+                                    "{}: rtcp from subscriber {} about publisher {} ssrc {} carries no PLI/FIR — ignored",
+                                    self.id, client_id, publisher_id, ssrc
+                                );
+                                continue;
+                            }
+                            trace!(
+                                "{}: subscriber {} -> publisher {} keyframe request ({} PLI/FIR) for ssrc {}",
+                                self.id,
+                                client_id,
+                                publisher_id,
+                                keyframe_requests.len(),
+                                ssrc
+                            );
+                            if let Some(publisher) = self.clients.get_mut(&publisher_id) {
+                                if let Err(err) =
                                     publisher.request_keyframe(ssrc, keyframe_requests)
-                            {
-                                warn!(
-                                    "{}: failed to forward keyframe request to publisher {} for ssrc {}: {}",
-                                    self.id, publisher_id, ssrc, err
+                                {
+                                    warn!(
+                                        "{}: failed to forward keyframe request to publisher {} for ssrc {}: {}",
+                                        self.id, publisher_id, ssrc, err
+                                    );
+                                }
+                            } else {
+                                trace!(
+                                    "{}: publisher {} no longer in room — keyframe request for ssrc {} dropped",
+                                    self.id, publisher_id, ssrc
                                 );
                             }
                             continue;
