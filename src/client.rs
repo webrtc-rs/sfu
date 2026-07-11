@@ -20,7 +20,7 @@ use rtc::rtp_transceiver::rtp_sender::{
 };
 use rtc::rtp_transceiver::{
     RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverDirection, RTCRtpTransceiverId,
-    RTCRtpTransceiverInit,
+    RTCRtpTransceiverInit, SSRC,
 };
 use rtc::sdp::MediaDescription;
 use rtc::shared::TaggedBytesMut;
@@ -90,6 +90,14 @@ pub(crate) trait PeerConnection:
     fn write_rtcp(
         &mut self,
         sender_id: RTCRtpSenderId,
+        packets: Vec<Box<dyn rtcp::Packet>>,
+    ) -> Result<()>;
+
+    /// Write RTCP on a receiver leg — used to send a subscriber's keyframe request (PLI/FIR)
+    /// upstream to the publisher whose track this receiver carries.
+    fn write_receiver_rtcp(
+        &mut self,
+        receiver_id: RTCRtpReceiverId,
         packets: Vec<Box<dyn rtcp::Packet>>,
     ) -> Result<()>;
 
@@ -244,6 +252,16 @@ where
     ) -> Result<()> {
         RTCPeerConnection::rtp_sender(self, sender_id)
             .ok_or(Error::ErrRTPSenderNotExisted)?
+            .write_rtcp(packets)
+    }
+
+    fn write_receiver_rtcp(
+        &mut self,
+        receiver_id: RTCRtpReceiverId,
+        packets: Vec<Box<dyn rtcp::Packet>>,
+    ) -> Result<()> {
+        RTCPeerConnection::rtp_receiver(self, receiver_id)
+            .ok_or(Error::ErrRTPReceiverNotExisted)?
             .write_rtcp(packets)
     }
 
@@ -704,6 +722,27 @@ impl Client {
     /// triggers renegotiation.
     pub(crate) fn remove_forward_track(&mut self, sender_id: RTCRtpSenderId) -> Result<()> {
         self.peer_connection.remove_track(sender_id)
+    }
+
+    /// Forward a subscriber's keyframe request (PLI/FIR) upstream: write the RTCP on this
+    /// publisher's receiver whose track carries `media_ssrc`, so its encoder emits a
+    /// keyframe. No-op if no receiver carries that SSRC (nothing to ask). The forwarded
+    /// SSRC is preserved end to end, so the request's media SSRC already matches this leg.
+    pub(crate) fn request_keyframe(
+        &mut self,
+        media_ssrc: SSRC,
+        packets: Vec<Box<dyn rtcp::Packet>>,
+    ) -> Result<()> {
+        let receiver_id = self.peer_connection.get_receivers().into_iter().find(|id| {
+            self.peer_connection
+                .receiver_track(*id)
+                .is_some_and(|track| track.ssrcs().any(|ssrc| ssrc == media_ssrc))
+        });
+        if let Some(receiver_id) = receiver_id {
+            self.peer_connection
+                .write_receiver_rtcp(receiver_id, packets)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn is_negotiation_ongoing(&self) -> bool {

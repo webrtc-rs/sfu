@@ -12,6 +12,9 @@ use rtc::peer_connection::configuration::setting_engine::SettingEngine;
 use rtc::peer_connection::event::{RTCPeerConnectionEvent, RTCTrackEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::transport::RTCDtlsRole;
+use rtc::rtcp::Packet;
+use rtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
+use rtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::{Error, flatten_errs};
 use sansio::Protocol;
@@ -304,13 +307,31 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
                             continue;
                         };
                         if key.publisher != client_id {
-                            // Subscriber feedback (RR/NACK/PLI) about a publisher's
-                            // stream. Upstream feedback forwarding is TODO — the SFU's
-                            // own interceptors already generate feedback on each leg.
-                            trace!(
-                                "{}: rtcp about ssrc {} from subscriber {} — not forwarded",
-                                self.id, ssrc, client_id
-                            );
+                            // Subscriber feedback about a publisher's stream. Forward its
+                            // keyframe requests (PLI/FIR) upstream so the publisher's encoder
+                            // emits a keyframe; without this a subscriber that renegotiates or
+                            // drops a frame freezes until the publisher's next natural
+                            // keyframe. RR/NACK are left to the SFU's per-leg interceptors.
+                            let publisher_id = key.publisher;
+                            let keyframe_requests: Vec<Box<dyn Packet>> = rtcp_packets
+                                .iter()
+                                .filter(|packet| {
+                                    let any = packet.as_any();
+                                    any.is::<PictureLossIndication>()
+                                        || any.is::<FullIntraRequest>()
+                                })
+                                .map(|packet| packet.cloned())
+                                .collect();
+                            if !keyframe_requests.is_empty()
+                                && let Some(publisher) = self.clients.get_mut(&publisher_id)
+                                && let Err(err) =
+                                    publisher.request_keyframe(ssrc, keyframe_requests)
+                            {
+                                warn!(
+                                    "{}: failed to forward keyframe request to publisher {} for ssrc {}: {}",
+                                    self.id, publisher_id, ssrc, err
+                                );
+                            }
                             continue;
                         }
                         for (subscriber, sender_id) in subscribers {
