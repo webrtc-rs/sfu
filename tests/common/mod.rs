@@ -22,9 +22,11 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use rtc::media_stream::MediaStreamTrack;
+use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_OPUS, MIME_TYPE_VP8};
 use rtc::rtp;
 use rtc::rtp_transceiver::rtp_sender::{
-    RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
+    RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters,
+    RtpCodecKind,
 };
 use rtc::rtp_transceiver::{RTCRtpTransceiverDirection, RTCRtpTransceiverInit};
 
@@ -168,9 +170,60 @@ impl PeerConnectionEventHandler for Handler {
     }
 }
 
-async fn build_peer_connection(handler: Handler) -> Result<Arc<dyn PeerConnection>> {
+/// The non-default payload types the "custom" publisher registers for VP8 / Opus. Both are
+/// picked from the dynamic range but differ from every payload type `register_default_codecs`
+/// assigns, so a subscriber that negotiates the defaults only receives these packets if the SFU
+/// rewrote the payload type while forwarding. See [`custom_media_engine`].
+pub const CUSTOM_VP8_PAYLOAD_TYPE: u8 = 120;
+pub const CUSTOM_OPUS_PAYLOAD_TYPE: u8 = 118;
+
+/// A media engine carrying the browser-default codec set (VP8 at PT 96, Opus at PT 111, …).
+fn default_media_engine() -> Result<MediaEngine> {
     let mut media = MediaEngine::default();
     media.register_default_codecs()?;
+    Ok(media)
+}
+
+/// A media engine that registers VP8 and Opus at [`CUSTOM_VP8_PAYLOAD_TYPE`] /
+/// [`CUSTOM_OPUS_PAYLOAD_TYPE`] instead of their default payload types. The codec definitions
+/// otherwise mirror `register_default_codecs` (same clock rate, channels, fmtp) so they still
+/// negotiate against the SFU's default codecs — only the payload type differs, which is exactly
+/// what forces the SFU's inbound→outbound payload-type translation to kick in.
+fn custom_media_engine() -> Result<MediaEngine> {
+    let mut media = MediaEngine::default();
+    media.register_codec(
+        RTCRtpCodecParameters {
+            rtp_codec: RTCRtpCodec {
+                mime_type: MIME_TYPE_OPUS.to_owned(),
+                clock_rate: 48000,
+                channels: 2,
+                sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+                rtcp_feedback: vec![],
+            },
+            payload_type: CUSTOM_OPUS_PAYLOAD_TYPE,
+        },
+        RtpCodecKind::Audio,
+    )?;
+    media.register_codec(
+        RTCRtpCodecParameters {
+            rtp_codec: RTCRtpCodec {
+                mime_type: MIME_TYPE_VP8.to_owned(),
+                clock_rate: 90000,
+                channels: 0,
+                sdp_fmtp_line: String::new(),
+                rtcp_feedback: vec![],
+            },
+            payload_type: CUSTOM_VP8_PAYLOAD_TYPE,
+        },
+        RtpCodecKind::Video,
+    )?;
+    Ok(media)
+}
+
+async fn build_peer_connection(
+    handler: Handler,
+    mut media: MediaEngine,
+) -> Result<Arc<dyn PeerConnection>> {
     let registry = register_default_interceptors(Registry::new(), &mut media)?;
     let runtime = default_runtime().ok_or_else(|| anyhow!("no async runtime found"))?;
 
@@ -257,16 +310,22 @@ impl Peer {
         track_id: &str,
         direction: RTCRtpTransceiverDirection,
     ) -> Result<SendTrack> {
-        let clock_rate = if mime.to_ascii_lowercase().starts_with("audio") {
-            48000
+        let is_audio = mime.to_ascii_lowercase().starts_with("audio");
+        let (kind, clock_rate, channels, fmtp) = if is_audio {
+            (
+                RtpCodecKind::Audio,
+                48000,
+                2,
+                "minptime=10;useinbandfec=1".to_owned(),
+            )
         } else {
-            90000
+            (RtpCodecKind::Video, 90000, 0, String::new())
         };
         let codec = RTCRtpCodec {
             mime_type: mime.to_owned(),
             clock_rate,
-            channels: 0,
-            sdp_fmtp_line: String::new(),
+            channels,
+            sdp_fmtp_line: fmtp,
             rtcp_feedback: vec![],
         };
         let ssrc = rand::random::<u32>();
@@ -274,7 +333,7 @@ impl Peer {
             format!("stream-{track_id}"),
             track_id.to_owned(),
             format!("label-{track_id}"),
-            RtpCodecKind::Video,
+            kind,
             vec![RTCRtpEncodingParameters {
                 rtp_coding_parameters: RTCRtpCodingParameters {
                     ssrc: Some(ssrc),
@@ -326,6 +385,29 @@ impl Peer {
             .await
             .map_err(|_| anyhow!("timed out waiting for SDP"))?
             .ok_or_else(|| anyhow!("signaling channel closed"))
+    }
+
+    /// The payload type this peer, acting as a subscriber, negotiated for `mime` — i.e. the
+    /// payload type the SFU must rewrite forwarded packets to. Scans every transceiver's
+    /// receiver parameters for the codec whose mime type matches. Must be called *after*
+    /// [`Peer::next_track`] for the corresponding track: a transceiver's receiver is only
+    /// attached once its first RTP packet arrives (when `on_track` fires).
+    pub async fn negotiated_recv_payload_type(&self, mime: &str) -> Result<u8> {
+        for transceiver in self.pc.get_transceivers().await {
+            let Some(receiver) = transceiver.receiver().await? else {
+                continue;
+            };
+            let params = receiver.get_parameters().await?;
+            if let Some(codec) = params
+                .rtp_parameters
+                .codecs
+                .iter()
+                .find(|c| c.rtp_codec.mime_type.eq_ignore_ascii_case(mime))
+            {
+                return Ok(codec.payload_type);
+            }
+        }
+        Err(anyhow!("no negotiated receiver codec for {mime}"))
     }
 
     /// Await the next remote track the SFU forwards to this peer.
@@ -421,6 +503,25 @@ impl SendTrack {
 /// then verify the next `count` arrive with contiguous sequence numbers and identical payload.
 /// Tolerates the leading packets a subscriber misses before its forward path is fully wired.
 pub async fn verify_rtp_flow(track: &Arc<dyn TrackRemote>, count: usize) -> Result<()> {
+    verify_rtp_flow_inner(track, count, None).await
+}
+
+/// Like [`verify_rtp_flow`], but additionally asserts every forwarded packet carries
+/// `expected_payload_type` — the payload type the subscriber negotiated. When the publisher
+/// sent a different payload type, this proves the SFU translated it on the way through.
+pub async fn verify_rtp_flow_payload_type(
+    track: &Arc<dyn TrackRemote>,
+    count: usize,
+    expected_payload_type: u8,
+) -> Result<()> {
+    verify_rtp_flow_inner(track, count, Some(expected_payload_type)).await
+}
+
+async fn verify_rtp_flow_inner(
+    track: &Arc<dyn TrackRemote>,
+    count: usize,
+    expected_payload_type: Option<u8>,
+) -> Result<()> {
     use std::collections::HashMap;
 
     // A subscriber's track can surface more than one forwarded source (ssrc); verify each
@@ -430,6 +531,15 @@ pub async fn verify_rtp_flow(track: &Arc<dyn TrackRemote>, count: usize) -> Resu
         let pkt = read_rtp(track).await?;
         if pkt.payload.as_ref() != RTP_PAYLOAD {
             return Err(anyhow!("unexpected RTP payload {:?}", pkt.payload));
+        }
+        if let Some(expected) = expected_payload_type
+            && pkt.header.payload_type != expected
+        {
+            return Err(anyhow!(
+                "unexpected forwarded payload type on ssrc {}: expected {expected}, got {}",
+                pkt.header.ssrc,
+                pkt.header.payload_type
+            ));
         }
         let seq = pkt.header.sequence_number;
         match next_seq.get(&pkt.header.ssrc) {
@@ -453,14 +563,34 @@ pub async fn verify_rtp_flow(track: &Arc<dyn TrackRemote>, count: usize) -> Resu
 /// offer, and drive the WebSocket signaling loop until the peer connection is connected and
 /// the bootstrap data channel is open.
 pub async fn connect(host: &str, port: u16, room_id: u64, client_id: u64) -> Result<Peer> {
+    connect_with_media_engine(host, port, room_id, client_id, default_media_engine()?).await
+}
+
+/// Like [`connect`], but the peer registers VP8 / Opus at the non-default payload types in
+/// [`custom_media_engine`]. Used for publishers whose inbound payload types must differ from
+/// what default-codec subscribers negotiate, forcing the SFU to translate on forward.
+pub async fn connect_custom(host: &str, port: u16, room_id: u64, client_id: u64) -> Result<Peer> {
+    connect_with_media_engine(host, port, room_id, client_id, custom_media_engine()?).await
+}
+
+async fn connect_with_media_engine(
+    host: &str,
+    port: u16,
+    room_id: u64,
+    client_id: u64,
+    media: MediaEngine,
+) -> Result<Peer> {
     init_logging();
 
     let (conn_state_tx, mut conn_state_rx) = unbounded_channel();
     let (track_tx, track_rx) = unbounded_channel();
-    let pc = build_peer_connection(Handler {
-        conn_state_tx,
-        track_tx,
-    })
+    let pc = build_peer_connection(
+        Handler {
+            conn_state_tx,
+            track_tx,
+        },
+        media,
+    )
     .await?;
 
     let ws = ws_connect(host, port).await?;

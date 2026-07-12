@@ -102,13 +102,14 @@ caches the 4-tuple for the DTLS/SRTP phase. The SFU's answer also advertises a h
 candidate synthesized from `local_addr`.
 
 For example, an `SFUEvent::Join` creates the `Room` and the `Client` (default media engine
+
 + codecs, the default interceptor chain plus the `RtcpForwarder`, and a setting engine
-carrying the ICE-lite creds above); an `SFUEvent::SessionDescription` offer is answered by
-the client (`set_remote_description` → add the `local_addr` host candidate → `create_answer`
-→ `set_local_description`) and the resulting **answer** is emitted back out through
-`poll_event`, while publishing a track prompts server-initiated subscribe re-offers to the
-other clients; an `SFUEvent::Leave` tears the client down, prunes its forwarding entries, and
-reaps the room once empty.
+  carrying the ICE-lite creds above); an `SFUEvent::SessionDescription` offer is answered by
+  the client (`set_remote_description` → add the `local_addr` host candidate → `create_answer`
+  → `set_local_description`) and the resulting **answer** is emitted back out through
+  `poll_event`, while publishing a track prompts server-initiated subscribe re-offers to the
+  other clients; an `SFUEvent::Leave` tears the client down, prunes its forwarding entries, and
+  reaps the room once empty.
 
 ## Repository Layout
 
@@ -192,7 +193,10 @@ RTP, intact and in order, to every other peer in the room.
 cargo run --example chat -- -f --level info &
 
 # 2. run the integration tests against it
-cargo test --test data_channel_test --test rtp_test
+cargo test
+
+# 3. stop the background chat server
+kill $(pgrep -f "examples/chat") || true
 ```
 
 CI runs the same flow in a container (see [`.github/workflows/tests.yml`](.github/workflows/tests.yml)):
