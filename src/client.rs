@@ -15,8 +15,8 @@ use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::rtp_transceiver::rtp_sender::{
-    RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpReceiveParameters,
-    RTCRtpSendParameters, RtpCodecKind,
+    RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpHeaderExtensionParameters,
+    RTCRtpReceiveParameters, RTCRtpSendParameters, RtpCodecKind,
 };
 use rtc::rtp_transceiver::{
     RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverDirection, RTCRtpTransceiverId,
@@ -544,6 +544,28 @@ impl Client {
             if let Some(codec) = Client::codec_for_payload_type(&parameters, payload_type) {
                 return Some(codec);
             }
+        }
+
+        None
+    }
+
+    /// The header extensions this client negotiated on the receiver whose track carries `ssrc`,
+    /// as sent by the publisher. Used to map the publisher's extension ids to a subscriber's on
+    /// forward. Mirrors [`Client::incoming_codec_for_rtp`].
+    pub(crate) fn incoming_header_extensions_for_rtp(
+        &mut self,
+        ssrc: u32,
+    ) -> Option<Vec<RTCRtpHeaderExtensionParameters>> {
+        for receiver_id in self.peer_connection.get_receivers() {
+            let Some(track) = self.peer_connection.receiver_track(receiver_id) else {
+                continue;
+            };
+            if !track.ssrcs().any(|track_ssrc| track_ssrc == ssrc) {
+                continue;
+            }
+
+            let parameters = self.peer_connection.receiver_parameters(receiver_id)?;
+            return Some(parameters.rtp_parameters.header_extensions);
         }
 
         None
