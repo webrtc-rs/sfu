@@ -70,7 +70,28 @@ Status: <span id="ice_status">Waiting</span>
         }
     }
 
+    // Force VP8 only for video and OPUS only for audio using setCodecPreferences
+    async function setupCodecs() {
+        // Video: VP8 only
+        const videoCaps = RTCRtpSender.getCapabilities('video').codecs;
+        const vp8Only = videoCaps.filter(c => c.mimeType.toLowerCase() === 'video/vp8');
+        
+        // Audio: OPUS only
+        const audioCaps = RTCRtpSender.getCapabilities('audio').codecs;
+        const opusOnly = audioCaps.filter(c => c.mimeType.toLowerCase() === 'audio/opus');
+
+        // Apply to all transceivers
+        rtc.getTransceivers().forEach(tcvr => {
+            if (tcvr.sender.track?.kind === 'video' && vp8Only.length > 0) {
+                tcvr.setCodecPreferences(vp8Only);
+            } else if (tcvr.sender.track?.kind === 'audio' && opusOnly.length > 0) {
+                tcvr.setCodecPreferences(opusOnly);
+            }
+        });
+    }
+
     async function negotiate() {
+		await setupCodecs();           // Ensure codecs are set before creating offer
         const offer = await rtc.createOffer();
         console.log('do offer', offer.sdp.split('\r\n'));
         rtc.setLocalDescription(offer);
