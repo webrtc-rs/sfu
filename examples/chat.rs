@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
         // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
         // server socket. Clients are identified via their respective remote (UDP) socket address.
         let socket = UdpSocket::bind(format!("{host_addr}:{port}"))
-            .expect(&format!("binding to {host_addr}:{port}"));
+            .unwrap_or_else(|_| panic!("binding to {host_addr}:{port}"));
 
         media_port_thread_map.insert(port, signaling_tx);
 
