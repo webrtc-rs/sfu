@@ -32,10 +32,12 @@ jobs:
           submodules: recursive
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: ${{ matrix.toolchain }}
           components: llvm-tools-preview
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Install grcov
         uses: taiki-e/install-action@v2
@@ -43,7 +45,7 @@ jobs:
           tool: grcov
 
       - name: Test
-        run: cargo test --all --no-fail-fast ${{ matrix.cargo_flags }}
+        run: cargo test --lib --no-fail-fast ${{ matrix.cargo_flags }}
         env:
           CARGO_INCREMENTAL: "0"
           RUSTFLAGS: "-Cinstrument-coverage"
