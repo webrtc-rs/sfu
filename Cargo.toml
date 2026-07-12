@@ -13,13 +13,14 @@ categories = ["network-programming", "asynchronous", "multimedia"]
 [dependencies]
 apprtc = { version = "0.20.0-rc.2", path = "apprtc" }
 signaling = { version = "0.20.0-rc.2", path = "signaling" }
-rtc = { version = "0.20.0-rc.2", path = "rtc/rtc" }
+rtc = { version = "0.20.0-rc.2", path = "webrtc/rtc/rtc" }
 sansio = "1"
 bytes = "1.12.0"
 log = "0.4.33"
 rand = "0.10.1"
 
 [dev-dependencies]
+webrtc = { version = "0.20.0-rc.2", path = "webrtc" }
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.11"
 chrono = "0.4.45"

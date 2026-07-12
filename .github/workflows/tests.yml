@@ -1,0 +1,61 @@
+name: tests
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Create logs directory
+        run: mkdir -p logs
+
+      - name: Build chat server and tests
+        run: cargo build --release --package sfu --example chat --tests
+
+      - name: Start chat server in background
+        run: |
+          ./target/release/examples/chat -f -d --level info > ./logs/sfu.log 2>&1 &
+          sleep 3
+
+      - name: Run tests
+        run: cargo test --release --no-fail-fast -- --show-output > ./logs/test.log 2>&1
+
+      - name: Stop chat server
+        if: always()
+        run: kill $(pgrep -f "target/release/examples/chat") || true
+
+      - name: Upload logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            logs/sfu.log
+            logs/test.log
+
+      - name: Parse test results
+        if: always()
+        run: ./scripts/parse_test_results.sh logs/test.log

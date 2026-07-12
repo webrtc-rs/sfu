@@ -71,15 +71,8 @@ for test_name in "${ignored_tests[@]}"; do
     echo "  $test_name"
 done
 
-# Return non-zero exit code if there are failed tests
-if [[ $total_failed -gt 0 ]]; then
-    exit 1
-else
-    exit 0
-fi
-
-# Return non-zero exit code if there are zero passed tests
-if [[ $total_passed -eq 0 ]]; then
+# Return non-zero exit code if there are failed tests or zero passed tests
+if [[ $total_failed -gt 0 ]] || [[ $total_passed -eq 0 ]]; then
     exit 1
 else
     exit 0

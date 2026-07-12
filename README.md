@@ -45,11 +45,11 @@ provides one such I/O layer (an HTTP signaling server + a UDP media socket).
 `Sfu` is the public entry point and implements
 [`sansio::Protocol<TaggedBytesMut, Infallible, Event>`](https://docs.rs/sansio):
 
-| Method | Plane | Meaning |
-|---|---|---|
-| `handle_read(TaggedBytesMut)` / `poll_write() -> TaggedBytesMut` | media | push an incoming UDP datagram in / drain an outgoing datagram |
-| `handle_event(Event)` / `poll_event() -> Event` | signaling | push a signaling request in / drain a signaling response or server-initiated event |
-| `handle_timeout(Instant)` / `poll_timeout() -> Instant` | clock | advance the caller-supplied clock / ask for the next deadline |
+| Method                                                           | Plane     | Meaning                                                                            |
+|------------------------------------------------------------------|-----------|------------------------------------------------------------------------------------|
+| `handle_read(TaggedBytesMut)` / `poll_write() -> TaggedBytesMut` | media     | push an incoming UDP datagram in / drain an outgoing datagram                      |
+| `handle_event(Event)` / `poll_event() -> Event`                  | signaling | push a signaling request in / drain a signaling response or server-initiated event |
+| `handle_timeout(Instant)` / `poll_timeout() -> Instant`          | clock     | advance the caller-supplied clock / ask for the next deadline                      |
 
 The read/write planes carry raw datagrams (`Rin = Wout = TaggedBytesMut`): an inbound
 datagram is demultiplexed to a client and fed to that client's `RTCPeerConnection`, and
@@ -94,11 +94,12 @@ caches the 4-tuple for the DTLS/SRTP phase. The SFU's answer also advertises a h
 candidate synthesized from `local_addr`.
 
 For example, an `Event::Join` creates the `Room` and the `Client` (default media engine
+
 + codecs, default interceptor chain, and a setting engine carrying the ICE-lite creds
-above); an `Event::SessionDescription` offer is answered by the client
-(`set_remote_description` → add the `local_addr` host candidate → `create_answer` →
-`set_local_description`) and the resulting **answer** is emitted back out through
-`poll_event`; an `Event::Leave` tears the client down and reaps the room once empty.
+  above); an `Event::SessionDescription` offer is answered by the client
+  (`set_remote_description` → add the `local_addr` host candidate → `create_answer` →
+  `set_local_description`) and the resulting **answer** is emitted back out through
+  `poll_event`; an `Event::Leave` tears the client down and reaps the room once empty.
 
 ## Repository Layout
 
@@ -137,9 +138,12 @@ Use a Rust toolchain with Edition 2024 support.
 ### Build & test
 
 ```bash
+# Update rtc submodule first
+git submodule update --init --recursive
+cargo clippy
+cargo fmt
 cargo build
 cargo test           # unit tests for Sfu (join/leave/offer→answer), Client, and Demuxer
-cargo fmt
 ```
 
 ### Run the `chat` example
