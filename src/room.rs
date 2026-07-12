@@ -254,6 +254,23 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
                             );
                             continue;
                         };
+                        let publisher_extensions =
+                            self.clients.get_mut(&client_id).and_then(|publisher| {
+                                publisher
+                                    .get_receivers()
+                                    .into_iter()
+                                    .find_map(|receiver_id| {
+                                        let track = publisher.receiver_track(receiver_id)?;
+                                        if track.ssrcs().any(|track_ssrc| track_ssrc == ssrc) {
+                                            let params =
+                                                publisher.receiver_parameters(receiver_id)?;
+                                            Some(params.rtp_parameters.header_extensions)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                            });
+
                         for (subscriber, sender_id) in subscribers {
                             let Some(peer) = self.clients.get_mut(subscriber) else {
                                 continue;
@@ -274,6 +291,41 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
                             };
                             let mut forwarded_rtp = rtp_packet.clone();
                             forwarded_rtp.header.payload_type = outbound_payload_type;
+
+                            if let Some(ref pub_exts) = publisher_extensions
+                                && let Some(sub_params) = peer.sender_parameters(*sender_id)
+                            {
+                                let mut new_extensions = Vec::new();
+                                for ext in &forwarded_rtp.header.extensions {
+                                    if let Some(pub_param) =
+                                        pub_exts.iter().find(|pe| pe.id as u8 == ext.id)
+                                        && let Some(sub_param) = sub_params
+                                            .rtp_parameters
+                                            .header_extensions
+                                            .iter()
+                                            .find(|se| se.uri == pub_param.uri)
+                                    {
+                                        let mut new_ext = ext.clone();
+                                        new_ext.id = sub_param.id as u8;
+                                        if sub_param.uri == "urn:ietf:params:rtp-hdrext:sdes:mid"
+                                            && let Some(mid) = peer.transceiver_mid(*sender_id)
+                                        {
+                                            new_ext.payload =
+                                                ::bytes::Bytes::copy_from_slice(mid.as_bytes());
+                                        }
+                                        // TODO: If we ever support forwarding multiple simulcast layers to a
+                                        //  subscriber that negotiated RID/RRID, we would need to map the publisher's
+                                        //  RID/RRID payload values to the subscriber's corresponding layer IDs here.
+                                        //  "urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id",
+                                        //  "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id",
+                                        new_extensions.push(new_ext);
+                                    }
+                                }
+                                forwarded_rtp.header.extensions = new_extensions;
+                                forwarded_rtp.header.extension =
+                                    !forwarded_rtp.header.extensions.is_empty();
+                            }
+
                             trace!(
                                 "{}: {}->{} forward rtp ssrc {} pt {} -> {} via sender {:?} codec {}",
                                 self.id,

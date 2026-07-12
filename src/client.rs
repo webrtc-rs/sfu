@@ -696,10 +696,13 @@ impl Client {
             .map(|matched| matched.payload_type)
     }
 
-    /// The mid of the m-line a receiver belongs to — used by `Room` to bind a
+    /// The mid of the m-line a transceiver belongs to — used by `Room` to bind a
     /// packet-time SSRC (from `OnTrack(OnOpen)`) to its `ForwardKey`.
-    pub(crate) fn transceiver_mid(&mut self, receiver_id: RTCRtpReceiverId) -> Option<Mid> {
-        self.peer_connection.transceiver_mid(receiver_id.into())
+    pub(crate) fn transceiver_mid(
+        &mut self,
+        transceiver_id: impl Into<RTCRtpTransceiverId>,
+    ) -> Option<Mid> {
+        self.peer_connection.transceiver_mid(transceiver_id.into())
     }
 
     /// Add a forwarding sender for another client's publish track. Uses a dedicated
