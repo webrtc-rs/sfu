@@ -8,6 +8,63 @@
             background: black;
             color: white;
         }
+
+        #media {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .peer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Video sits on top and always reserves its 16:9 space — even before, or without, a
+           video track — so the audio row below and the neighbouring peers never shift. */
+        .peer-video {
+            width: 500px;
+            height: 281px;
+            background: #111;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .peer-video video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* Audio likewise reserves its row height so the caption and neighbouring peers stay put
+           whether or not a peer has an audio track. */
+        .peer-audio {
+            width: 500px;
+            height: 54px;
+            background: #111;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .peer-audio audio {
+            width: 100%;
+        }
+
+        .peer-video .placeholder,
+        .peer-audio .placeholder {
+            color: #666;
+            font: 13px/1.2 monospace;
+        }
+
+        .peer-caption {
+            font: 14px/1.2 monospace;
+            color: #9cf;
+        }
     </style>
 </head>
 
@@ -19,7 +76,7 @@
 <button id="cam" onClick="startCam()" disabled>Cam</button>
 <button id="mic" onClick="startMic()" disabled>Mic</button>
 Status: <span id="ice_status">Waiting</span>
-<div id="chan_status">Click Join Button...</div>
+- <span id="chan_status">Click Join Button...</span>
 <div id="media"></div>
 <script>
     const byId = (id) => document.getElementById(id);
@@ -53,6 +110,7 @@ Status: <span id="ice_status">Waiting</span>
             console.log('WS not open; dropping', obj.cmd);
         }
     }
+
     function onIceStateChange() {
         byId('ice_status').innerText = rtc.iceConnectionState;
         if (rtc.iceConnectionState == 'disconnected' || rtc.iceConnectionState == 'failed') {
@@ -75,7 +133,7 @@ Status: <span id="ice_status">Waiting</span>
         // Video: VP8 only
         const videoCaps = RTCRtpSender.getCapabilities('video').codecs;
         const vp8Only = videoCaps.filter(c => c.mimeType.toLowerCase() === 'video/vp8');
-        
+
         // Audio: OPUS only
         const audioCaps = RTCRtpSender.getCapabilities('audio').codecs;
         const opusOnly = audioCaps.filter(c => c.mimeType.toLowerCase() === 'audio/opus');
@@ -91,14 +149,16 @@ Status: <span id="ice_status">Waiting</span>
     }
 
     async function negotiate() {
-		await setupCodecs();           // Ensure codecs are set before creating offer
+        await setupCodecs();           // Ensure codecs are set before creating offer
         const offer = await rtc.createOffer();
         console.log('do offer', offer.sdp.split('\r\n'));
         rtc.setLocalDescription(offer);
 
-        // Send the offer over the WebSocket; the SFU's answer arrives asynchronously on
-        // the same socket (see onWsMessage).
-        sendSignal({ cmd: 'offer', sdp: offer });
+        // Send the offer over the WebSocket; the SFU's answer arrives asynchronously on the same
+        // socket (see onWsMessage). The SFU stamps each forwarded track's msid with the
+        // publisher's client id, so subscribers can recover it (see publisherClientId) — the
+        // browser doesn't need to embed anything.
+        sendSignal({cmd: 'offer', sdp: offer});
     }
 
     async function handleAnswer(answer) {
@@ -113,17 +173,21 @@ Status: <span id="ice_status">Waiting</span>
     async function handleOffer(offer) {
         console.log('handle offer', offer.sdp.split('\r\n'));
         try {
-            rtc.setRemoteDescription(offer);
+            await rtc.setRemoteDescription(offer);
         } catch (error) {
             console.log('rtc.setRemoteDescription(offer) with error: ', error);
         }
         const answer = await rtc.createAnswer();
         console.log('offer response', answer.sdp.split('\r\n'));
-        rtc.setLocalDescription(answer);
+        await rtc.setLocalDescription(answer);
 
-        // Echo the SFU's request_id so its outstanding local offer transaction can be
-        // completed when this re-answer comes back.
-        sendSignal({ cmd: 'answer', sdp: answer, request_id: offer.request_id });
+        // Echo the SFU's request_id so its outstanding local offer transaction can be completed
+        // when this re-answer comes back.
+        sendSignal({cmd: 'answer', sdp: answer, request_id: offer.request_id});
+
+        // The re-offer reflects the room's current publish state; now that the new directions
+        // are negotiated, drop the box/captions of any peer whose tracks are gone (e.g. it left).
+        pruneStaleMedia();
     }
 
     // Server->browser: the SFU pushes SDP JSON ({type, sdp, request_id?}). An 'answer'
@@ -189,18 +253,79 @@ Status: <span id="ice_status">Waiting</span>
         await negotiate();
     }
 
+    // Recover the publisher's clientId from a forwarded track. The SFU stamps each forwarded
+    // track's msid with `peer-<clientId>` (see track_with_codings_from_media_description in
+    // src/client.rs), so it surfaces here as the received stream id and/or track id; try both.
+    function publisherClientId(e) {
+        const ids = [];
+        if (e.streams && e.streams[0]) ids.push(e.streams[0].id);
+        if (e.track) ids.push(e.track.id);
+        for (const id of ids) {
+            const m = /peer-(\d+)/.exec(id || '');
+            if (m) return m[1];
+        }
+        return null;
+    }
+
+    // Placeholder shown in the reserved video slot when a peer has no (or a muted) video track.
+    function makePlaceholder(text) {
+        const span = document.createElement('span');
+        span.className = 'placeholder';
+        span.textContent = text;
+        return span;
+    }
+
+    // Find (or lazily create) the box that groups one peer's video (top), audio (middle), and a
+    // caption (bottom) naming the peer. Peers are keyed by the forwarded stream id, which both of
+    // that peer's tracks share; the video slot always reserves its space so the layout is stable
+    // with or without video.
+    function getOrCreatePeerBox(peerKey, publisher) {
+        const boxId = `peer-box-${peerKey}`;
+        let box = byId(boxId);
+        if (box) {
+            return box;
+        }
+        box = document.createElement('div');
+        box.className = 'peer';
+        box.id = boxId;
+
+        const video = document.createElement('div');
+        video.className = 'peer-video';
+        video.appendChild(makePlaceholder('No video'));
+
+        const audio = document.createElement('div');
+        audio.className = 'peer-audio';
+        audio.appendChild(makePlaceholder('No audio'));
+
+        const caption = document.createElement('div');
+        caption.className = 'peer-caption';
+        caption.textContent = `${publisher ?? 'unknown'}`;
+
+        box.appendChild(video);
+        box.appendChild(audio);
+        box.appendChild(caption);
+        byId('media').appendChild(box);
+        return box;
+    }
+
     function onTrack(e) {
-        console.log('ontrack', e.track);
+        console.log('ontrack', e.track, e.streams);
         const track = e.track;
         const domId = `media-${track.id}`;
         if (byId(domId)) {
             // we aleady have this track
             return;
         }
-        const el = document.createElement('video');
+        const publisher = publisherClientId(e);
+        // Group by the publishing client id so a peer's video and audio (which come from separate
+        // getUserMedia streams, hence different stream ids) land in the same box. Fall back to the
+        // stream/track id only if the client id couldn't be recovered.
+        const peerKey = publisher ?? ((e.streams && e.streams[0] && e.streams[0].id) || track.id);
+        const box = getOrCreatePeerBox(peerKey, publisher);
+        const kind = track.kind === 'audio' ? 'audio' : 'video';
+
+        const el = document.createElement(kind);
         el.id = domId;
-        el.width = 500;
-        byId('media').appendChild(el);
         el.controls = true;
         el.autoplay = true;
         el.playsInline = true;
@@ -208,13 +333,17 @@ Status: <span id="ice_status">Waiting</span>
         const media = new MediaStream();
         media.addTrack(track);
         el.srcObject = media;
-        const playVideo = () => {
+
+        // Drop the track into its slot (video replaces the reserved-space placeholder).
+        box.querySelector(kind === 'audio' ? '.peer-audio' : '.peer-video').replaceChildren(el);
+
+        const playMedia = () => {
             el.play().catch((error) => {
-                console.log('video.play() failed', error);
+                console.log('media.play() failed', error);
             });
         };
-        el.addEventListener('loadedmetadata', playVideo);
-        playVideo();
+        el.addEventListener('loadedmetadata', playMedia);
+        playMedia();
         track.addEventListener('mute', () => {
             console.log('track muted', track);
             el.hidden = true;
@@ -222,7 +351,40 @@ Status: <span id="ice_status">Waiting</span>
         track.addEventListener('unmute', () => {
             console.log('track unmuted', track);
             el.hidden = false;
-            playVideo();
+            playMedia();
+        });
+    }
+
+    // After a re-offer is applied, remove the DOM for any received track that is no longer live
+    // (its transceiver is no longer receiving) — dropping a peer's whole box, media and captions,
+    // once it leaves the room.
+    function pruneStaleMedia() {
+        const live = new Set();
+        rtc.getTransceivers().forEach((t) => {
+            const track = t.receiver && t.receiver.track;
+            if (track && (t.currentDirection === 'recvonly' || t.currentDirection === 'sendrecv')) {
+                live.add(track.id);
+            }
+        });
+        byId('media').querySelectorAll('video, audio').forEach((el) => {
+            const trackId = el.id.replace(/^media-/, '');
+            if (!live.has(trackId)) {
+                el.remove();
+            }
+        });
+        // Drop boxes with no remaining media; otherwise restore each empty slot's placeholder so
+        // the video and audio rows keep their reserved space.
+        byId('media').querySelectorAll('.peer').forEach((box) => {
+            if (!box.querySelector('video, audio')) {
+                box.remove();
+                return;
+            }
+            if (!box.querySelector('.peer-video video')) {
+                box.querySelector('.peer-video').replaceChildren(makePlaceholder('No video'));
+            }
+            if (!box.querySelector('.peer-audio audio')) {
+                box.querySelector('.peer-audio').replaceChildren(makePlaceholder('No audio'));
+            }
         });
     }
 
@@ -249,12 +411,12 @@ Status: <span id="ice_status">Waiting</span>
         ws = new WebSocket('wss://' + location.host + '/ws');
         ws.onopen = async () => {
             console.log('WS open; registering ' + byId("room").value + '/' + clientId);
-            sendSignal({ cmd: 'register', roomid: Number(byId("room").value), clientid: clientId });
+            sendSignal({cmd: 'register', roomid: Number(byId("room").value), clientid: clientId});
 
             const offer = await rtc.createOffer();
             rtc.setLocalDescription(offer);
             console.log('send offer', offer.sdp.split('\r\n'));
-            sendSignal({ cmd: 'offer', sdp: offer });
+            sendSignal({cmd: 'offer', sdp: offer});
         };
         ws.onmessage = onWsMessage;
         ws.onclose = (e) => console.log('WS closed:', e.code, e.reason);
@@ -264,7 +426,7 @@ Status: <span id="ice_status">Waiting</span>
     async function leaveRtc() {
         // Tell the SFU we're leaving, then tear the whole session down and return every
         // control to its initial "not joined" state so a later Join starts clean.
-        sendSignal({ cmd: 'leave' });
+        sendSignal({cmd: 'leave'});
 
         if (ws) {
             ws.close();

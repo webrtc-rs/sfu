@@ -609,7 +609,7 @@ impl Client {
             let Some(mid) = self.peer_connection.transceiver_mid(receiver_id.into()) else {
                 continue;
             };
-            let Some(mut track) = self.peer_connection.receiver_track(receiver_id) else {
+            let Some(track) = self.peer_connection.receiver_track(receiver_id) else {
                 continue;
             };
             let Some(parameters) = self.peer_connection.receiver_parameters(receiver_id) else {
@@ -622,18 +622,22 @@ impl Client {
                     .iter()
                     .find(|media| media.attribute("mid").flatten() == Some(mid.as_str()))
             }) {
-                track =
-                    Client::track_with_codings_from_media_description(&track, &parameters, media);
+                tracks.insert(
+                    mid,
+                    self.track_with_codings_from_media_description(track, &parameters, media),
+                );
             }
-
-            tracks.insert(mid, track);
         }
         tracks
     }
 
-    /// Rebuild `track` (keeping the negotiated receiver's identity: stream/track ids,
-    /// label, kind) from the receiver's negotiated parameters, then fill in the
-    /// publish-side primary SSRC (`a=ssrc`) from the remote description when it is known.
+    /// Rebuild `track` from the receiver's negotiated parameters, then fill in the publish-side
+    /// primary SSRC (`a=ssrc`) from the remote description when it is known.
+    ///
+    /// The forwarded track's stream/track ids are stamped with the publishing client's id
+    /// (`peer-<client_id>`), so the msid the SFU forwards carries the publisher's identity to
+    /// every subscriber — the browser never has to embed it. The publisher's original track id is
+    /// kept as a suffix to keep each track's id unique within the peer's stream.
     ///
     /// This keeps only codecs the SFU side already matched as supported instead of copying
     /// every raw offered codec from the browser m-line, which can include codecs the
@@ -644,7 +648,8 @@ impl Client {
     /// SSRCs are only knowable at packet time (`OnTrack(OnOpen)`).
     /// TODO: merge codecs into simulcast RID codings.
     fn track_with_codings_from_media_description(
-        track: &MediaStreamTrack,
+        &self,
+        track: MediaStreamTrack,
         parameters: &RTCRtpReceiveParameters,
         media: &MediaDescription,
     ) -> MediaStreamTrack {
@@ -672,9 +677,9 @@ impl Client {
             .collect();
 
         MediaStreamTrack::new(
-            track.stream_id().clone(),
-            track.track_id().clone(),
-            track.label().clone(),
+            format!("peer-{}-{}", self.id, track.stream_id()),
+            format!("peer-{}-{}", self.id, track.track_id()),
+            format!("peer-{}-{}", self.id, track.label()),
             track.kind(),
             codings,
         )
@@ -1101,8 +1106,16 @@ mod tests {
         let media = MediaDescription::default()
             .with_value_attribute("ssrc".to_owned(), "424242 cname:test".to_owned());
 
-        let rebuilt =
-            Client::track_with_codings_from_media_description(&track, &parameters, &media);
+        let mut media_engine = MediaEngine::default();
+        media_engine
+            .register_default_codecs()
+            .expect("default codecs should register");
+        let client = ClientBuilder::new(42, 20, "0.0.0.0:0".parse().unwrap())
+            .with_media_engine(media_engine)
+            .build()
+            .expect("client should build");
+
+        let rebuilt = client.track_with_codings_from_media_description(track, &parameters, &media);
 
         assert_eq!(rebuilt.codings().len(), 1);
         assert_eq!(rebuilt.codings()[0].codec.mime_type, "video/VP8");
@@ -1110,6 +1123,11 @@ mod tests {
             rebuilt.codings()[0].rtp_coding_parameters.ssrc,
             Some(424242)
         );
+        // The forwarded track's identity is stamped with the publishing client's id (42) so
+        // subscribers can recover the publisher from the msid.
+        assert_eq!(rebuilt.stream_id(), "peer-42-stream");
+        assert_eq!(rebuilt.track_id(), "peer-42-track");
+        assert_eq!(rebuilt.label(), "peer-42-label");
     }
 
     #[test]
