@@ -16,6 +16,7 @@ use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::rtcp::Packet;
 use rtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
 use rtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
+use rtc::sdp::extmap::SDES_MID_URI;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::{Error, flatten_errs};
 use sansio::Protocol;
@@ -307,7 +308,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
                                     {
                                         let mut new_ext = ext.clone();
                                         new_ext.id = sub_param.id as u8;
-                                        if sub_param.uri == "urn:ietf:params:rtp-hdrext:sdes:mid"
+                                        if sub_param.uri == SDES_MID_URI
                                             && let Some(mid) = peer.transceiver_mid(*sender_id)
                                         {
                                             new_ext.payload =

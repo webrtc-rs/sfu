@@ -26,7 +26,7 @@ use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_OPUS, MIME_TYP
 use rtc::rtp;
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters,
-    RtpCodecKind,
+    RTCRtpHeaderExtensionCapability, RtpCodecKind,
 };
 use rtc::rtp_transceiver::{RTCRtpTransceiverDirection, RTCRtpTransceiverInit};
 
@@ -220,6 +220,34 @@ fn custom_media_engine() -> Result<MediaEngine> {
     Ok(media)
 }
 
+/// The transport-wide congestion control RTP header extension URI. `register_default_interceptors`
+/// registers it (for both audio and video) on every peer, including the SFU.
+use rtc::sdp::extmap::TRANSPORT_CC_URI;
+
+/// A media engine that registers the transport-cc header extension *before* the default
+/// interceptor extensions, so it negotiates a low extension id (1) instead of the id the SFU
+/// assigns (4, after the simulcast MID/RID/RRID extensions `register_default_interceptors`
+/// registers first). Codecs are the browser defaults. A publisher built from this engine sends
+/// transport-cc at id 1, but a default-codec subscriber negotiates id 4 — forcing the SFU's
+/// inbound→outbound header-extension-id translation to kick in. See [`connect_ext_custom`].
+fn custom_ext_media_engine() -> Result<MediaEngine> {
+    let mut media = MediaEngine::default();
+    media.register_default_codecs()?;
+    // Registered first → lands at index 0 of the extension table → negotiates as id 1.
+    // `register_default_interceptors` (run in `build_peer_connection`) later appends MID/RID/RRID
+    // and re-registers transport-cc by uri (a no-op that preserves this ordering).
+    for kind in [RtpCodecKind::Video, RtpCodecKind::Audio] {
+        media.register_header_extension(
+            RTCRtpHeaderExtensionCapability {
+                uri: TRANSPORT_CC_URI.to_owned(),
+            },
+            kind,
+            None,
+        )?;
+    }
+    Ok(media)
+}
+
 async fn build_peer_connection(
     handler: Handler,
     mut media: MediaEngine,
@@ -310,6 +338,33 @@ impl Peer {
         track_id: &str,
         direction: RTCRtpTransceiverDirection,
     ) -> Result<SendTrack> {
+        self.add_track_inner(mime, track_id, direction, None).await
+    }
+
+    /// Like [`Peer::add_track`], but the returned [`SendTrack`] also stamps a one-byte RTP header
+    /// extension (`uri`, carrying `payload`) onto every packet, at the id this sender negotiated
+    /// for `uri`. The sender must have that extension registered (e.g. via
+    /// [`connect_ext_custom`]); the negotiated send id is captured so callers can assert the SFU
+    /// rewrites it to the subscriber's id on forward.
+    pub async fn add_track_with_extension(
+        &self,
+        mime: &str,
+        track_id: &str,
+        direction: RTCRtpTransceiverDirection,
+        uri: &str,
+        payload: bytes::Bytes,
+    ) -> Result<SendTrack> {
+        self.add_track_inner(mime, track_id, direction, Some((uri, payload)))
+            .await
+    }
+
+    async fn add_track_inner(
+        &self,
+        mime: &str,
+        track_id: &str,
+        direction: RTCRtpTransceiverDirection,
+        extension: Option<(&str, bytes::Bytes)>,
+    ) -> Result<SendTrack> {
         let is_audio = mime.to_ascii_lowercase().starts_with("audio");
         let (kind, clock_rate, channels, fmtp) = if is_audio {
             (
@@ -371,10 +426,25 @@ impl Peer {
             .map(|c| c.payload_type)
             .ok_or_else(|| anyhow!("sender has no negotiated codec"))?;
 
+        let send_extension = match extension {
+            Some((uri, payload)) => {
+                let id = params
+                    .rtp_parameters
+                    .header_extensions
+                    .iter()
+                    .find(|e| e.uri == uri)
+                    .map(|e| e.id as u8)
+                    .ok_or_else(|| anyhow!("sender did not negotiate header extension {uri}"))?;
+                Some(SendExtension { id, payload })
+            }
+            None => None,
+        };
+
         Ok(SendTrack {
             track,
             ssrc,
             payload_type,
+            extension: send_extension,
         })
     }
 
@@ -408,6 +478,28 @@ impl Peer {
             }
         }
         Err(anyhow!("no negotiated receiver codec for {mime}"))
+    }
+
+    /// The id this peer, acting as a subscriber, negotiated for the header extension `uri` — i.e.
+    /// the id the SFU must rewrite forwarded packets' extension to. Scans every transceiver's
+    /// receiver parameters for the extension whose uri matches. Must be called *after*
+    /// [`Peer::next_track`] for the corresponding track (see [`Peer::negotiated_recv_payload_type`]).
+    pub async fn negotiated_recv_extension_id(&self, uri: &str) -> Result<u8> {
+        for transceiver in self.pc.get_transceivers().await {
+            let Some(receiver) = transceiver.receiver().await? else {
+                continue;
+            };
+            let params = receiver.get_parameters().await?;
+            if let Some(ext) = params
+                .rtp_parameters
+                .header_extensions
+                .iter()
+                .find(|e| e.uri == uri)
+            {
+                return Ok(ext.id as u8);
+            }
+        }
+        Err(anyhow!("no negotiated receiver header extension for {uri}"))
     }
 
     /// Await the next remote track the SFU forwards to this peer.
@@ -446,25 +538,42 @@ pub async fn read_rtp(track: &Arc<dyn TrackRemote>) -> Result<rtp::Packet> {
 /// The fixed VP8 payload every writer sends; readers assert it round-trips byte-for-byte.
 pub const RTP_PAYLOAD: &[u8] = &[0x98, 0x36, 0xbe, 0x88, 0x9e];
 
-/// A local send track plus the ssrc/payload-type the sender will accept for it.
+/// A one-byte RTP header extension the sender stamps onto every packet, at the id it negotiated.
+pub struct SendExtension {
+    pub id: u8,
+    pub payload: bytes::Bytes,
+}
+
+/// A local send track plus the ssrc/payload-type the sender will accept for it, and an optional
+/// header extension it stamps onto every packet.
 pub struct SendTrack {
     pub track: Arc<TrackLocalStaticRTP>,
     pub ssrc: u32,
     pub payload_type: u8,
+    pub extension: Option<SendExtension>,
 }
 
 impl SendTrack {
     fn packet(&self, sequence_number: u16) -> rtp::Packet {
+        let mut header = rtp::header::Header {
+            version: 2,
+            marker: true,
+            payload_type: self.payload_type,
+            sequence_number,
+            timestamp: 3653407706,
+            ssrc: self.ssrc,
+            ..Default::default()
+        };
+        if let Some(ext) = &self.extension {
+            header.extension = true;
+            header.extension_profile = rtp::header::EXTENSION_PROFILE_ONE_BYTE;
+            header.extensions = vec![rtp::header::Extension {
+                id: ext.id,
+                payload: ext.payload.clone(),
+            }];
+        }
         rtp::Packet {
-            header: rtp::header::Header {
-                version: 2,
-                marker: true,
-                payload_type: self.payload_type,
-                sequence_number,
-                timestamp: 3653407706,
-                ssrc: self.ssrc,
-                ..Default::default()
-            },
+            header,
             payload: bytes::Bytes::from_static(RTP_PAYLOAD),
         }
     }
@@ -557,6 +666,59 @@ async fn verify_rtp_flow_inner(
     Ok(())
 }
 
+/// Like [`verify_rtp_flow`], but additionally asserts every forwarded packet carries the header
+/// extension `expected_id` with byte-for-byte `expected_payload`. When the publisher sent the
+/// same extension under a different id, this proves the SFU translated the id (and preserved the
+/// payload) on the way through.
+pub async fn verify_rtp_flow_extension(
+    track: &Arc<dyn TrackRemote>,
+    count: usize,
+    expected_id: u8,
+    expected_payload: &[u8],
+) -> Result<()> {
+    use std::collections::HashMap;
+
+    let mut next_seq: HashMap<u32, u16> = HashMap::new();
+    for _ in 0..count {
+        let pkt = read_rtp(track).await?;
+        if pkt.payload.as_ref() != RTP_PAYLOAD {
+            return Err(anyhow!("unexpected RTP payload {:?}", pkt.payload));
+        }
+        let ext = pkt
+            .header
+            .extensions
+            .iter()
+            .find(|e| e.id == expected_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "forwarded packet on ssrc {} missing header extension id {expected_id}; got ids {:?}",
+                    pkt.header.ssrc,
+                    pkt.header.extensions.iter().map(|e| e.id).collect::<Vec<_>>()
+                )
+            })?;
+        if ext.payload.as_ref() != expected_payload {
+            return Err(anyhow!(
+                "unexpected header extension payload on ssrc {}: expected {expected_payload:?}, got {:?}",
+                pkt.header.ssrc,
+                ext.payload
+            ));
+        }
+        let seq = pkt.header.sequence_number;
+        match next_seq.get(&pkt.header.ssrc) {
+            None => {}
+            Some(&expected) if seq != expected => {
+                return Err(anyhow!(
+                    "sequence gap on ssrc {}: expected {expected}, got {seq}",
+                    pkt.header.ssrc
+                ));
+            }
+            Some(_) => {}
+        }
+        next_seq.insert(pkt.header.ssrc, seq.wrapping_add(1));
+    }
+    Ok(())
+}
+
 // ─────────────────────────────────────── connect ────────────────────────────────────────
 
 /// Register `client_id` into `room_id` on the chat SFU, publish an initial data-channel-only
@@ -571,6 +733,18 @@ pub async fn connect(host: &str, port: u16, room_id: u64, client_id: u64) -> Res
 /// what default-codec subscribers negotiate, forcing the SFU to translate on forward.
 pub async fn connect_custom(host: &str, port: u16, room_id: u64, client_id: u64) -> Result<Peer> {
     connect_with_media_engine(host, port, room_id, client_id, custom_media_engine()?).await
+}
+
+/// Like [`connect`], but the peer negotiates the transport-cc header extension at a non-default
+/// id (see [`custom_ext_media_engine`]). Used for publishers whose inbound header-extension id
+/// must differ from what default subscribers negotiate, forcing the SFU to translate on forward.
+pub async fn connect_ext_custom(
+    host: &str,
+    port: u16,
+    room_id: u64,
+    client_id: u64,
+) -> Result<Peer> {
+    connect_with_media_engine(host, port, room_id, client_id, custom_ext_media_engine()?).await
 }
 
 async fn connect_with_media_engine(
