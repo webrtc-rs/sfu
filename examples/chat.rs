@@ -56,6 +56,8 @@ struct Cli {
     force_local_loop: bool,
     #[arg(short, long)]
     debug: bool,
+    #[arg(long)]
+    tls: bool,
     #[arg(short, long, default_value_t = Level::Info)]
     #[clap(value_enum)]
     level: Level,
@@ -93,8 +95,18 @@ fn main() -> anyhow::Result<()> {
             .init();
     }
 
-    let certificate = include_bytes!("util/cer.pem").to_vec();
-    let private_key = include_bytes!("util/key.pem").to_vec();
+    let (certificate, private_key) = if cli.tls {
+        let cert = std::fs::read("/cert/cert.pem")
+            .map_err(|e| anyhow::anyhow!("Failed to read /cert/cert.pem: {}", e))?;
+        let key = std::fs::read("/cert/key.pem")
+            .map_err(|e| anyhow::anyhow!("Failed to read /cert/key.pem: {}", e))?;
+        (cert, key)
+    } else {
+        (
+            include_bytes!("util/cer.pem").to_vec(),
+            include_bytes!("util/key.pem").to_vec(),
+        )
+    };
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = if cli.host == "127.0.0.1" && !cli.force_local_loop {

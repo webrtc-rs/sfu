@@ -90,7 +90,7 @@ To run the server continuously in the background on port `443` (HTTPS/WSS):
    [Service]
    Type=simple
    WorkingDirectory=/opt/sfu
-   ExecStart=/opt/sfu/target/release/examples/chat -s 443
+   ExecStart=/opt/sfu/target/release/examples/chat -s 443 --tls
    Restart=always
    RestartSec=5
 
