@@ -191,28 +191,47 @@ impl Room {
         forwarded_rtp.header.payload_type = outbound_payload_type;
 
         if let (Some(pub_exts), Some(sub_exts)) = (publisher_extensions, subscriber_extensions) {
-            let mut new_extensions = Vec::new();
-            for ext in &forwarded_rtp.header.extensions {
-                if let Some(pub_param) = pub_exts.iter().find(|pe| pe.id as u8 == ext.id)
-                    && let Some(sub_param) = sub_exts.iter().find(|se| se.uri == pub_param.uri)
+            // Map each extension the packet carries to the subscriber's negotiated id, matching by
+            // uri: publisher id -> uri (pub_exts) -> subscriber id (sub_exts). Extensions the
+            // subscriber didn't negotiate are dropped; the sdes:mid payload is replaced with the
+            // subscriber's own mid.
+            let mut translated: Vec<(u8, ::bytes::Bytes)> = Vec::new();
+            let ids = forwarded_rtp.header.get_extension_ids();
+            for id in &ids {
+                let Some(payload) = forwarded_rtp.header.get_extension(*id) else {
+                    continue;
+                };
+                let Some(pub_param) = pub_exts.iter().find(|pe| pe.id as u8 == *id) else {
+                    continue;
+                };
+                let Some(sub_param) = sub_exts.iter().find(|se| se.uri == pub_param.uri) else {
+                    continue;
+                };
+                let payload = if sub_param.uri == SDES_MID_URI
+                    && let Some(mid) = subscriber_mid
                 {
-                    let mut new_ext = ext.clone();
-                    new_ext.id = sub_param.id as u8;
-                    if sub_param.uri == SDES_MID_URI
-                        && let Some(mid) = subscriber_mid
-                    {
-                        new_ext.payload = ::bytes::Bytes::copy_from_slice(mid.as_bytes());
-                    }
-                    // TODO: If we ever support forwarding multiple simulcast layers to a
-                    //  subscriber that negotiated RID/RRID, we would need to map the publisher's
-                    //  RID/RRID payload values to the subscriber's corresponding layer IDs here.
-                    //  "urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id",
-                    //  "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id",
-                    new_extensions.push(new_ext);
-                }
+                    ::bytes::Bytes::copy_from_slice(mid.as_bytes())
+                } else {
+                    payload
+                };
+                // TODO: If we ever support forwarding multiple simulcast layers to a subscriber
+                //  that negotiated RID/RRID, we would need to map the publisher's RID/RRID payload
+                //  values to the subscriber's corresponding layer IDs here.
+                //  "urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id",
+                //  "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id",
+                translated.push((sub_param.id as u8, payload));
             }
-            forwarded_rtp.header.extensions = new_extensions;
-            forwarded_rtp.header.extension = !forwarded_rtp.header.extensions.is_empty();
+
+            // Rebuild the extensions through the public API so `extensions_padding` and the
+            // extension flag stay consistent — a direct `header.extensions = …` assignment leaves
+            // them stale and breaks marshalling. Clear all first to avoid id collisions during the
+            // remap (an old id may be another extension's new id).
+            for id in ids {
+                let _ = forwarded_rtp.header.del_extension(id);
+            }
+            for (id, payload) in translated {
+                let _ = forwarded_rtp.header.set_extension(id, payload);
+            }
         }
 
         forwarded_rtp
