@@ -131,14 +131,11 @@ sfu/
 │   ├── signaling/        # TLS WebSocket <-> SFUEvent glue (AppRTC/Collider register protocol)
 │   └── util/             # example helpers + self-signed cert/key
 ├── tests/                # integration tests: webrtc-API clients against a running chat server
-│   ├── common/           #   TLS-WebSocket signaling client + PeerConnection harness
-│   ├── data_channel_test.rs
-│   └── rtp_test.rs       #   RTP forwarding round-trips through the SFU
 ├── webrtc/               # submodule: async WebRTC crate; contains rtc/rtc (sans-IO core)
 │   └── rtc/rtc/          #   the `rtc` path dependency this crate builds on
 ├── apprtc/               # submodule (declared dependency)
 ├── signaling/            # submodule (declared dependency)
-└── scripts/              # helper scripts (e.g. parse_test_results.sh)
+└── scripts/              # helper scripts
 ```
 
 The public API surface of the crate is `Sfu` / `SfuId`, `RoomId`, `ClientId`, and
