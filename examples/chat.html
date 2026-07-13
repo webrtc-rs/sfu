@@ -481,11 +481,37 @@
     let ws;
     let rtc;
 
-    // The Cam/Mic switches currently only *reflect* the live media state: until toggling is wired
-    // to actually mute/unmute the local track, revert any user click back to whether the track is
-    // on. (TODO: turn the camera/mic on/off live on toggle.)
-    byId('cam').addEventListener('change', () => { byId('cam').checked = !!streamCam; });
-    byId('mic').addEventListener('change', () => { byId('mic').checked = !!streamMic; });
+    // Toggle the camera/mic tracks live on switch change. If the media stream doesn't exist
+    // yet (e.g. initial request failed/denied), toggle-ON will try to capture it.
+    byId('cam').addEventListener('change', async () => {
+        if (!streamCam) {
+            if (byId('cam').checked) {
+                await startCam();
+            } else {
+                byId('cam').checked = false;
+            }
+        } else {
+            const track = streamCam.getVideoTracks()[0];
+            if (track) {
+                track.enabled = byId('cam').checked;
+            }
+        }
+    });
+
+    byId('mic').addEventListener('change', async () => {
+        if (!streamMic) {
+            if (byId('mic').checked) {
+                await startMic();
+            } else {
+                byId('mic').checked = false;
+            }
+        } else {
+            const track = streamMic.getAudioTracks()[0];
+            if (track) {
+                track.enabled = byId('mic').checked;
+            }
+        }
+    });
 
     // Create a fresh RTCPeerConnection and attach its handlers. Called on each Join so a
     // rejoin after Leave starts from a clean connection with live handlers — a new
