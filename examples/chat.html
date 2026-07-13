@@ -495,52 +495,61 @@
         }
     }
 
-    async function startCam() {
+    // Capture the camera and add a sendonly video transceiver (no renegotiation — the caller
+    // decides when to offer). No-op if we already have it; on getUserMedia failure the Cam
+    // button is re-enabled so the user can retry.
+    async function addCam() {
+        if (streamCam) {
+            return;
+        }
         byId('cam').disabled = true;
-        streamCam = await navigator.mediaDevices.getUserMedia({
-            video: {
-                width: 640,
-                height: 360,
-            },
-        });
-        const tr = rtc.addTransceiver(streamCam.getTracks()[0], {
+        try {
+            streamCam = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 360 },
+            });
+        } catch (error) {
+            console.log('getUserMedia(video) failed', error);
+            byId('cam').disabled = false;
+            return;
+        }
+        rtc.addTransceiver(streamCam.getTracks()[0], {
             direction: "sendonly",
             streams: [streamCam],
-            // This table shows the valid values for simulcast.
-            //
-            // https://chromium.googlesource.com/external/webrtc/+/branch-heads/49/talk/media/webrtc/simulcast.cc
-            // These tables describe from which resolution we can use how many
-            // simulcast layers at what bitrates (maximum, target, and minimum).
-            // Important!! Keep this table from high resolution to low resolution.
-            // const SimulcastFormat kSimulcastFormats[] = {
-            //   {1920, 1080, 3, 5000, 4000, 800},
-            //   {1280, 720, 3,  2500, 2500, 600},
-            //   {960, 540, 3, 900, 900, 450},
-            //   {640, 360, 2, 700, 500, 150},
-            //   {480, 270, 2, 450, 350, 150},
-            //   {320, 180, 1, 200, 150, 30},
-            //   {0, 0, 1, 200, 150, 30}
-            // };
-
-            // Uncomment this to enable simulcast. The actual selected
-            // simulcast level is hardcoded in sync_chat.
+            // Uncomment this to enable simulcast. The actual selected simulcast level is
+            // hardcoded in sync_chat.
             // sendEncodings: [
             //     { rid: "h", maxBitrate: 700 * 1024 },
             //     { rid: "l", maxBitrate: 150 * 1024 }
             // ]
         });
+    }
+
+    // Capture the microphone and add a sendonly audio transceiver (see addCam).
+    async function addMic() {
+        if (streamMic) {
+            return;
+        }
+        byId('mic').disabled = true;
+        try {
+            streamMic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (error) {
+            console.log('getUserMedia(audio) failed', error);
+            byId('mic').disabled = false;
+            return;
+        }
+        rtc.addTransceiver(streamMic.getTracks()[0], {
+            streams: [streamMic],
+            direction: "sendonly",
+        });
+    }
+
+    async function startCam() {
+        await addCam();
         await negotiate();
     }
 
     async function startMic() {
-        byId('mic').disabled = true;
-        streamMic = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-        });
-        const tr = rtc.addTransceiver(streamMic.getTracks()[0], {
-            streams: [streamMic],
-            direction: "sendonly"
-        });
+        await addMic();
         await negotiate();
     }
 
@@ -698,13 +707,16 @@
         byId('join').disabled = true;
         byId('leave').disabled = false;
 
-        // The data channel is a transport bootstrap: the initial offer needs at least one
-        // m-line to establish DTLS/ICE, and its onopen tells us the connection is ready.
+        // Capture cam + mic up front (permission prompt fires on Join) so the very first offer
+        // already publishes both the camera video and the microphone audio. If a device is
+        // missing or denied, addCam/addMic no-op and re-enable their button for a later retry.
+        await addCam();
+        await addMic();
+
+        // The data channel is a transport bootstrap; its onopen tells us the connection is ready.
         dataChannel = rtc.createDataChannel("bootstrap");
         dataChannel.onopen = () => {
             byId('chan_status').innerText = 'Joined room ' + byId("room").value + ' as client ' + clientId;
-            byId('mic').disabled = false;
-            byId('cam').disabled = false;
         };
 
         // One WebSocket carries all signaling, both directions. On open we register, then
@@ -714,6 +726,7 @@
             console.log('WS open; registering ' + byId("room").value + '/' + clientId);
             sendSignal({cmd: 'register', roomid: Number(byId("room").value), clientid: clientId});
 
+            await setupCodecs();  // constrain the media m-lines to VP8 / OPUS before offering
             const offer = await rtc.createOffer();
             rtc.setLocalDescription(offer);
             console.log('send offer', offer.sdp.split('\r\n'));
