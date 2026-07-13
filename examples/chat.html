@@ -2,33 +2,281 @@
 <html>
 
 <head>
-    <title>WebRTC Chat example</title>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>WebRTC SFU Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+          rel="stylesheet"/>
     <style>
-        body {
-            background: black;
-            color: white;
+        :root {
+            --bg-gradient: radial-gradient(circle at 50% 50%, #1a1a2e 0%, #0d0d15 100%);
+            --card-bg: rgba(22, 22, 37, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --accent-blue: #3b82f6;
+            --accent-blue-glow: rgba(59, 130, 246, 0.5);
+            --accent-green: #10b981;
+            --accent-green-glow: rgba(16, 185, 129, 0.5);
+            --accent-orange: #f59e0b;
+            --accent-orange-glow: rgba(245, 158, 11, 0.5);
+            --accent-red: #ef4444;
+            --accent-red-glow: rgba(239, 68, 68, 0.5);
         }
 
-        #media {
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-gradient);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 2rem;
+            overflow-x: hidden;
+        }
+
+        /* Blurred background glow decorations (from the ice-tcp example). */
+        .bg-glow,
+        .bg-glow-right {
+            position: fixed;
+            z-index: -1;
+            pointer-events: none;
+            filter: blur(80px);
+        }
+
+        .bg-glow {
+            width: 600px;
+            height: 600px;
+            top: -100px;
+            left: -100px;
+            background: radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, rgba(59, 130, 246, 0.05) 50%, transparent 100%);
+        }
+
+        .bg-glow-right {
+            width: 500px;
+            height: 500px;
+            bottom: -100px;
+            right: -100px;
+            background: radial-gradient(circle, rgba(16, 185, 129, 0.1) 0%, rgba(59, 130, 246, 0.05) 60%, transparent 100%);
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1100px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        h1 {
+            font-size: 2.75rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.03em;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+            font-weight: 300;
+        }
+
+        /* Glassy card — the shared surface used by the controls panel and every peer box. */
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--border-color);
+            border-radius: 1.25rem;
+            padding: 1.25rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 0.75rem;
+        }
+
+        .card-title {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-icon {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-green);
+            box-shadow: 0 0 10px var(--accent-green-glow);
+            flex-shrink: 0;
+        }
+
+        /* Connection-state colors for the Room card's status dot: yellow while waiting /
+           connecting, green once joined, red on failure / disconnect. */
+        .card-icon.waiting,
+        .card-icon.checking {
+            background-color: var(--accent-orange);
+            box-shadow: 0 0 10px var(--accent-orange-glow);
+        }
+
+        .card-icon.connected {
+            background-color: var(--accent-green);
+            box-shadow: 0 0 10px var(--accent-green-glow);
+        }
+
+        .card-icon.failed {
+            background-color: var(--accent-red);
+            box-shadow: 0 0 10px var(--accent-red-glow);
+        }
+
+        .status-pill {
+            font-size: 0.75rem;
+            padding: 0.15rem 0.6rem;
+            border-radius: 9999px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--text-secondary);
+        }
+
+        /* Matches the ice-tcp example's state colors. */
+        .status-pill.waiting,
+        .status-pill.checking {
+            color: #fde68a;
+            background: rgba(245, 158, 11, 0.15);
+            border-color: rgba(245, 158, 11, 0.3);
+        }
+
+        .status-pill.connected {
+            color: #a7f3d0;
+            background: rgba(16, 185, 129, 0.15);
+            border-color: rgba(16, 185, 129, 0.3);
+        }
+
+        .status-pill.failed {
+            color: #fca5a5;
+            background: rgba(239, 68, 68, 0.15);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        /* Controls panel */
+        .controls-row {
             display: flex;
             flex-wrap: wrap;
-            gap: 12px;
-            margin-top: 12px;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .controls-row label {
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        input[type="number"] {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            border-radius: 0.6rem;
+            padding: 0.5rem 0.75rem;
+            width: 170px;
+        }
+
+        input[type="number"]:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        button {
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #fff;
+            background: var(--accent-blue);
+            border: none;
+            border-radius: 0.6rem;
+            padding: 0.5rem 1.1rem;
+            cursor: pointer;
+            transition: background 0.2s ease, transform 0.1s ease, opacity 0.2s ease;
+        }
+
+        button:hover:not(:disabled) {
+            background: #2563eb;
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .chan-status {
+            margin-top: 0.85rem;
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+
+        /* Peer boxes laid out as a responsive grid of cards. */
+        #media {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
         }
 
         .peer {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            gap: 4px;
+        }
+
+        .peer .card-header {
+            margin-bottom: 1rem;
         }
 
         /* Video sits on top and always reserves its 16:9 space — even before, or without, a
            video track — so the audio row below and the neighbouring peers never shift. */
         .peer-video {
-            width: 500px;
-            height: 281px;
-            background: #111;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #0d0d15;
+            border-radius: 0.75rem;
+            overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -40,12 +288,14 @@
             object-fit: contain;
         }
 
-        /* Audio likewise reserves its row height so the caption and neighbouring peers stay put
-           whether or not a peer has an audio track. */
+        /* Audio likewise reserves its row height so the neighbouring peers stay put whether or
+           not a peer has an audio track. */
         .peer-audio {
-            width: 500px;
-            height: 54px;
-            background: #111;
+            width: 100%;
+            height: 44px;
+            margin-top: 0.75rem;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 0.5rem;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -53,31 +303,59 @@
 
         .peer-audio audio {
             width: 100%;
+            height: 32px;
         }
 
         .peer-video .placeholder,
         .peer-audio .placeholder {
-            color: #666;
-            font: 13px/1.2 monospace;
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
         }
 
-        .peer-caption {
-            font: 14px/1.2 monospace;
-            color: #9cf;
+        footer {
+            margin-top: 3rem;
+            text-align: center;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
         }
     </style>
 </head>
 
 <body>
-<label for="room">Room: </label>
-<input type="number" id="room"></input>
-<button id="join" onClick="startRtc()">Join</button>
-<button id="leave" onClick="leaveRtc()" disabled>Leave</button>
-<button id="cam" onClick="startCam()" disabled>Cam</button>
-<button id="mic" onClick="startMic()" disabled>Mic</button>
-Status: <span id="ice_status">Waiting</span>
-- <span id="chan_status">Click Join Button...</span>
-<div id="media"></div>
+<div class="bg-glow"></div>
+<div class="bg-glow-right"></div>
+
+<div class="container">
+    <header>
+        <h1>WebRTC SFU Chat</h1>
+        <p class="subtitle">Selective Forwarding Unit &bull; multi-party audio / video</p>
+    </header>
+
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">
+                <span class="card-icon waiting" id="conn_icon"></span>
+                <div id="chan_status">Click Join Button...</div>
+            </div>
+            <span class="status-pill waiting" id="ice_status">Waiting</span>
+        </div>
+        <div class="controls-row">
+            <label for="room">Room</label>
+            <input type="number" id="room"/>
+            <button id="join" onClick="startRtc()">Join</button>
+            <button id="leave" onClick="leaveRtc()" disabled>Leave</button>
+            <button id="cam" onClick="startCam()" disabled>Cam</button>
+            <button id="mic" onClick="startMic()" disabled>Mic</button>
+        </div>
+    </div>
+
+    <div id="media"></div>
+
+    <footer>
+        <p>Built with WebRTC-rs &bull; SFU chat demo</p>
+    </footer>
+</div>
 <script>
     const byId = (id) => document.getElementById(id);
     const byTag = (tag) => [].slice.call(document.getElementsByTagName(tag));
@@ -111,20 +389,33 @@ Status: <span id="ice_status">Waiting</span>
         }
     }
 
+    // Reflect the connection state on the Room card: recolor the status dot (yellow while
+    // waiting/connecting, green once joined, red on failure/disconnect) and the status pill,
+    // mirroring the ice-tcp example.
+    function setConnState(kind, label) {
+        byId('conn_icon').className = `card-icon ${kind}`;
+        const pill = byId('ice_status');
+        pill.className = `status-pill ${kind}`;
+        pill.textContent = label;
+    }
+
     function onIceStateChange() {
-        byId('ice_status').innerText = rtc.iceConnectionState;
-        if (rtc.iceConnectionState == 'disconnected' || rtc.iceConnectionState == 'failed') {
-            if (streamCam) {
-                streamCam.getTracks()[0]?.stop();
-            }
-            if (streamMic) {
-                streamMic.getTracks()[0]?.stop();
-            }
-            rtc.close();
-            byId('join').disabled = true;
-            byId('leave').disabled = true;
-            byId('cam').disabled = true;
-            byId('mic').disabled = true;
+        // Ignore late events (e.g. the 'closed' that resetSession's rtc.close() triggers).
+        if (!rtc) {
+            return;
+        }
+        const state = rtc.iceConnectionState;
+        if (state === 'connected' || state === 'completed') {
+            setConnState('connected', 'Connected');
+        } else if (state === 'checking' || state === 'new') {
+            setConnState('checking', 'Connecting');
+        } else if (state === 'failed' || state === 'disconnected') {
+            // The connection to the SFU dropped (e.g. the server closed). Tear the whole session
+            // down exactly like Leave — removing every peer box — but flag the disconnect in red.
+            const label = state === 'failed' ? 'Failed' : 'Disconnected';
+            resetSession('failed', label, 'Disconnected from server — click Join to reconnect');
+        } else {
+            setConnState('waiting', 'Waiting');
         }
     }
 
@@ -275,10 +566,10 @@ Status: <span id="ice_status">Waiting</span>
         return span;
     }
 
-    // Find (or lazily create) the box that groups one peer's video (top), audio (middle), and a
-    // caption (bottom) naming the peer. Peers are keyed by the forwarded stream id, which both of
-    // that peer's tracks share; the video slot always reserves its space so the layout is stable
-    // with or without video.
+    // Find (or lazily create) the box that groups one peer's video (top) and audio (bottom),
+    // captioned by a card header naming the peer — styled like the ice-tcp example's cards.
+    // Peers are keyed by the publishing client id; the video slot always reserves its space so
+    // the layout is stable with or without video.
     function getOrCreatePeerBox(peerKey, publisher) {
         const boxId = `peer-box-${peerKey}`;
         let box = byId(boxId);
@@ -286,8 +577,22 @@ Status: <span id="ice_status">Waiting</span>
             return box;
         }
         box = document.createElement('div');
-        box.className = 'peer';
+        box.className = 'peer card';
         box.id = boxId;
+
+        // Card header: a status dot plus the peer's client id, mirroring the ICE States card.
+        const header = document.createElement('div');
+        header.className = 'card-header';
+        const title = document.createElement('div');
+        title.className = 'card-title';
+        const icon = document.createElement('span');
+        icon.className = 'card-icon';
+        const caption = document.createElement('span');
+        caption.className = 'peer-caption';
+        caption.textContent = `${publisher ?? 'unknown'}`;
+        title.appendChild(icon);
+        title.appendChild(caption);
+        header.appendChild(title);
 
         const video = document.createElement('div');
         video.className = 'peer-video';
@@ -297,13 +602,9 @@ Status: <span id="ice_status">Waiting</span>
         audio.className = 'peer-audio';
         audio.appendChild(makePlaceholder('No audio'));
 
-        const caption = document.createElement('div');
-        caption.className = 'peer-caption';
-        caption.textContent = `${publisher ?? 'unknown'}`;
-
+        box.appendChild(header);
         box.appendChild(video);
         box.appendChild(audio);
-        box.appendChild(caption);
         byId('media').appendChild(box);
         return box;
     }
@@ -391,7 +692,7 @@ Status: <span id="ice_status">Waiting</span>
     async function startRtc() {
         // Start from a fresh peer connection with handlers attached.
         newRtc();
-        byId('ice_status').innerText = 'Connecting';
+        setConnState('checking', 'Connecting');
         byId('chan_status').innerText = 'Joining room ' + byId("room").value + ' as client ' + clientId;
         byId("room").disabled = true;
         byId('join').disabled = true;
@@ -424,18 +725,25 @@ Status: <span id="ice_status">Waiting</span>
     }
 
     async function leaveRtc() {
-        // Tell the SFU we're leaving, then tear the whole session down and return every
-        // control to its initial "not joined" state so a later Join starts clean.
+        // Tell the SFU we're leaving (a no-op if the socket is already gone), then reset.
         sendSignal({cmd: 'leave'});
+        resetSession('waiting', 'Waiting', 'Click Join Button...');
+    }
 
+    // Tear the whole session down and return every control to its initial "not joined" state so a
+    // later Join starts clean. Shared by Leave and by an unexpected SFU disconnect; idempotent, so
+    // calling it again after teardown is harmless. `connKind`/`connLabel` set the Room status
+    // (yellow "Waiting" for Leave, red for a disconnect) and `chanText` the detail line.
+    function resetSession(connKind, connLabel, chanText) {
         if (ws) {
             ws.close();
             ws = null;
         }
-        if (rtc) {
-            rtc.close();
-            rtc = null;
-        }
+        // Null out rtc before closing so the resulting 'closed' event is ignored (onIceStateChange
+        // early-returns when rtc is null), avoiding both a status flip-back and a null deref.
+        const oldRtc = rtc;
+        rtc = null;
+        oldRtc?.close();
         dataChannel = null;
 
         // Stop any local capture and drop the references.
@@ -444,12 +752,12 @@ Status: <span id="ice_status">Waiting</span>
         streamCam = undefined;
         streamMic = undefined;
 
-        // Remove any remote <video> elements we appended for other participants.
+        // Remove every peer's video/audio box.
         byId('media').innerHTML = '';
 
         // Reset all controls and status text to the initial state.
-        byId('ice_status').innerText = 'Waiting';
-        byId('chan_status').innerText = 'Click Join Button...';
+        setConnState(connKind, connLabel);
+        byId('chan_status').innerText = chanText;
         byId("room").disabled = false;
         byId('join').disabled = false;
         byId('leave').disabled = true;
