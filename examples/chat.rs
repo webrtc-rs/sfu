@@ -63,6 +63,8 @@ struct Cli {
     level: Level,
     #[arg(short, long, default_value_t = format!(""))]
     output_log_file: String,
+    #[arg(long, default_value_t = format!(""))]
+    web_root: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -171,8 +173,20 @@ fn main() -> anyhow::Result<()> {
     let signal_handle = {
         let stop_rx = stop_rx.clone();
         let media_port_thread_map = media_port_thread_map.clone();
+        let web_root = if cli.web_root.is_empty() {
+            None
+        } else {
+            Some(cli.web_root)
+        };
+        let web_root = Arc::new(web_root);
         std::thread::spawn(move || {
-            signaling::serve(stop_rx, listener, tls_config, media_port_thread_map);
+            signaling::serve(
+                stop_rx,
+                listener,
+                tls_config,
+                media_port_thread_map,
+                web_root,
+            );
         })
     };
 

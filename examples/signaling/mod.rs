@@ -88,6 +88,7 @@ pub fn serve(
     listener: TcpListener,
     tls_config: Arc<ServerConfig>,
     media_port_thread_map: Arc<HashMap<u16, SyncSender<Command>>>,
+    web_root: Arc<Option<String>>,
 ) {
     listener
         .set_nonblocking(true)
@@ -105,8 +106,11 @@ pub fn serve(
             Ok((tcp, _peer)) => {
                 let tls_config = tls_config.clone();
                 let media_port_thread_map = media_port_thread_map.clone();
+                let web_root = web_root.clone();
                 std::thread::spawn(move || {
-                    if let Err(err) = handle_connection(tcp, tls_config, &media_port_thread_map) {
+                    if let Err(err) =
+                        handle_connection(tcp, tls_config, &media_port_thread_map, &web_root)
+                    {
                         trace!("connection ended: {}", err);
                     }
                 });
@@ -126,6 +130,7 @@ fn handle_connection(
     tcp: TcpStream,
     tls_config: Arc<ServerConfig>,
     media_port_thread_map: &HashMap<u16, SyncSender<Command>>,
+    web_root: &Option<String>,
 ) -> anyhow::Result<()> {
     // The accepted stream can inherit the listener's non-blocking flag; the TLS handshake
     // and request-head read need blocking I/O (the per-frame read timeout is set later,
@@ -160,7 +165,7 @@ fn handle_connection(
         let ws = WebSocket::from_raw_socket(tls, Role::Server, None);
         ws_session(ws, media_port_thread_map);
     } else {
-        serve_static(&mut tls, &request.path)?;
+        serve_static(&mut tls, &request.path, web_root)?;
     }
     Ok(())
 }
@@ -221,15 +226,21 @@ impl HttpRequest {
 }
 
 /// Serve the chat page for `GET /`, `404` otherwise.
-fn serve_static(tls: &mut Tls, path: &str) -> anyhow::Result<()> {
+fn serve_static(tls: &mut Tls, path: &str, web_root: &Option<String>) -> anyhow::Result<()> {
     let (status, content_type, body) = if path == "/" {
-        (
-            "200 OK",
-            "text/html; charset=utf-8",
-            include_str!("../chat.html"),
-        )
+        let content = if let Some(path) = web_root {
+            std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?
+        } else {
+            include_str!("../chat.html").to_string()
+        };
+        ("200 OK", "text/html; charset=utf-8", content)
     } else {
-        ("404 Not Found", "text/plain; charset=utf-8", "not found")
+        (
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            "not found".to_string(),
+        )
     };
     let response = format!(
         "HTTP/1.1 {status}\r\n\
