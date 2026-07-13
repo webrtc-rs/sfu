@@ -629,10 +629,6 @@ fn log_sdp(
     sdp: &RTCSessionDescription,
 ) {
     info!(
-        "{label:<9} {direction:<11} room={room_id} client={client_id}  {}",
-        sdp_summary(sdp)
-    );
-    trace!(
         "{label:<9} {direction:<11} room={room_id} client={client_id} full SDP:\n{}",
         sdp.sdp
     );

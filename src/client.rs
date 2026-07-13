@@ -13,6 +13,7 @@ use rtc::peer_connection::configuration::{RTCAnswerOptions, RTCOfferOptions};
 use rtc::peer_connection::event::{RTCEvent, RTCPeerConnectionEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
+use rtc::peer_connection::state::RTCPeerConnectionState;
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpHeaderExtensionParameters,
@@ -359,6 +360,7 @@ where
             next_request_id: 0,
             curr_request_id: None,
             negotiation_needed_state: NegotiationNeededState::Empty,
+            connection_state: RTCPeerConnectionState::New,
 
             reads: Default::default(),
             writes: Default::default(),
@@ -396,6 +398,10 @@ pub(crate) struct Client {
     next_request_id: RequestId,
     curr_request_id: Option<(RequestId, Instant)>,
     negotiation_needed_state: NegotiationNeededState,
+
+    /// Latest `OnConnectionStateChangeEvent` — tracked so the room only forwards media once the
+    /// subscriber's transport (ICE + DTLS/SRTP) is ready. See [`Client::is_connected`].
+    connection_state: RTCPeerConnectionState,
 
     reads: VecDeque<RTCMessage>,
     writes: VecDeque<TaggedBytesMut>,
@@ -475,9 +481,13 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
                         );
                     }
                 }
-                other => self
-                    .events
-                    .push_back(ClientEvent::PeerConnectionEvent(other)),
+                other => {
+                    if let RTCPeerConnectionEvent::OnConnectionStateChangeEvent(state) = &other {
+                        self.connection_state = *state;
+                    }
+                    self.events
+                        .push_back(ClientEvent::PeerConnectionEvent(other));
+                }
             }
         }
 
@@ -525,6 +535,13 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
 }
 
 impl Client {
+    /// Whether this client's transport is fully connected (ICE + DTLS/SRTP established). The
+    /// room only forwards media to a subscriber once this is true; forwarding earlier would just
+    /// be dropped by the SRTP layer (`local_srtp_context is not set yet`).
+    pub(crate) fn is_connected(&self) -> bool {
+        self.connection_state == RTCPeerConnectionState::Connected
+    }
+
     pub(crate) fn incoming_codec_for_rtp(
         &mut self,
         ssrc: u32,
@@ -789,14 +806,6 @@ impl Client {
             }
         }
         Ok(())
-    }
-
-    pub(crate) fn is_negotiation_ongoing(&self) -> bool {
-        self.curr_request_id.is_some()
-    }
-
-    pub(crate) fn is_negotiation_needed(&self) -> bool {
-        self.negotiation_needed_state == NegotiationNeededState::Queue
     }
 
     fn do_negotiation_needed(&mut self) -> bool {

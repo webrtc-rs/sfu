@@ -260,6 +260,12 @@ impl Room {
             let Some(peer) = self.clients.get_mut(subscriber) else {
                 continue;
             };
+            // Skip subscribers whose transport isn't up yet: the SRTP context isn't set until
+            // DTLS completes, so forwarding now would just be dropped ("local_srtp_context is not
+            // set yet"). Once connected, the subscriber requests a keyframe and media flows.
+            if !peer.is_connected() {
+                continue;
+            }
             let Some(outbound_payload_type) =
                 peer.outgoing_payload_type_for_codec(*sender_id, &incoming_codec)
             else {
@@ -338,7 +344,9 @@ impl Room {
             return;
         }
         for (subscriber, sender_id) in subscribers {
+            // Only forward once the subscriber's transport is up (see forward_rtp).
             if let Some(peer) = self.clients.get_mut(subscriber)
+                && peer.is_connected()
                 && let Err(err) = peer.write_rtcp(*sender_id, rtcp_packets.to_vec())
             {
                 warn!(
