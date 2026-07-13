@@ -111,36 +111,6 @@ For example, an `SFUEvent::Join` creates the `Room` and the `Client` (default me
   other clients; an `SFUEvent::Leave` tears the client down, prunes its forwarding entries, and
   reaps the room once empty.
 
-## Repository Layout
-
-```text
-sfu/
-├── Cargo.toml            # root sfu crate manifest
-├── src/
-│   ├── lib.rs            # crate root + public re-exports (Sfu, SFUEvent, Room/Client ids, …)
-│   ├── sfu.rs            # Sfu: top-level sans-IO Protocol; owns rooms + Demuxer + local_addr
-│   ├── room.rs           # Room: owns clients + Demuxer + ForwardTable; reconcile + RTCP relay
-│   ├── client.rs         # Client: wraps one rtc RTCPeerConnection; add_forward_track, keyframe
-│   ├── event.rs          # SFUEvent enum (signaling currency) + RequestId
-│   ├── demuxer.rs        # Demuxer: STUN ufrag + 4-tuple -> (RoomId, ClientId)
-│   ├── forward.rs        # ForwardTable: publisher track (publisher, mid) -> subscriber senders
-│   └── rtcp_forwarder.rs # interceptor surfacing inbound RTCP (PLI/FIR) to poll_read()
-├── examples/
-│   ├── chat.rs           # runnable SFU server: TLS WebSocket signaling + UDP media
-│   ├── chat.html         # browser test client
-│   ├── signaling/        # TLS WebSocket <-> SFUEvent glue (AppRTC/Collider register protocol)
-│   └── util/             # example helpers + self-signed cert/key
-├── tests/                # integration tests: webrtc-API clients against a running chat server
-├── webrtc/               # submodule: async WebRTC crate; contains rtc/rtc (sans-IO core)
-│   └── rtc/rtc/          #   the `rtc` path dependency this crate builds on
-├── apprtc/               # submodule (declared dependency)
-├── signaling/            # submodule (declared dependency)
-└── scripts/              # helper scripts
-```
-
-The public API surface of the crate is `Sfu` / `SfuId`, `RoomId`, `ClientId`, and
-`SFUEvent` / `RequestId`.
-
 ## Building
 
 ### Toolchain
@@ -150,7 +120,7 @@ Use a Rust toolchain with Edition 2024 support.
 ### Build & test
 
 ```bash
-# Fetch the submodules first (webrtc + its rtc/rtc core, apprtc, signaling)
+# Fetch the submodules first
 git submodule update --init --recursive
 cargo clippy
 cargo fmt

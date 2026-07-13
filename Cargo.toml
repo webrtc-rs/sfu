@@ -12,8 +12,6 @@ categories = ["network-programming", "asynchronous", "multimedia"]
 
 [dependencies]
 rtc = { version = "0.20.0-rc.3", path = "webrtc/rtc/rtc" }
-#apprtc = { version = "0.20.0-rc.3", path = "apprtc" }
-#signaling = { version = "0.20.0-rc.3", path = "signaling" }
 
 sansio = "1.0.1"
 bytes = "1.12.0"
