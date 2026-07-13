@@ -41,7 +41,7 @@ jobs:
           sleep 3
 
       - name: Run tests
-        run: cargo test --no-fail-fast
+        run: cargo test --no-fail-fast --test '*'
 
       - name: Stop chat server
         if: always()

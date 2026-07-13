@@ -36,8 +36,8 @@ use webrtc::media_stream::track_local::static_rtp::TrackLocalStaticRTP;
 use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 use webrtc::peer_connection::{
     MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
-    RTCConfigurationBuilder, RTCIceServer, RTCPeerConnectionState, RTCSdpType,
-    RTCSessionDescription, Registry, register_default_interceptors,
+    RTCConfigurationBuilder, RTCPeerConnectionState, RTCSdpType, RTCSessionDescription, Registry,
+    register_default_interceptors,
 };
 use webrtc::runtime::default_runtime;
 
@@ -256,12 +256,7 @@ async fn build_peer_connection(
     let registry = register_default_interceptors(Registry::new(), &mut media)?;
     let runtime = default_runtime().ok_or_else(|| anyhow!("no async runtime found"))?;
 
-    let config = RTCConfigurationBuilder::new()
-        .with_ice_servers(vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-            ..Default::default()
-        }])
-        .build();
+    let config = RTCConfigurationBuilder::new().build();
 
     let pc = PeerConnectionBuilder::new()
         .with_configuration(config)
@@ -320,6 +315,12 @@ impl Peer {
     pub async fn renegotiate(&self) -> Result<()> {
         let offer = self.pc.create_offer(None).await?;
         self.pc.set_local_description(offer.clone()).await?;
+        log::info!(
+            "test client: client_id={} room_id={} sends renegotiation offer:\n{}",
+            self.client_id,
+            self.room_id,
+            offer.sdp
+        );
         self.out_tx.send(frame(&ClientMsg {
             cmd: "offer",
             roomid: None,
@@ -795,6 +796,12 @@ async fn connect_with_media_engine(
     let data_channel = pc.create_data_channel("bootstrap", None).await?;
     let offer = pc.create_offer(None).await?;
     pc.set_local_description(offer.clone()).await?;
+    log::info!(
+        "test client: client_id={} room_id={} sends initial bootstrap offer:\n{}",
+        client_id,
+        room_id,
+        offer.sdp
+    );
     out_tx.send(frame(&ClientMsg {
         cmd: "offer",
         roomid: None,
@@ -824,17 +831,35 @@ async fn connect_with_media_engine(
             let sdp = server.sdp;
             match sdp.sdp_type {
                 RTCSdpType::Answer => {
+                    log::info!(
+                        "test client: client_id={} room_id={} receives Answer:\n{}",
+                        client_id,
+                        room_id,
+                        sdp.sdp
+                    );
                     if let Err(err) = pc_in.set_remote_description(sdp.clone()).await {
                         log::error!("test client: set_remote_description(answer): {err}");
                     }
                 }
                 RTCSdpType::Offer => {
+                    log::info!(
+                        "test client: client_id={} room_id={} receives Offer:\n{}",
+                        client_id,
+                        room_id,
+                        sdp.sdp
+                    );
                     if let Err(err) = pc_in.set_remote_description(sdp.clone()).await {
                         log::error!("test client: set_remote_description(offer): {err}");
                         continue;
                     }
                     match pc_in.create_answer(None).await {
                         Ok(answer) => {
+                            log::info!(
+                                "test client: client_id={} room_id={} sends auto-Answer:\n{}",
+                                client_id,
+                                room_id,
+                                answer.sdp
+                            );
                             if let Err(err) = pc_in.set_local_description(answer.clone()).await {
                                 log::error!("test client: set_local_description(answer): {err}");
                                 continue;

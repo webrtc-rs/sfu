@@ -444,7 +444,7 @@ pub fn run(
     let mut sfu = Sfu::new(random(), local_addr);
 
     // Per-client server→browser channels (the WebSocket writers).
-    let mut subscribers: HashMap<ClientId, SyncSender<String>> = HashMap::new();
+    let mut subscribers: HashMap<(RoomId, ClientId), SyncSender<String>> = HashMap::new();
 
     let mut buf = vec![0; 2000];
     loop {
@@ -530,7 +530,7 @@ pub fn run(
 fn handle_command(
     sfu: &mut Sfu,
     command: Command,
-    subscribers: &mut HashMap<ClientId, SyncSender<String>>,
+    subscribers: &mut HashMap<(RoomId, ClientId), SyncSender<String>>,
 ) {
     match command {
         Command::Register {
@@ -539,7 +539,7 @@ fn handle_command(
             out_tx,
         } => {
             // Replace any stale writer (browser reconnected on a fresh socket).
-            subscribers.insert(client_id, out_tx);
+            subscribers.insert((room_id, client_id), out_tx);
             if let Err(err) = sfu.handle_event(SFUEvent::Join {
                 request_id: random(),
                 room_id,
@@ -550,14 +550,16 @@ fn handle_command(
         }
         Command::Signal(evt) => {
             let leaving = match &evt {
-                SFUEvent::Leave { client_id, .. } => Some(*client_id),
+                SFUEvent::Leave {
+                    room_id, client_id, ..
+                } => Some((*room_id, *client_id)),
                 _ => None,
             };
             if let Err(err) = sfu.handle_event(evt) {
                 error!("handle_event failed: {}", err);
             }
-            if let Some(client_id) = leaving {
-                subscribers.remove(&client_id);
+            if let Some(key) = leaving {
+                subscribers.remove(&key);
             }
         }
     }
@@ -565,7 +567,10 @@ fn handle_command(
 
 /// Push every SFU-emitted SDP to the target client's WebSocket. An `Answer` is the reply
 /// to that client's offer; an `Offer` is a server-initiated subscribe re-offer.
-fn drain_sfu_events(sfu: &mut Sfu, subscribers: &mut HashMap<ClientId, SyncSender<String>>) {
+fn drain_sfu_events(
+    sfu: &mut Sfu,
+    subscribers: &mut HashMap<(RoomId, ClientId), SyncSender<String>>,
+) {
     while let Some(evt) = sfu.poll_event() {
         match evt {
             SFUEvent::SessionDescription {
@@ -582,6 +587,7 @@ fn drain_sfu_events(sfu: &mut Sfu, subscribers: &mut HashMap<ClientId, SyncSende
                 log_sdp(label, "SFU->browser", room_id, client_id, &sdp);
                 push_to_subscriber(
                     subscribers,
+                    room_id,
                     client_id,
                     &sdp,
                     (sdp.sdp_type == RTCSdpType::Offer).then_some(request_id),
@@ -593,26 +599,34 @@ fn drain_sfu_events(sfu: &mut Sfu, subscribers: &mut HashMap<ClientId, SyncSende
 }
 
 fn push_to_subscriber(
-    subscribers: &mut HashMap<ClientId, SyncSender<String>>,
+    subscribers: &mut HashMap<(RoomId, ClientId), SyncSender<String>>,
+    room_id: RoomId,
     client_id: ClientId,
     sdp: &RTCSessionDescription,
     request_id: Option<RequestId>,
 ) {
-    let Some(tx) = subscribers.get(&client_id) else {
-        warn!("SFU emitted SDP for client {} with no WebSocket", client_id);
+    let key = (room_id, client_id);
+    let Some(tx) = subscribers.get(&key) else {
+        warn!(
+            "SFU emitted SDP for client {}/{} with no WebSocket",
+            room_id, client_id
+        );
         return;
     };
     match serde_json::to_string(&WsServerSdp { sdp, request_id }) {
         Ok(payload) => {
             if tx.try_send(payload).is_err() {
                 warn!(
-                    "WebSocket for client {} is gone/full; dropping SDP",
-                    client_id
+                    "WebSocket for client {}/{} is gone/full; dropping SDP",
+                    room_id, client_id
                 );
-                subscribers.remove(&client_id);
+                subscribers.remove(&key);
             }
         }
-        Err(err) => error!("failed to serialize SDP for client {}: {}", client_id, err),
+        Err(err) => error!(
+            "failed to serialize SDP for client {}/{}: {}",
+            room_id, client_id, err
+        ),
     }
 }
 
