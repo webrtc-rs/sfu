@@ -148,6 +148,7 @@ pub fn init_logging() {
             )
         })
         .filter(None, log::LevelFilter::Info)
+        .is_test(true)
         .try_init();
 }
 

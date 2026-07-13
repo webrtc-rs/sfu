@@ -41,7 +41,7 @@ jobs:
           sleep 3
 
       - name: Run tests
-        run: cargo test --release --no-fail-fast -- --show-output > ./logs/test.log 2>&1
+        run: cargo test --no-fail-fast
 
       - name: Stop chat server
         if: always()
@@ -52,10 +52,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: logs
-          path: |
-            logs/sfu.log
-            logs/test.log
-
-      - name: Parse test results
-        if: always()
-        run: ./scripts/parse_test_results.sh logs/test.log
+          path: logs/sfu.log
