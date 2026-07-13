@@ -219,6 +219,10 @@
             border-color: var(--accent-blue);
         }
 
+        input[type="number"].invalid {
+            border-color: var(--accent-red);
+        }
+
         button {
             font-family: inherit;
             font-size: 0.9rem;
@@ -442,7 +446,7 @@
         </div>
         <div class="controls-row">
             <label for="room">Room</label>
-            <input type="number" id="room"/>
+            <input type="number" id="room" min="0" max="18446744073709551615"/>
             <button id="join" onClick="startRtc()">Join</button>
             <button id="leave" onClick="leaveRtc()" disabled>Leave</button>
             <span class="toggle-field">
@@ -475,6 +479,42 @@
     const byTag = (tag) => [].slice.call(document.getElementsByTagName(tag));
 
     byId("room").value = Math.floor(Math.random() * 1000000000);
+
+    const roomInput = byId("room");
+    const joinBtn = byId("join");
+    const chanStatus = byId("chan_status");
+
+    function validateRoomInput() {
+        const roomVal = roomInput.value;
+        const re = /^\d+$/;
+        let valid = re.test(roomVal);
+        if (valid) {
+            try {
+                const val = BigInt(roomVal);
+                valid = val >= 0n && val <= 18446744073709551615n;
+            } catch (e) {
+                valid = false;
+            }
+        }
+        if (valid) {
+            joinBtn.disabled = false;
+            roomInput.classList.remove('invalid');
+            if (chanStatus.innerText === "Room id must be a valid uint64 number!") {
+                chanStatus.innerText = "Click Join Button...";
+                chanStatus.style.color = "";
+            }
+        } else {
+            joinBtn.disabled = true;
+            roomInput.classList.add('invalid');
+            chanStatus.innerText = "Room id must be a valid uint64 number!";
+            chanStatus.style.color = "var(--accent-red)";
+        }
+    }
+
+    roomInput.addEventListener('input', validateRoomInput);
+    // Initial validation
+    validateRoomInput();
+
     let clientId = Math.floor(Math.random() * 1000000000);
     let streamCam;
     let streamMic;
@@ -529,7 +569,13 @@
     // pushes answers and server-initiated re-offers back on the same socket.
     function sendSignal(obj) {
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(obj));
+            const jsonStr = JSON.stringify(obj, (key, value) => {
+                if (typeof value === 'bigint') {
+                    return `__BIGINT__:${value.toString()}__`;
+                }
+                return value;
+            }).replace(/"__BIGINT__:(\d+)__"/g, '$1');
+            ws.send(jsonStr);
         } else {
             console.log('WS not open; dropping', obj.cmd);
         }
@@ -873,7 +919,7 @@
         ws = new WebSocket('wss://' + location.host + '/ws');
         ws.onopen = async () => {
             console.log('WS open; registering ' + byId("room").value + '/' + clientId);
-            sendSignal({cmd: 'register', roomid: Number(byId("room").value), clientid: clientId});
+            sendSignal({cmd: 'register', roomid: BigInt(byId("room").value), clientid: clientId});
 
             await setupCodecs();  // constrain the media m-lines to VP8 / OPUS before offering
             const offer = await rtc.createOffer();
@@ -920,6 +966,7 @@
         // Reset all controls and status text to the initial state.
         setConnState(connKind, connLabel);
         byId('chan_status').innerText = chanText;
+        byId('chan_status').style.color = '';
         byId("room").disabled = false;
         byId('join').disabled = false;
         byId('leave').disabled = true;
