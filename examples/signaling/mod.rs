@@ -382,6 +382,10 @@ fn handle_ws_text(
                     reason: "user left".to_owned(),
                 }));
             }
+            // The client is now gone; drop the binding so the imminent socket close (the browser
+            // closes the ws right after sending `leave`) doesn't fire a duplicate `Leave` via
+            // `teardown`. Ungraceful disconnects leave `bound` set, so teardown still covers them.
+            *bound = None;
         }
         other => warn!("unknown ws cmd: {}", other),
     }
