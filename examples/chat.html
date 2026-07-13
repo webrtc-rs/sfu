@@ -245,6 +245,105 @@
             cursor: not-allowed;
         }
 
+        /* Cam / Mic toggle switches — the DesignBombs "simple toggle switch", re-themed dark. */
+        .toggle-field {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .toggle-name {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .switch, .switch * {
+            box-sizing: content-box;
+        }
+        .switch {
+            position: relative;
+            display: inline-block;
+            vertical-align: middle;
+            width: 56px;
+            height: 20px;
+            padding: 3px;
+            border-radius: 18px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.06);
+            box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.3);
+        }
+        .switch:has(.switch-input:disabled) {
+            cursor: not-allowed;
+        }
+        .switch-input {
+            position: absolute;
+            top: 0;
+            left: 0;
+            opacity: 0;
+            margin: 0;
+        }
+        .switch-label {
+            position: relative;
+            display: block;
+            height: inherit;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            border-radius: inherit;
+            background: rgba(255, 255, 255, 0.12);
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+            transition: 0.15s ease-out;
+            transition-property: opacity, background;
+        }
+        .switch-label:before, .switch-label:after {
+            position: absolute;
+            top: 50%;
+            margin-top: -0.5em;
+            line-height: 1;
+            transition: inherit;
+        }
+        .switch-label:before {
+            content: attr(data-off);
+            right: 9px;
+            color: var(--text-secondary);
+        }
+        .switch-label:after {
+            content: attr(data-on);
+            left: 9px;
+            color: #fff;
+            opacity: 0;
+        }
+        .switch-input:checked ~ .switch-label {
+            background: var(--accent-green);
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+        }
+        .switch-input:checked ~ .switch-label:before {
+            opacity: 0;
+        }
+        .switch-input:checked ~ .switch-label:after {
+            opacity: 1;
+        }
+        .switch-handle {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            width: 18px;
+            height: 18px;
+            border-radius: 10px;
+            background: #fff;
+            box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.4);
+            transition: left 0.15s ease-out;
+        }
+        .switch-input:checked ~ .switch-handle {
+            left: 40px;
+        }
+        .switch-input:disabled ~ .switch-label {
+            opacity: 0.45;
+        }
+        .switch-input:disabled ~ .switch-handle {
+            opacity: 0.6;
+        }
+
         .chan-status {
             margin-top: 0.85rem;
             color: var(--text-secondary);
@@ -345,8 +444,22 @@
             <input type="number" id="room"/>
             <button id="join" onClick="startRtc()">Join</button>
             <button id="leave" onClick="leaveRtc()" disabled>Leave</button>
-            <button id="cam" onClick="startCam()" disabled>Cam</button>
-            <button id="mic" onClick="startMic()" disabled>Mic</button>
+            <span class="toggle-field">
+                <span class="toggle-name">Cam</span>
+                <label class="switch">
+                    <input type="checkbox" id="cam" class="switch-input" disabled>
+                    <span class="switch-label" data-on="On" data-off="Off"></span>
+                    <span class="switch-handle"></span>
+                </label>
+            </span>
+            <span class="toggle-field">
+                <span class="toggle-name">Mic</span>
+                <label class="switch">
+                    <input type="checkbox" id="mic" class="switch-input" disabled>
+                    <span class="switch-label" data-on="On" data-off="Off"></span>
+                    <span class="switch-handle"></span>
+                </label>
+            </span>
         </div>
     </div>
 
@@ -367,6 +480,12 @@
     let dataChannel;
     let ws;
     let rtc;
+
+    // The Cam/Mic switches currently only *reflect* the live media state: until toggling is wired
+    // to actually mute/unmute the local track, revert any user click back to whether the track is
+    // on. (TODO: turn the camera/mic on/off live on toggle.)
+    byId('cam').addEventListener('change', () => { byId('cam').checked = !!streamCam; });
+    byId('mic').addEventListener('change', () => { byId('mic').checked = !!streamMic; });
 
     // Create a fresh RTCPeerConnection and attach its handlers. Called on each Join so a
     // rejoin after Leave starts from a clean connection with live handlers — a new
@@ -502,16 +621,16 @@
         if (streamCam) {
             return;
         }
-        byId('cam').disabled = true;
         try {
             streamCam = await navigator.mediaDevices.getUserMedia({
                 video: { width: 640, height: 360 },
             });
         } catch (error) {
             console.log('getUserMedia(video) failed', error);
-            byId('cam').disabled = false;
+            byId('cam').checked = false;
             return;
         }
+        byId('cam').checked = true;  // the switch reflects that the camera is live
         rtc.addTransceiver(streamCam.getTracks()[0], {
             direction: "sendonly",
             streams: [streamCam],
@@ -529,14 +648,14 @@
         if (streamMic) {
             return;
         }
-        byId('mic').disabled = true;
         try {
             streamMic = await navigator.mediaDevices.getUserMedia({ audio: true });
         } catch (error) {
             console.log('getUserMedia(audio) failed', error);
-            byId('mic').disabled = false;
+            byId('mic').checked = false;
             return;
         }
+        byId('mic').checked = true;  // the switch reflects that the mic is live
         rtc.addTransceiver(streamMic.getTracks()[0], {
             streams: [streamMic],
             direction: "sendonly",
@@ -717,6 +836,9 @@
         dataChannel = rtc.createDataChannel("bootstrap");
         dataChannel.onopen = () => {
             byId('chan_status').innerText = 'Joined room ' + byId("room").value + ' as client ' + clientId;
+            // Enable the Cam/Mic switches for the duration of the call.
+            byId('cam').disabled = false;
+            byId('mic').disabled = false;
         };
 
         // One WebSocket carries all signaling, both directions. On open we register, then
@@ -775,7 +897,9 @@
         byId('join').disabled = false;
         byId('leave').disabled = true;
         byId('cam').disabled = true;
+        byId('cam').checked = false;
         byId('mic').disabled = true;
+        byId('mic').checked = false;
     }
 </script>
 </body>
