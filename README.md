@@ -160,7 +160,7 @@ RTP, intact and in order, to every other peer in the room.
 cargo run --example chat -- -f --level info &
 
 # 2. run the integration tests against it
-cargo test
+cargo test --test '*'
 
 # 3. stop the background chat server
 kill $(pgrep -f "examples/chat") || true

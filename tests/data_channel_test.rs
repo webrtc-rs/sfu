@@ -29,3 +29,31 @@ async fn test_data_channels() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// Multiple concurrent rooms can be active at the same time on the same signaling/media server.
+#[tokio::test]
+async fn test_multiple_concurrent_rooms() -> anyhow::Result<()> {
+    let mut room_handles = Vec::new();
+
+    // Spawn 5 rooms concurrently, each room having 2 clients.
+    for _ in 0..5 {
+        let room_id = random::<u64>();
+        let handle = tokio::spawn(async move {
+            let peer1 = common::connect(HOST, SIGNAL_PORT, room_id, 0).await?;
+            let peer2 = common::connect(HOST, SIGNAL_PORT, room_id, 1).await?;
+
+            // Let them stay connected for a moment
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+            peer1.close().await?;
+            peer2.close().await?;
+            anyhow::Result::<()>::Ok(())
+        });
+        room_handles.push(handle);
+    }
+
+    for handle in room_handles {
+        handle.await??;
+    }
+    Ok(())
+}

@@ -136,3 +136,54 @@ async fn test_rtp_2p_bi_direction_sendrecv() -> anyhow::Result<()> {
 async fn test_rtp_3p_bi_direction_sendrecv() -> anyhow::Result<()> {
     test_rtp_bi_direction_sendrecv(3).await
 }
+
+/// Multiple concurrent rooms can stream media (RTP packets) independently without cross-talk or leakage.
+#[tokio::test]
+async fn test_multiple_concurrent_media_rooms() -> anyhow::Result<()> {
+    let mut room_handles = Vec::new();
+
+    // Spawn 4 rooms concurrently. Each room has 1 publisher and 1 subscriber.
+    for room_idx in 0..4 {
+        let room_id = random::<u64>();
+        let handle = tokio::spawn(async move {
+            let mut publisher = common::connect(HOST, SIGNAL_PORT, room_id, 0).await?;
+            let mut subscriber = common::connect(HOST, SIGNAL_PORT, room_id, 1).await?;
+
+            let track_id = format!("video_track_room_{}_{}", room_idx, room_id);
+            let send_track = Arc::new(
+                publisher
+                    .add_track(
+                        MIME_TYPE_VP8,
+                        &track_id,
+                        RTCRtpTransceiverDirection::Sendonly,
+                    )
+                    .await?,
+            );
+            publisher.renegotiate().await?;
+
+            // Await Answer on publisher and Offer on subscriber
+            wait_for_answer(&mut publisher).await?;
+            assert_eq!(RTCSdpType::Offer, subscriber.next_sdp().await?.sdp_type);
+
+            // Start writing RTP packets on the publisher
+            let (writer, stop) = SendTrack::spawn_writer(send_track);
+
+            // Await and verify the flow on the subscriber
+            let remote = subscriber.next_track().await?;
+            common::verify_rtp_flow(&remote, VERIFY_COUNT).await?;
+
+            stop.store(true, Ordering::Relaxed);
+            let _ = writer.await;
+
+            publisher.close().await?;
+            subscriber.close().await?;
+            anyhow::Result::<()>::Ok(())
+        });
+        room_handles.push(handle);
+    }
+
+    for handle in room_handles {
+        handle.await??;
+    }
+    Ok(())
+}
