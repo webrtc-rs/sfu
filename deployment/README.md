@@ -17,10 +17,10 @@ Configure your domain registrar's DNS Management panel to point your domain (e.g
 
 ## 2. Remote Server Prerequisites
 
-On the remote Fedora 42 SSH terminal, install Go, Rust, Git, Rsync, and Certbot:
+On the remote Fedora 42 SSH terminal, install Rust, Git, Rsync, and Certbot:
 
 ```bash
-dnf install -y golang git rsync certbot
+dnf install -y git rsync certbot
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
