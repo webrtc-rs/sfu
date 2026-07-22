@@ -168,6 +168,10 @@ mod tests {
     /// A browser-side peer connection that publishes one video track, used only to
     /// produce a valid SDP offer to feed into the SFU.
     fn build_offer() -> RTCSessionDescription {
+        build_offer_with_ssrc(111_111)
+    }
+
+    fn build_offer_with_ssrc(ssrc: u32) -> RTCSessionDescription {
         let mut media_engine = MediaEngine::default();
         media_engine
             .register_default_codecs()
@@ -189,7 +193,7 @@ mod tests {
                     streams: Vec::new(),
                     send_encodings: vec![RTCRtpEncodingParameters {
                         rtp_coding_parameters: RTCRtpCodingParameters {
-                            ssrc: Some(111_111),
+                            ssrc: Some(ssrc),
                             ..Default::default()
                         },
                         active: true,
@@ -202,6 +206,41 @@ mod tests {
         let offer = offerer.create_offer(None).expect("offer should be created");
         assert_eq!(offer.sdp_type, RTCSdpType::Offer);
         assert!(!offer.sdp.is_empty());
+        offer
+    }
+
+    /// Complete a client's first SDP negotiation with an application-only (data channel) offer —
+    /// the way a pure subscriber joins: no media is published, but the initial SDP round
+    /// completes so the SFU may then re-offer forwards to it. The SFU never makes the first
+    /// offer, so a subscriber must send this before it can be forwarded to. Drains (and discards)
+    /// the resulting answer.
+    fn negotiate_client(sfu: &mut Sfu, request_id: RequestId, client_id: crate::ClientId) {
+        sfu.handle_event(SFUEvent::SessionDescription {
+            request_id,
+            room_id: ROOM,
+            client_id,
+            sdp: build_bootstrap_offer(),
+        })
+        .expect("client bootstrap offer should be handled");
+        drain_events(sfu);
+    }
+
+    /// An application-only offer: a single data channel, no media m-lines. Mirrors the bootstrap
+    /// offer a pure subscriber sends to complete its first SDP negotiation.
+    fn build_bootstrap_offer() -> RTCSessionDescription {
+        let mut media_engine = MediaEngine::default();
+        media_engine
+            .register_default_codecs()
+            .expect("default codecs should register");
+        let mut offerer = RTCPeerConnectionBuilder::new()
+            .with_media_engine(media_engine)
+            .build()
+            .expect("offerer peer connection should build");
+        offerer
+            .create_data_channel("bootstrap", None)
+            .expect("data channel should be created");
+        let offer = offerer.create_offer(None).expect("offer should be created");
+        assert_eq!(offer.sdp_type, RTCSdpType::Offer);
         offer
     }
 
@@ -340,8 +379,11 @@ mod tests {
         join_client(&mut sfu, 1, CLIENT);
         join_client(&mut sfu, 2, SUBSCRIBER);
 
+        // The subscriber negotiates first — the SFU never makes the first offer.
+        negotiate_client(&mut sfu, 3, SUBSCRIBER);
+
         sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 3,
+            request_id: 4,
             room_id: ROOM,
             client_id: CLIENT,
             sdp: build_offer(),
@@ -378,9 +420,13 @@ mod tests {
         join_client(&mut sfu, 1, CLIENT);
         join_client(&mut sfu, 2, SUBSCRIBER);
 
+        // The subscriber completes its own first SDP negotiation first — the SFU never makes the
+        // first offer, so a subscribe re-offer can only follow the client's initial offer.
+        negotiate_client(&mut sfu, 3, SUBSCRIBER);
+
         // CLIENT publishes one sendonly video track.
         sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 3,
+            request_id: 4,
             room_id: ROOM,
             client_id: CLIENT,
             sdp: build_offer(),
@@ -420,8 +466,11 @@ mod tests {
         join_client(&mut sfu, 1, CLIENT);
         join_client(&mut sfu, 2, SUBSCRIBER);
 
+        // The subscriber negotiates first — the SFU never makes the first offer.
+        negotiate_client(&mut sfu, 3, SUBSCRIBER);
+
         sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 3,
+            request_id: 4,
             room_id: ROOM,
             client_id: CLIENT,
             sdp: build_offer_with_extra_video_codec(UNSUPPORTED_PT, "UNSUPPORTED"),
@@ -455,9 +504,12 @@ mod tests {
         join_client(&mut sfu, 1, CLIENT);
         join_client(&mut sfu, 2, SUBSCRIBER);
 
+        // The subscriber negotiates first — the SFU never makes the first offer.
+        negotiate_client(&mut sfu, 3, SUBSCRIBER);
+
         let offer = build_offer();
         sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 3,
+            request_id: 4,
             room_id: ROOM,
             client_id: CLIENT,
             sdp: offer.clone(),
@@ -479,7 +531,7 @@ mod tests {
         // Re-applying the same publish offer must not add a duplicate forwarding sender,
         // so no new subscribe offer is generated (reconcile is idempotent).
         sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 4,
+            request_id: 5,
             room_id: ROOM,
             client_id: CLIENT,
             sdp: offer,

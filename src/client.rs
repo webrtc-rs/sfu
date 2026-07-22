@@ -361,6 +361,7 @@ where
             curr_request_id: None,
             renegotiation_pending: false,
             signaling_state: RTCSignalingState::Stable,
+            client_negotiated: false,
             connection_state: RTCPeerConnectionState::New,
 
             reads: Default::default(),
@@ -398,6 +399,13 @@ pub(crate) struct Client {
     /// offer from `Stable`, never while it is answering the subscriber's publish
     /// (`HaveRemoteOffer`) or awaiting an answer to a prior offer (`HaveLocalOffer`).
     signaling_state: RTCSignalingState,
+
+    /// Whether the SFU has answered the client's first offer, completing the initial round of
+    /// SDP negotiation. The SFU must never make the *first* offer — only the client can. Until
+    /// the client's first offer is answered (which is also when the SFU learns the client's
+    /// codec and RTP-header-extension id assignments), no subscribe re-offer is created, so a
+    /// forward's m-lines can adopt ids consistent with the client's own m-lines.
+    client_negotiated: bool,
 
     /// Latest `OnConnectionStateChangeEvent` — tracked so the room only forwards media once the
     /// subscriber's transport (ICE + DTLS/SRTP) is ready. See [`Client::is_connected`].
@@ -838,20 +846,23 @@ impl Client {
 
     /// Create and emit the SFU's subscribe-renegotiation offer — but only when it is safe:
     ///
+    ///   * the client's first offer has been answered (`client_negotiated`) — the SFU never
+    ///     makes the *first* offer, so the client's own m-lines (and their codec / extension-id
+    ///     assignments) are established before any forward m-line is offered,
     ///   * a renegotiation is actually pending,
     ///   * no offer of ours is already in flight (`curr_request_id`), and
     ///   * the peer connection is in a **stable** signaling state — i.e. it is not concurrently
     ///     answering the subscriber's publish (`HaveRemoteOffer`) or awaiting an answer to a
     ///     prior offer (`HaveLocalOffer`).
     ///
-    /// Otherwise this is a no-op; the renegotiation is re-driven when the connection returns to
-    /// stable (see [`Client::poll_event`]) or the in-flight offer completes
+    /// Otherwise this is a no-op; the renegotiation is re-driven when the client's first offer is
+    /// answered ([`Client::handle_session_description`]), when the connection returns to stable
+    /// (see [`Client::poll_event`]), or when the in-flight offer completes
     /// ([`Client::mark_curr_negotiation_complete`]). This mirrors the browser's rule that a
-    /// `negotiationneeded` offer is only created from a stable state, and is what keeps a
-    /// last-joining subscriber — whose publish answer and inbound-forward offers race — from
-    /// dropping one of its forwards.
+    /// `negotiationneeded` offer is only created from a stable state.
     fn drive_pending_renegotiation(&mut self) -> Result<()> {
-        if !self.renegotiation_pending
+        if !self.client_negotiated
+            || !self.renegotiation_pending
             || self.curr_request_id.is_some()
             || self.signaling_state != RTCSignalingState::Stable
         {
@@ -944,7 +955,13 @@ impl Client {
                     room_id: self.room_id,
                     client_id: self.id,
                     sdp: sdp_answer,
-                }))
+                }));
+
+            // The client's first offer is now answered: the initial SDP round is complete and the
+            // client's codecs / extension ids are learned. Only now may the SFU start re-offering
+            // (any forward that was deferred while waiting is driven once the state settles back
+            // to stable, see poll_event).
+            self.client_negotiated = true;
         } else if sdp_type == RTCSdpType::Answer {
             // mark current negotiation done
             self.curr_request_id = None;
