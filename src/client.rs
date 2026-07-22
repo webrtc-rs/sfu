@@ -13,7 +13,7 @@ use rtc::peer_connection::configuration::{RTCAnswerOptions, RTCOfferOptions};
 use rtc::peer_connection::event::{RTCEvent, RTCPeerConnectionEvent};
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
-use rtc::peer_connection::state::RTCPeerConnectionState;
+use rtc::peer_connection::state::{RTCPeerConnectionState, RTCSignalingState};
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpHeaderExtensionParameters,
@@ -359,7 +359,8 @@ where
 
             next_request_id: 0,
             curr_request_id: None,
-            negotiation_needed_state: NegotiationNeededState::Empty,
+            renegotiation_pending: false,
+            signaling_state: RTCSignalingState::Stable,
             connection_state: RTCPeerConnectionState::New,
 
             reads: Default::default(),
@@ -378,17 +379,6 @@ pub(crate) type Mid = String;
 //TODO: make it configurable
 const ONGOING_NEGOTIATION_TIMEOUT_IN_SECOND: Duration = Duration::from_secs(5);
 
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
-enum NegotiationNeededState {
-    /// NegotiationNeededStateEmpty not running and queue is empty
-    #[default]
-    Empty,
-    /// NegotiationNeededStateEmpty running and queue is empty
-    Run,
-    /// NegotiationNeededStateEmpty running and queue
-    Queue,
-}
-
 pub(crate) struct Client {
     id: ClientId,
     room_id: RoomId,
@@ -397,7 +387,17 @@ pub(crate) struct Client {
 
     next_request_id: RequestId,
     curr_request_id: Option<(RequestId, Instant)>,
-    negotiation_needed_state: NegotiationNeededState,
+
+    /// Set when the peer connection reports negotiation is needed (a forwarding transceiver was
+    /// added/removed) but an offer can't be sent yet. The deferred renegotiation is re-driven
+    /// once the peer connection returns to a stable signaling state. See
+    /// [`Client::drive_pending_renegotiation`].
+    renegotiation_pending: bool,
+
+    /// Latest `OnSignalingStateChangeEvent` — the SFU only creates a subscribe-renegotiation
+    /// offer from `Stable`, never while it is answering the subscriber's publish
+    /// (`HaveRemoteOffer`) or awaiting an answer to a prior offer (`HaveLocalOffer`).
+    signaling_state: RTCSignalingState,
 
     /// Latest `OnConnectionStateChangeEvent` — tracked so the room only forwards media once the
     /// subscriber's transport (ICE + DTLS/SRTP) is ready. See [`Client::is_connected`].
@@ -477,6 +477,20 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
                     if let Err(err) = self.on_negotiation_needed() {
                         warn!(
                             "{}:{} failed to create renegotiation offer: {}",
+                            self.room_id, self.id, err
+                        );
+                    }
+                }
+                RTCPeerConnectionEvent::OnSignalingStateChangeEvent(state) => {
+                    self.signaling_state = state;
+                    // Returning to stable frees the connection for the SFU's next offer: drive
+                    // any renegotiation deferred while it was answering the subscriber's publish
+                    // or awaiting an answer to a prior offer.
+                    if state == RTCSignalingState::Stable
+                        && let Err(err) = self.drive_pending_renegotiation()
+                    {
+                        warn!(
+                            "{}:{} failed to drive deferred renegotiation: {}",
                             self.room_id, self.id, err
                         );
                     }
@@ -808,43 +822,42 @@ impl Client {
         Ok(())
     }
 
-    fn do_negotiation_needed(&mut self) -> bool {
-        if self.negotiation_needed_state == NegotiationNeededState::Run {
-            self.negotiation_needed_state = NegotiationNeededState::Queue;
-            false
-        } else if self.negotiation_needed_state == NegotiationNeededState::Queue {
-            false
-        } else {
-            self.negotiation_needed_state = NegotiationNeededState::Run;
-            true
-        }
-    }
-
+    /// A renegotiation transaction (an offer of ours, or an answer we sent to the subscriber's
+    /// publish) just finished. Re-drive any renegotiation that was deferred while it was in
+    /// flight.
     fn mark_curr_negotiation_complete(&mut self) -> Result<()> {
-        if self.negotiation_needed_state == NegotiationNeededState::Run {
-            self.negotiation_needed_state = NegotiationNeededState::Empty;
-        } else if self.negotiation_needed_state == NegotiationNeededState::Queue {
-            self.negotiation_needed_state = NegotiationNeededState::Empty;
-            return self.on_negotiation_needed();
-        }
-
-        Ok(())
+        self.drive_pending_renegotiation()
     }
 
-    /// Generate the SFU's offer for a subscribe renegotiation and emit it upward.
+    /// The peer connection reported that renegotiation is needed (reconcile added or removed a
+    /// forwarding transceiver). Record it and drive it if the connection is ready.
     fn on_negotiation_needed(&mut self) -> Result<()> {
-        if !self.do_negotiation_needed() {
-            if let Some((request_id, _)) = self.curr_request_id.as_ref() {
-                // negotiation is ongoing ...
-                trace!(
-                    "{}:[{}/{}] negotiation is ongoing ...",
-                    request_id, self.room_id, self.id
-                );
-                return Ok(());
-            } else {
-                return Err(Error::ErrNegotiatedWithoutID);
-            }
+        self.renegotiation_pending = true;
+        self.drive_pending_renegotiation()
+    }
+
+    /// Create and emit the SFU's subscribe-renegotiation offer — but only when it is safe:
+    ///
+    ///   * a renegotiation is actually pending,
+    ///   * no offer of ours is already in flight (`curr_request_id`), and
+    ///   * the peer connection is in a **stable** signaling state — i.e. it is not concurrently
+    ///     answering the subscriber's publish (`HaveRemoteOffer`) or awaiting an answer to a
+    ///     prior offer (`HaveLocalOffer`).
+    ///
+    /// Otherwise this is a no-op; the renegotiation is re-driven when the connection returns to
+    /// stable (see [`Client::poll_event`]) or the in-flight offer completes
+    /// ([`Client::mark_curr_negotiation_complete`]). This mirrors the browser's rule that a
+    /// `negotiationneeded` offer is only created from a stable state, and is what keeps a
+    /// last-joining subscriber — whose publish answer and inbound-forward offers race — from
+    /// dropping one of its forwards.
+    fn drive_pending_renegotiation(&mut self) -> Result<()> {
+        if !self.renegotiation_pending
+            || self.curr_request_id.is_some()
+            || self.signaling_state != RTCSignalingState::Stable
+        {
+            return Ok(());
         }
+        self.renegotiation_pending = false;
 
         self.next_request_id = self.next_request_id.wrapping_add(1);
         self.curr_request_id = Some((
