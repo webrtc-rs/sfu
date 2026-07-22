@@ -11,7 +11,7 @@ keywords = ["networking", "protocols", "webrtc", "sans-io", "sfu"]
 categories = ["network-programming", "asynchronous", "multimedia"]
 
 [dependencies]
-rtc = { version = "0.20.0-rc.3", path = "webrtc/rtc/rtc" }
+rtc = { version = "0.20.0-rc.3", path = "webrtc/rtc" }
 
 sansio = "1.0.1"
 bytes = "1.12.0"
