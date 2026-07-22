@@ -1,6 +1,6 @@
 [package]
 name = "sfu"
-version = "0.20.0-rc.3"
+version = "0.20.0-rc.4"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Rusty Rain <y@liu.mx>"]
@@ -11,7 +11,7 @@ keywords = ["networking", "protocols", "webrtc", "sans-io", "sfu"]
 categories = ["network-programming", "asynchronous", "multimedia"]
 
 [dependencies]
-rtc = { version = "0.20.0-rc.3", path = "webrtc/rtc" }
+rtc = { version = "0.20.0-rc.4", path = "webrtc/rtc" }
 
 sansio = "1.0.1"
 bytes = "1.12.0"
@@ -19,7 +19,7 @@ log = "0.4.33"
 rand = "0.10.1"
 
 [dev-dependencies]
-webrtc = { version = "0.20.0-rc.3", path = "webrtc" }
+webrtc = { version = "0.20.0-rc.4", path = "webrtc" }
 
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.11"
