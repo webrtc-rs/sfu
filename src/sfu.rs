@@ -162,7 +162,7 @@ mod tests {
     };
     use rtc::rtp_transceiver::{RTCRtpTransceiverDirection, RTCRtpTransceiverInit};
 
-    const ROOM: RoomId = 100;
+    const ROOM: RoomId = RoomId::from_u128(100);
     const CLIENT: crate::ClientId = 200;
 
     /// A browser-side peer connection that publishes one video track, used only to

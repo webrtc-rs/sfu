@@ -1065,13 +1065,13 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let client = ClientBuilder::new(10, 20, "0.0.0.0:0".parse().unwrap())
+        let client = ClientBuilder::new(10, RoomId::from_u128(20), "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
             .build()
             .expect("default client should build");
 
         assert_eq!(client.id, 10);
-        assert_eq!(client.room_id, 20);
+        assert_eq!(client.room_id, RoomId::from_u128(20));
     }
 
     #[test]
@@ -1081,7 +1081,7 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let _ = ClientBuilder::new(1, 2, "0.0.0.0:0".parse().unwrap())
+        let _ = ClientBuilder::new(1, RoomId::from_u128(2), "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
             .build()
             .expect("client should build");
@@ -1094,7 +1094,7 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let _ = ClientBuilder::new(3, 4, "0.0.0.0:0".parse().unwrap())
+        let _ = ClientBuilder::new(3, RoomId::from_u128(4), "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
             .with_setting_engine(SettingEngine::default())
             .build()
@@ -1109,7 +1109,7 @@ mod tests {
             .register_default_codecs()
             .expect("default codecs should register");
 
-        let _ = ClientBuilder::new(5, 6, "0.0.0.0:0".parse().unwrap())
+        let _ = ClientBuilder::new(5, RoomId::from_u128(6), "0.0.0.0:0".parse().unwrap())
             .with_configuration(configuration)
             .with_media_engine(media_engine)
             .with_setting_engine(SettingEngine::default())
@@ -1149,7 +1149,7 @@ mod tests {
         media_engine
             .register_default_codecs()
             .expect("default codecs should register");
-        let client = ClientBuilder::new(42, 20, "0.0.0.0:0".parse().unwrap())
+        let client = ClientBuilder::new(42, RoomId::from_u128(20), "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
             .build()
             .expect("client should build");

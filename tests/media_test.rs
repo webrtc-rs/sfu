@@ -4,7 +4,6 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use rand::random;
 use rtc::peer_connection::configuration::media_engine::MIME_TYPE_VP8;
 use rtc::rtp_transceiver::RTCRtpTransceiverDirection;
 
@@ -21,7 +20,7 @@ const VERIFY_COUNT: usize = 50;
 /// offer is answered, the SFU re-offers the subscriber, and RTP round-trips intact.
 #[tokio::test]
 async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
-    let room_id = random::<u64>();
+    let room_id = sfu::RoomId::new_v4();
     let mut publisher = common::connect(HOST, SIGNAL_PORT, room_id, 0).await?;
     let mut subscriber = common::connect(HOST, SIGNAL_PORT, room_id, 1).await?;
 
@@ -56,7 +55,7 @@ async fn test_rtp_uni_direction_0sendonly_1recvonly() -> anyhow::Result<()> {
 /// Every peer publishes a sendonly track; the SFU forwards it to all others. Verifies the
 /// full N×(N−1) forwarding mesh delivers RTP intact and in order.
 async fn test_rtp_bi_direction_sendrecv(endpoint_count: u64) -> anyhow::Result<()> {
-    let room_id = random::<u64>();
+    let room_id = sfu::RoomId::new_v4();
 
     let mut peers = Vec::new();
     for client_id in 0..endpoint_count {
@@ -144,7 +143,7 @@ async fn test_multiple_concurrent_media_rooms() -> anyhow::Result<()> {
 
     // Spawn 4 rooms concurrently. Each room has 1 publisher and 1 subscriber.
     for room_idx in 0..4 {
-        let room_id = random::<u64>();
+        let room_id = sfu::RoomId::new_v4();
         let handle = tokio::spawn(async move {
             let mut publisher = common::connect(HOST, SIGNAL_PORT, room_id, 0).await?;
             let mut subscriber = common::connect(HOST, SIGNAL_PORT, room_id, 1).await?;

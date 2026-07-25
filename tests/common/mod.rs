@@ -21,6 +21,8 @@ use tokio_tungstenite::Connector;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
+use sfu::RoomId;
+
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_OPUS, MIME_TYPE_VP8};
 use rtc::rtp;
@@ -57,7 +59,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 struct ClientMsg<'a> {
     cmd: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    roomid: Option<u64>,
+    roomid: Option<RoomId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     clientid: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -304,7 +306,7 @@ pub struct Peer {
     out_tx: UnboundedSender<Message>,
     sdp_rx: UnboundedReceiver<RTCSessionDescription>,
     track_rx: UnboundedReceiver<Arc<dyn TrackRemote>>,
-    pub room_id: u64,
+    pub room_id: RoomId,
     pub client_id: u64,
 }
 
@@ -726,14 +728,19 @@ pub async fn verify_rtp_flow_extension(
 /// Register `client_id` into `room_id` on the chat SFU, publish an initial data-channel-only
 /// offer, and drive the WebSocket signaling loop until the peer connection is connected and
 /// the bootstrap data channel is open.
-pub async fn connect(host: &str, port: u16, room_id: u64, client_id: u64) -> Result<Peer> {
+pub async fn connect(host: &str, port: u16, room_id: RoomId, client_id: u64) -> Result<Peer> {
     connect_with_media_engine(host, port, room_id, client_id, default_media_engine()?).await
 }
 
 /// Like [`connect`], but the peer registers VP8 / Opus at the non-default payload types in
 /// [`custom_media_engine`]. Used for publishers whose inbound payload types must differ from
 /// what default-codec subscribers negotiate, forcing the SFU to translate on forward.
-pub async fn connect_custom(host: &str, port: u16, room_id: u64, client_id: u64) -> Result<Peer> {
+pub async fn connect_custom(
+    host: &str,
+    port: u16,
+    room_id: RoomId,
+    client_id: u64,
+) -> Result<Peer> {
     connect_with_media_engine(host, port, room_id, client_id, custom_media_engine()?).await
 }
 
@@ -743,7 +750,7 @@ pub async fn connect_custom(host: &str, port: u16, room_id: u64, client_id: u64)
 pub async fn connect_ext_custom(
     host: &str,
     port: u16,
-    room_id: u64,
+    room_id: RoomId,
     client_id: u64,
 ) -> Result<Peer> {
     connect_with_media_engine(host, port, room_id, client_id, custom_ext_media_engine()?).await
@@ -752,7 +759,7 @@ pub async fn connect_ext_custom(
 async fn connect_with_media_engine(
     host: &str,
     port: u16,
-    room_id: u64,
+    room_id: RoomId,
     client_id: u64,
     media: MediaEngine,
 ) -> Result<Peer> {

@@ -425,7 +425,9 @@ fn port_tx_for_room(
 ) -> Option<SyncSender<Command>> {
     let mut ports: Vec<u16> = map.keys().copied().collect();
     ports.sort();
-    let port = *ports.get((room_id as usize) % ports.len().max(1))?;
+    // Spread rooms over the media ports by the low bits of the room UUID.
+    let index = (room_id.as_u128() % ports.len().max(1) as u128) as usize;
+    let port = *ports.get(index)?;
     map.get(&port).cloned()
 }
 

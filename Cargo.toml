@@ -1,6 +1,6 @@
 [package]
 name = "sfu"
-version = "0.20.0-rc.4"
+version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Rusty Rain <y@liu.mx>"]
@@ -17,10 +17,12 @@ sansio = "1.0.1"
 bytes = "1.12.0"
 log = "0.4.33"
 rand = "0.10.1"
+uuid = "1"
 
 [dev-dependencies]
 webrtc = { version = "0.20.0-rc.4", path = "webrtc" }
 
+uuid = { version = "1", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.11"
 chrono = "0.4.45"
@@ -34,7 +36,6 @@ crossbeam-channel = "0.5.16"
 ctrlc = "3.5.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"

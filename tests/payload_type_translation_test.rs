@@ -15,7 +15,6 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use rand::random;
 use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_OPUS, MIME_TYPE_VP8};
 use rtc::rtp_transceiver::RTCRtpTransceiverDirection;
 use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
@@ -40,7 +39,7 @@ const DEFAULT_OPUS_PAYLOAD_TYPE: u8 = 111;
 /// tracks and assert they arrive carrying the payload type the *subscriber* negotiated (a
 /// default) rather than the publisher's inbound (custom) one — i.e. the SFU translated it.
 async fn test_payload_type_translation(subscriber_count: u64) -> anyhow::Result<()> {
-    let room_id = random::<u64>();
+    let room_id = sfu::RoomId::new_v4();
 
     // Publisher registers VP8/Opus at custom payload types; subscribers use the defaults.
     let mut publisher = common::connect_custom(HOST, SIGNAL_PORT, room_id, 0).await?;

@@ -25,8 +25,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Instant;
+use uuid::Uuid;
 
-pub type RoomId = u64;
+/// Rooms are identified by a UUID minted by the signaling authority. The SFU treats it as
+/// an opaque, `Copy` identifier: it never interprets the layout, and only requires a
+/// rendering that is legal inside an ICE ufrag (see [`Room::build_client`]).
+pub type RoomId = Uuid;
 
 pub(crate) struct Room {
     id: RoomId,
@@ -67,9 +71,16 @@ impl Room {
         // USERNAME = local_ufrag ":" remote_ufrag
         // ufrag = 4*256ice-char // length range [4, 256]
         // ice-char = ALPHA / DIGIT / "+" / "/"
+        //
+        // The room UUID is rendered in its simple (unhyphenated, 32 hex character) form:
+        // `-` is not an ice-char, so neither the hyphenated form nor a base64url token may
+        // appear here. `/` and `+` are reserved as this scheme's own separators, which also
+        // rules out standard base64. The result is 32 + 1 + <=20 + 1 + 16 = at most 70
+        // characters, comfortably inside the 256 limit. Demuxer::demux_stun_username parses
+        // this back, so the two must agree.
         let mut setting_engine = SettingEngine::default();
         setting_engine.set_ice_credentials(
-            format!("{}/{}+{}", room_id, client_id, generate_ufrag()),
+            format!("{}/{}+{}", room_id.simple(), client_id, generate_ufrag()),
             generate_pwd(),
         );
         setting_engine.set_lite(true);

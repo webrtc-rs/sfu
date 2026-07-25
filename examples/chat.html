@@ -478,6 +478,17 @@
     const byId = (id) => document.getElementById(id);
     const byTag = (tag) => [].slice.call(document.getElementsByTagName(tag));
 
+    // The UI keeps its uint64 room id — short enough to read off one tab and type into
+    // another — but the SFU keys rooms by UUID, so widen it on the way out. This is
+    // exactly Rust's `Uuid::from_u128(room)`: the number becomes the low bits of an
+    // otherwise-zero UUID, so room 42 is always 00000000-0000-0000-0000-00000000002a and
+    // two browsers that typed the same number land in the same room.
+    function roomIdToUuid(value) {
+        const hex = BigInt(value).toString(16).padStart(32, "0");
+        return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) +
+            "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+    }
+
     byId("room").value = Math.floor(Math.random() * 1000000000);
 
     const roomInput = byId("room");
@@ -919,7 +930,7 @@
         ws = new WebSocket('wss://' + location.host + '/ws');
         ws.onopen = async () => {
             console.log('WS open; registering ' + byId("room").value + '/' + clientId);
-            sendSignal({cmd: 'register', roomid: BigInt(byId("room").value), clientid: clientId});
+            sendSignal({cmd: 'register', roomid: roomIdToUuid(byId("room").value), clientid: clientId});
 
             await setupCodecs();  // constrain the media m-lines to VP8 / OPUS before offering
             const offer = await rtc.createOffer();

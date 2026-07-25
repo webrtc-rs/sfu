@@ -38,7 +38,8 @@ impl Demuxer {
         let room_client = local_ufrag.split_once('+')?.0;
         let fields = room_client.split('/').collect::<Vec<&str>>();
         if fields.len() >= 2 {
-            let room_id = fields[0].parse().ok()?;
+            // Room::build_client writes the room UUID in simple (32 hex character) form.
+            let room_id = RoomId::parse_str(fields[0]).ok()?;
             let client_id = fields[1].parse().ok()?;
             let four_tuple = pkt.transport.into();
             self.affinity.insert(four_tuple, (room_id, client_id));

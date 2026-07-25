@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
-use rand::random;
 use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_OPUS, MIME_TYPE_VP8};
 use rtc::rtp_transceiver::RTCRtpTransceiverDirection;
 use rtc::sdp::extmap::TRANSPORT_CC_URI;
@@ -49,7 +48,7 @@ const EXT_PAYLOAD: &[u8] = &[0xab, 0xcd];
 /// the id the *subscriber* negotiated (a default), with its payload intact — i.e. the SFU
 /// translated the id.
 async fn test_header_extension_id_translation(subscriber_count: u64) -> anyhow::Result<()> {
-    let room_id = random::<u64>();
+    let room_id = sfu::RoomId::new_v4();
 
     // Publisher negotiates transport-cc at a custom id; subscribers use the default.
     let mut publisher = common::connect_ext_custom(HOST, SIGNAL_PORT, room_id, 0).await?;
