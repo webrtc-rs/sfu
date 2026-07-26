@@ -81,6 +81,13 @@ Sfu   ── owns rooms: HashMap<RoomId, Room>, a Demuxer, the local_addr, trans
   `(RoomId, ClientId)`: by learned 4-tuple affinity once media flows, and otherwise by
   parsing the STUN `USERNAME` local-ufrag during ICE. Both `Sfu` and `Room` hold one —
   `Sfu` demuxes to the room, `Room` demuxes to the client.
+
+  A `RoomId` is a `Uuid`, which the ufrag has to carry as text. `room::encode_local_ufrag`
+  and `room::decode_local_ufrag` are the matched pair that does it, formatting
+  `base64_room_id "/" client_id "+" random_suffix`. The room id uses **standard** base64
+  (`+` and `/`) rather than base64url, because RFC 8839 limits a ufrag to
+  `ALPHA / DIGIT / "+" / "/"` — `-` and `_` are not legal there. Since the encoded room id
+  can therefore contain both separators, decoding splits from the right.
 - **`ForwardTable`** ([`src/forward.rs`](src/forward.rs)) is the media routing graph, owned
   by `Room`. It is keyed by `ForwardKey { publisher, mid }` — the publisher's m-line **mid**,
   not the SSRC, is the stable dedup key across renegotiations — and maps each publishing
