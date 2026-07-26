@@ -17,12 +17,12 @@ sansio = "1.0.1"
 bytes = "1.12.0"
 log = "0.4.33"
 rand = "0.10.1"
-uuid = "1"
+base64 = "0.23.0"
+uuid = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
 webrtc = { version = "0.20.0-rc.4", path = "webrtc" }
 
-uuid = { version = "1", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.11"
 chrono = "0.4.45"

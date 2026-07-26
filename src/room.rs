@@ -3,6 +3,8 @@ use crate::demuxer::Demuxer;
 use crate::event::SFUEvent;
 use crate::forward::{ForwardKey, ForwardTable};
 use crate::rtcp_forwarder::RtcpForwarderBuilder;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
 use log::{trace, warn};
 use rtc::ice::rand::{generate_pwd, generate_ufrag};
 use rtc::interceptor::Registry;
@@ -31,6 +33,55 @@ use uuid::Uuid;
 /// an opaque, `Copy` identifier: it never interprets the layout, and only requires a
 /// rendering that is legal inside an ICE ufrag (see [`Room::build_client`]).
 pub type RoomId = Uuid;
+
+/// Render a room id as the string that appears as base64, unpadded.
+fn encode_room_id(room_id: &RoomId) -> String {
+    STANDARD_NO_PAD.encode(room_id.as_bytes())
+}
+
+/// Parse a room id from base64, unpadded.
+fn decode_room_id(token: &str) -> Option<RoomId> {
+    let bytes = STANDARD_NO_PAD.decode(token).ok()?;
+    let bytes: [u8; 16] = bytes.try_into().ok()?;
+    let room_id = Uuid::from_bytes(bytes);
+
+    Some(room_id)
+}
+
+// The SFU has one UDP socket per media shard, so an arriving packet has to say which room
+// and client it belongs to. ICE gives us exactly one field to carry that: the ufrag the
+// browser echoes in every STUN binding request. These two functions are the only places
+// that know its layout, and they must stay inverses of each other.
+//
+//   USERNAME        = local_ufrag ":" remote_ufrag
+//   ufrag           = 4*256ice-char                  // length range [4, 256]
+//   ice-char        = ALPHA / DIGIT / "+" / "/"
+//   local_ufrag     = base64_room_id "/" digit_client_id "+" alpha_ufrag
+//   base64_room_id  = ALPHA / DIGIT / "+" / "/"
+//   digit_client_id = DIGIT
+//   alpha_ufrag     = ALPHA
+
+/// Build the local ufrag that names `room_id`/`client_id`, with a random suffix so two
+/// clients of one room never share credentials.
+pub(crate) fn encode_local_ufrag(room_id: &RoomId, client_id: ClientId) -> String {
+    format!(
+        "{}/{}+{}",
+        encode_room_id(room_id), // ALPHA / DIGIT / "+" / "/"
+        client_id,
+        generate_ufrag()
+    )
+}
+
+/// Recover the room and client a local ufrag names, or `None` if it was not built by
+/// [`encode_local_ufrag`].
+///
+/// Both separators can also occur *inside* the base64 room id, so the split works from
+/// the right: the last `+` is the one before the alphabetic suffix, and the last `/` the
+/// one before the decimal client id. Splitting from the left would truncate the room id.
+pub(crate) fn decode_local_ufrag(local_ufrag: &str) -> Option<(RoomId, ClientId)> {
+    let (room_str, client_str) = local_ufrag.rsplit_once('+')?.0.rsplit_once('/')?;
+    Some((decode_room_id(room_str)?, client_str.parse().ok()?))
+}
 
 pub(crate) struct Room {
     id: RoomId,
@@ -68,21 +119,8 @@ impl Room {
     /// Build a client with the default media engine (default codecs), the default
     /// interceptor chain, and default setting engine.
     fn build_client(&self, client_id: ClientId, room_id: RoomId) -> Result<Client, Error> {
-        // USERNAME = local_ufrag ":" remote_ufrag
-        // ufrag = 4*256ice-char // length range [4, 256]
-        // ice-char = ALPHA / DIGIT / "+" / "/"
-        //
-        // The room UUID is rendered in its simple (unhyphenated, 32 hex character) form:
-        // `-` is not an ice-char, so neither the hyphenated form nor a base64url token may
-        // appear here. `/` and `+` are reserved as this scheme's own separators, which also
-        // rules out standard base64. The result is 32 + 1 + <=20 + 1 + 16 = at most 70
-        // characters, comfortably inside the 256 limit. Demuxer::demux_stun_username parses
-        // this back, so the two must agree.
         let mut setting_engine = SettingEngine::default();
-        setting_engine.set_ice_credentials(
-            format!("{}/{}+{}", room_id.simple(), client_id, generate_ufrag()),
-            generate_pwd(),
-        );
+        setting_engine.set_ice_credentials(encode_local_ufrag(&room_id, client_id), generate_pwd());
         setting_engine.set_lite(true);
         // The SFU is ICE-lite (controlled) and DTLS-passive: it answers `a=setup:passive`
         // so the browser is the DTLS client and initiates the handshake (sends the
@@ -633,5 +671,169 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
         self.writes.clear();
         self.events.clear();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A room id whose base64 contains **both** ufrag separators (`dzax4qN2/q/IfVWKlhcc+w`),
+    /// which is the case the `{room}/{client}+{ufrag}` scheme has to survive.
+    const ADVERSARIAL: &str = "7736b1e2-a376-feaf-c87d-558a96171cfb";
+
+    fn uuid(text: &str) -> RoomId {
+        RoomId::parse_str(text).expect("test uuid")
+    }
+
+    #[test]
+    fn round_trips_every_uuid_shape() {
+        let ids = [
+            RoomId::nil(),
+            RoomId::max(),
+            RoomId::from_u128(42), // the numeric room ids the chat example widens
+            RoomId::from_u128(u64::MAX as u128),
+            uuid(ADVERSARIAL),
+            uuid("a2b40a86-cc37-fc72-37d5-4940fc52c41e"), // two slashes
+            RoomId::from_bytes([0x7f; 16]),
+            RoomId::from_bytes([
+                0x00, 0xff, 0x10, 0xef, 0x20, 0xdf, 0x30, 0xcf, 0x40, 0xbf, 0x50, 0xaf, 0x60, 0x9f,
+                0x70, 0x8f,
+            ]),
+        ];
+        for id in ids {
+            let token = encode_room_id(&id);
+            assert_eq!(token.len(), 22, "16 bytes is always 22 unpadded characters");
+            assert_eq!(
+                decode_room_id(&token),
+                Some(id),
+                "round trip failed for {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_only_sixteen_byte_payloads() {
+        let token = encode_room_id(&uuid(ADVERSARIAL));
+        for invalid in [
+            "",                         // empty
+            "AAAA",                     // 3 bytes
+            &token[..token.len() - 1],  // 21 characters: not a whole 16 bytes
+            &format!("{token}AA"),      // 24 characters: 18 bytes
+            &format!("{token}{token}"), // 32 bytes
+        ] {
+            assert_eq!(decode_room_id(invalid), None, "accepted {invalid:?}");
+        }
+    }
+
+    #[test]
+    fn decodes_only_the_canonical_spelling() {
+        let id = uuid(ADVERSARIAL);
+        let token = encode_room_id(&id);
+
+        // 128 bits is not a multiple of 6, so the final character carries 2 significant
+        // bits and 4 that must be zero. If those were ignored, sixteen different strings
+        // would decode to this same UUID — and since rooms are keyed by the decoded value,
+        // a client could reach one room under a spelling the server never issued.
+        let alphabet: Vec<char> =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+                .chars()
+                .collect();
+        let last = alphabet
+            .iter()
+            .position(|c| *c == token.chars().last().unwrap())
+            .expect("final character is in the alphabet");
+        let mut twins = 0;
+        for bump in 1..16 {
+            let twin: String = token[..token.len() - 1]
+                .chars()
+                .chain(std::iter::once(alphabet[last + bump]))
+                .collect();
+            assert_ne!(twin, token);
+            assert_eq!(decode_room_id(&twin), None, "accepted twin {twin:?}");
+            twins += 1;
+        }
+        assert_eq!(
+            twins, 15,
+            "every non-canonical trailing-bit spelling was tested"
+        );
+    }
+
+    #[test]
+    fn decodes_only_the_standard_alphabet() {
+        // The room id shares the ufrag with `+` and `/` separators, so this codec uses the
+        // standard alphabet rather than base64url. A URL-safe spelling of the same bytes
+        // must not decode, or two encodings would name the same room.
+        let id = uuid(ADVERSARIAL);
+        let url_safe = encode_room_id(&id).replace('+', "-").replace('/', "_");
+        assert_ne!(url_safe, encode_room_id(&id));
+        assert_eq!(decode_room_id(&url_safe), None);
+
+        // Padding is not part of the encoding either.
+        assert_eq!(decode_room_id(&format!("{}==", encode_room_id(&id))), None);
+        assert_eq!(decode_room_id("not base64!!!!!!!!!!!!"), None);
+    }
+
+    #[test]
+    fn local_ufrag_round_trips_through_both_separators() {
+        // Standard base64 can contain `+` and `/`, which are also this scheme's own
+        // separators, so a room id carrying both is the case that has to survive.
+        for id in [
+            uuid(ADVERSARIAL),                            // base64 holds both `+` and `/`
+            uuid("a2b40a86-cc37-fc72-37d5-4940fc52c41e"), // two slashes
+            RoomId::nil(),
+            RoomId::max(),
+            RoomId::from_u128(42),
+        ] {
+            for client_id in [0 as ClientId, 1, 537_821_252, ClientId::MAX] {
+                let local_ufrag = encode_local_ufrag(&id, client_id);
+                assert_eq!(
+                    decode_local_ufrag(&local_ufrag),
+                    Some((id, client_id)),
+                    "round trip failed for {local_ufrag}"
+                );
+
+                // RFC 8839: ufrag = 4*256(ALPHA / DIGIT / "+" / "/").
+                assert!((4..=256).contains(&local_ufrag.len()));
+                assert!(
+                    local_ufrag
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/'),
+                    "ufrag has a character ICE does not allow: {local_ufrag}"
+                );
+            }
+        }
+        let token = encode_room_id(&uuid(ADVERSARIAL));
+        assert!(
+            token.contains('+') && token.contains('/'),
+            "the fixture no longer exercises both separators: {token}"
+        );
+    }
+
+    #[test]
+    fn local_ufrag_decoding_rejects_malformed_input() {
+        let token = encode_room_id(&uuid(ADVERSARIAL));
+        for invalid in [
+            String::new(),                    // empty
+            token.clone(),                    // no separators at all
+            format!("{token}/7"),             // missing the random suffix
+            format!("{token}+abc"),           // missing the client id
+            format!("{token}/notdigits+abc"), // client id is not a number
+            format!("{token}/-1+abc"),        // negative client id
+            "zzzz/7+abc".to_string(),         // room id is not 16 bytes
+        ] {
+            assert_eq!(decode_local_ufrag(&invalid), None, "accepted {invalid:?}");
+        }
+    }
+
+    #[test]
+    fn local_ufrag_is_unique_per_client() {
+        // The random suffix is what stops two clients of one room from sharing ICE
+        // credentials, so the same inputs must not produce the same ufrag twice.
+        let id = uuid(ADVERSARIAL);
+        let first = encode_local_ufrag(&id, 7);
+        let second = encode_local_ufrag(&id, 7);
+        assert_ne!(first, second);
+        assert_eq!(decode_local_ufrag(&first), decode_local_ufrag(&second));
     }
 }
