@@ -75,7 +75,7 @@ impl ClientBuilder {
 
     pub(crate) fn with_interceptor_registry<P>(mut self, interceptor_registry: Registry<P>) -> Self
     where
-        P: Interceptor,
+        P: Interceptor + 'static,
     {
         self.peer_connection_builder = self
             .peer_connection_builder
