@@ -2,22 +2,22 @@ use crate::room::RoomId;
 use crate::{RequestId, SFUEvent};
 use log::{trace, warn};
 use rtc::ice::candidate::CandidateConfig;
-use rtc::interceptor::{Interceptor, NoopInterceptor, Registry};
+use rtc::interceptor::{BoxedInterceptor, Interceptor, Registry};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
 use rtc::peer_connection::RTCPeerConnectionBuilder;
 use rtc::peer_connection::configuration::RTCConfiguration;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
-use rtc::peer_connection::configuration::{RTCAnswerOptions, RTCOfferOptions};
-use rtc::peer_connection::event::{RTCEvent, RTCPeerConnectionEvent};
+use rtc::peer_connection::event::RTCPeerConnectionEvent;
 use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::state::{RTCPeerConnectionState, RTCSignalingState};
-use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
+use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate};
+use rtc::rtcp;
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpHeaderExtensionParameters,
-    RTCRtpReceiveParameters, RTCRtpSendParameters, RtpCodecKind,
+    RTCRtpReceiveParameters, RTCRtpSendParameters,
 };
 use rtc::rtp_transceiver::{
     RTCRtpReceiverId, RTCRtpSenderId, RTCRtpTransceiverDirection, RTCRtpTransceiverId,
@@ -26,291 +26,34 @@ use rtc::rtp_transceiver::{
 use rtc::sdp::MediaDescription;
 use rtc::shared::TaggedBytesMut;
 use rtc::shared::error::{Error, Result, flatten_errs};
-use rtc::statistics::StatsSelector;
-use rtc::statistics::report::RTCStatsReport;
-use rtc::{rtcp, rtp};
 use sansio::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
 
-pub(crate) trait PeerConnection:
-    Protocol<
-        TaggedBytesMut,
-        RTCMessage,
-        RTCEvent,
-        Rout = RTCMessage,
-        Wout = TaggedBytesMut,
-        Eout = RTCPeerConnectionEvent,
-        Error = Error,
-        Time = Instant,
-    > + Send
-{
-    fn create_offer(&mut self, options: Option<RTCOfferOptions>) -> Result<RTCSessionDescription>;
-    fn create_answer(&mut self, options: Option<RTCAnswerOptions>)
-    -> Result<RTCSessionDescription>;
-    fn set_local_description(&mut self, local_description: RTCSessionDescription) -> Result<()>;
-    fn local_description(&self) -> Option<RTCSessionDescription>;
-    fn current_local_description(&self) -> Option<RTCSessionDescription>;
-    fn pending_local_description(&self) -> Option<RTCSessionDescription>;
-    fn can_trickle_ice_candidates(&self) -> Option<bool>;
-    fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()>;
-    fn remote_description(&self) -> Option<&RTCSessionDescription>;
-    fn current_remote_description(&self) -> Option<&RTCSessionDescription>;
-    fn pending_remote_description(&self) -> Option<&RTCSessionDescription>;
-    fn add_local_candidate(&mut self, local_candidate: RTCIceCandidateInit) -> Result<()>;
-    fn add_remote_candidate(&mut self, remote_candidate: RTCIceCandidateInit) -> Result<()>;
-    fn restart_ice(&mut self);
-    fn get_configuration(&self) -> &RTCConfiguration;
-    fn set_configuration(&mut self, configuration: RTCConfiguration) -> Result<()>;
-    /*fn create_data_channel(
-        &mut self,
-        label: &str,
-        options: Option<RTCDataChannelInit>,
-    ) -> Result<RTCDataChannelId>;*/
-    fn get_senders(&self) -> Vec<RTCRtpSenderId>;
-    fn get_receivers(&self) -> Vec<RTCRtpReceiverId>;
-    fn get_transceivers(&self) -> Vec<RTCRtpTransceiverId>;
-
-    fn add_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId>;
-    fn remove_track(&mut self, sender_id: RTCRtpSenderId) -> Result<()>;
-    fn add_transceiver_from_track(
-        &mut self,
-        track: MediaStreamTrack,
-        init: Option<RTCRtpTransceiverInit>,
-    ) -> Result<RTCRtpTransceiverId>;
-    fn add_transceiver_from_kind(
-        &mut self,
-        kind: RtpCodecKind,
-        init: Option<RTCRtpTransceiverInit>,
-    ) -> Result<RTCRtpTransceiverId>;
-    fn get_stats(&mut self, now: Instant, selector: StatsSelector) -> RTCStatsReport;
-
-    fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: rtp::Packet) -> Result<()>;
-    fn write_rtcp(
-        &mut self,
-        sender_id: RTCRtpSenderId,
-        packets: Vec<Box<dyn rtcp::Packet>>,
-    ) -> Result<()>;
-
-    /// Write RTCP on a receiver leg — used to send a subscriber's keyframe request (PLI/FIR)
-    /// upstream to the publisher whose track this receiver carries.
-    fn write_receiver_rtcp(
-        &mut self,
-        receiver_id: RTCRtpReceiverId,
-        packets: Vec<Box<dyn rtcp::Packet>>,
-    ) -> Result<()>;
-
-    /// The mid of a transceiver, if assigned — the stable forwarding key (it is not
-    /// carried on the `MediaStreamTrack`).
-    fn transceiver_mid(&mut self, transceiver_id: RTCRtpTransceiverId) -> Option<Mid>;
-
-    /// The negotiated receive track for a receiver (`receiver.track()`, cloned): kind,
-    /// stream/track ids, and any track-level coding metadata already available.
-    fn receiver_track(&mut self, receiver_id: RTCRtpReceiverId) -> Option<MediaStreamTrack>;
-
-    /// The receiver's negotiated RTP parameters, including the filtered codec list that
-    /// is valid for this peer connection's receive side before `OnTrack` populates
-    /// deferred track codings.
-    fn receiver_parameters(
-        &mut self,
-        receiver_id: RTCRtpReceiverId,
-    ) -> Option<RTCRtpReceiveParameters>;
-
-    /// The sender's negotiated RTP parameters, including the subscriber leg payload
-    /// types currently valid for that sender.
-    fn sender_parameters(&mut self, sender_id: RTCRtpSenderId) -> Option<RTCRtpSendParameters>;
-}
-
-impl<I> PeerConnection for RTCPeerConnection<I>
-where
-    I: Interceptor + Send + 'static,
-{
-    fn create_offer(&mut self, options: Option<RTCOfferOptions>) -> Result<RTCSessionDescription> {
-        RTCPeerConnection::create_offer(self, options)
-    }
-
-    fn create_answer(
-        &mut self,
-        options: Option<RTCAnswerOptions>,
-    ) -> Result<RTCSessionDescription> {
-        RTCPeerConnection::create_answer(self, options)
-    }
-
-    fn set_local_description(&mut self, local_description: RTCSessionDescription) -> Result<()> {
-        RTCPeerConnection::set_local_description(self, local_description)
-    }
-
-    fn local_description(&self) -> Option<RTCSessionDescription> {
-        RTCPeerConnection::local_description(self)
-    }
-
-    fn current_local_description(&self) -> Option<RTCSessionDescription> {
-        RTCPeerConnection::current_local_description(self)
-    }
-
-    fn pending_local_description(&self) -> Option<RTCSessionDescription> {
-        RTCPeerConnection::pending_local_description(self)
-    }
-
-    fn can_trickle_ice_candidates(&self) -> Option<bool> {
-        RTCPeerConnection::can_trickle_ice_candidates(self)
-    }
-
-    fn set_remote_description(&mut self, remote_description: RTCSessionDescription) -> Result<()> {
-        RTCPeerConnection::set_remote_description(self, remote_description)
-    }
-
-    fn remote_description(&self) -> Option<&RTCSessionDescription> {
-        RTCPeerConnection::remote_description(self)
-    }
-
-    fn current_remote_description(&self) -> Option<&RTCSessionDescription> {
-        RTCPeerConnection::current_remote_description(self)
-    }
-
-    fn pending_remote_description(&self) -> Option<&RTCSessionDescription> {
-        RTCPeerConnection::pending_remote_description(self)
-    }
-
-    fn add_local_candidate(&mut self, local_candidate: RTCIceCandidateInit) -> Result<()> {
-        RTCPeerConnection::add_local_candidate(self, local_candidate)
-    }
-
-    fn add_remote_candidate(&mut self, remote_candidate: RTCIceCandidateInit) -> Result<()> {
-        RTCPeerConnection::add_remote_candidate(self, remote_candidate)
-    }
-
-    fn restart_ice(&mut self) {
-        RTCPeerConnection::restart_ice(self)
-    }
-
-    fn get_configuration(&self) -> &RTCConfiguration {
-        RTCPeerConnection::get_configuration(self)
-    }
-    fn set_configuration(&mut self, configuration: RTCConfiguration) -> Result<()> {
-        RTCPeerConnection::set_configuration(self, configuration)
-    }
-
-    /*fn create_data_channel(
-        &mut self,
-        label: &str,
-        options: Option<RTCDataChannelInit>,
-    ) -> Result<RTCDataChannelId> {
-        let dc = RTCPeerConnection::create_data_channel(self, label, options)?;
-        Ok(dc.id())
-    }*/
-
-    fn get_senders(&self) -> Vec<RTCRtpSenderId> {
-        RTCPeerConnection::get_senders(self).collect()
-    }
-    fn get_receivers(&self) -> Vec<RTCRtpReceiverId> {
-        RTCPeerConnection::get_receivers(self).collect()
-    }
-    fn get_transceivers(&self) -> Vec<RTCRtpTransceiverId> {
-        RTCPeerConnection::get_transceivers(self).collect()
-    }
-
-    fn add_track(&mut self, track: MediaStreamTrack) -> Result<RTCRtpSenderId> {
-        RTCPeerConnection::add_track(self, track)
-    }
-
-    fn remove_track(&mut self, sender_id: RTCRtpSenderId) -> Result<()> {
-        RTCPeerConnection::remove_track(self, sender_id)
-    }
-
-    fn add_transceiver_from_track(
-        &mut self,
-        track: MediaStreamTrack,
-        init: Option<RTCRtpTransceiverInit>,
-    ) -> Result<RTCRtpTransceiverId> {
-        RTCPeerConnection::add_transceiver_from_track(self, track, init)
-    }
-
-    fn add_transceiver_from_kind(
-        &mut self,
-        kind: RtpCodecKind,
-        init: Option<RTCRtpTransceiverInit>,
-    ) -> Result<RTCRtpTransceiverId> {
-        RTCPeerConnection::add_transceiver_from_kind(self, kind, init)
-    }
-
-    fn get_stats(&mut self, now: Instant, selector: StatsSelector) -> RTCStatsReport {
-        RTCPeerConnection::get_stats(self, now, selector)
-    }
-
-    fn write_rtp(&mut self, sender_id: RTCRtpSenderId, packet: rtp::Packet) -> Result<()> {
-        RTCPeerConnection::rtp_sender(self, sender_id)
-            .ok_or(Error::ErrRTPSenderNotExisted)?
-            .write_rtp(packet)
-    }
-
-    fn write_rtcp(
-        &mut self,
-        sender_id: RTCRtpSenderId,
-        packets: Vec<Box<dyn rtcp::Packet>>,
-    ) -> Result<()> {
-        RTCPeerConnection::rtp_sender(self, sender_id)
-            .ok_or(Error::ErrRTPSenderNotExisted)?
-            .write_rtcp(packets)
-    }
-
-    fn write_receiver_rtcp(
-        &mut self,
-        receiver_id: RTCRtpReceiverId,
-        packets: Vec<Box<dyn rtcp::Packet>>,
-    ) -> Result<()> {
-        RTCPeerConnection::rtp_receiver(self, receiver_id)
-            .ok_or(Error::ErrRTPReceiverNotExisted)?
-            .write_rtcp(packets)
-    }
-
-    fn transceiver_mid(&mut self, transceiver_id: RTCRtpTransceiverId) -> Option<Mid> {
-        self.rtp_transceiver(transceiver_id)?.mid().clone()
-    }
-
-    fn receiver_track(&mut self, receiver_id: RTCRtpReceiverId) -> Option<MediaStreamTrack> {
-        Some(self.rtp_receiver(receiver_id)?.track().clone())
-    }
-
-    fn receiver_parameters(
-        &mut self,
-        receiver_id: RTCRtpReceiverId,
-    ) -> Option<RTCRtpReceiveParameters> {
-        Some(self.rtp_receiver(receiver_id)?.get_parameters().clone())
-    }
-
-    fn sender_parameters(&mut self, sender_id: RTCRtpSenderId) -> Option<RTCRtpSendParameters> {
-        Some(self.rtp_sender(sender_id)?.get_parameters().clone())
-    }
-}
-
-pub(crate) struct ClientBuilder<I = NoopInterceptor>
-where
-    I: Interceptor,
-{
+/// The interceptor chain is assembled at runtime, so its type is erased to
+/// [`BoxedInterceptor`]: every client's peer connection then has the same concrete type,
+/// [`RTCPeerConnection<BoxedInterceptor>`], and neither this builder nor [`Client`] has to
+/// be generic over the chain.
+pub(crate) struct ClientBuilder {
     id: ClientId,
     room_id: RoomId,
     local_addr: SocketAddr,
-    peer_connection_builder: RTCPeerConnectionBuilder<I>,
+    peer_connection_builder: RTCPeerConnectionBuilder<BoxedInterceptor>,
 }
 
-impl ClientBuilder<NoopInterceptor> {
+impl ClientBuilder {
     pub(crate) fn new(id: ClientId, room_id: RoomId, local_addr: SocketAddr) -> Self {
         Self {
             id,
             room_id,
             local_addr,
-            peer_connection_builder: RTCPeerConnectionBuilder::new(),
+            peer_connection_builder: RTCPeerConnectionBuilder::new()
+                .with_interceptor_registry(Registry::new().boxed()),
         }
     }
-}
 
-impl<I> ClientBuilder<I>
-where
-    I: Interceptor,
-{
     pub(crate) fn with_configuration(mut self, configuration: RTCConfiguration) -> Self {
         self.peer_connection_builder = self
             .peer_connection_builder
@@ -330,32 +73,22 @@ where
         self
     }
 
-    pub(crate) fn with_interceptor_registry<P>(
-        self,
-        interceptor_registry: Registry<P>,
-    ) -> ClientBuilder<P>
+    pub(crate) fn with_interceptor_registry<P>(mut self, interceptor_registry: Registry<P>) -> Self
     where
         P: Interceptor,
     {
-        ClientBuilder {
-            id: self.id,
-            room_id: self.room_id,
-            local_addr: self.local_addr,
-            peer_connection_builder: self
-                .peer_connection_builder
-                .with_interceptor_registry(interceptor_registry),
-        }
+        self.peer_connection_builder = self
+            .peer_connection_builder
+            .with_interceptor_registry(interceptor_registry.boxed());
+        self
     }
 
-    pub(crate) fn build(self) -> Result<Client>
-    where
-        I: Send + 'static,
-    {
+    pub(crate) fn build(self) -> Result<Client> {
         Ok(Client {
             id: self.id,
             room_id: self.room_id,
             local_addr: self.local_addr,
-            peer_connection: Box::new(self.peer_connection_builder.build()?),
+            peer_connection: self.peer_connection_builder.build()?,
 
             next_request_id: 0,
             curr_request_id: None,
@@ -384,7 +117,7 @@ pub(crate) struct Client {
     id: ClientId,
     room_id: RoomId,
     local_addr: SocketAddr,
-    peer_connection: Box<dyn PeerConnection>,
+    peer_connection: RTCPeerConnection<BoxedInterceptor>,
 
     next_request_id: RequestId,
     curr_request_id: Option<(RequestId, Instant)>,
@@ -417,7 +150,7 @@ pub(crate) struct Client {
 }
 
 impl Deref for Client {
-    type Target = Box<dyn PeerConnection>;
+    type Target = RTCPeerConnection<BoxedInterceptor>;
 
     fn deref(&self) -> &Self::Target {
         &self.peer_connection
@@ -569,18 +302,22 @@ impl Client {
         ssrc: u32,
         payload_type: u8,
     ) -> Option<RTCRtpCodec> {
-        for receiver_id in self.peer_connection.get_receivers() {
-            let Some(track) = self.peer_connection.receiver_track(receiver_id) else {
+        let receiver_ids: Vec<RTCRtpReceiverId> = self.peer_connection.get_receivers().collect();
+        for receiver_id in receiver_ids {
+            let Some(mut receiver) = self.peer_connection.rtp_receiver(receiver_id) else {
                 continue;
             };
-            if !track.ssrcs().any(|track_ssrc| track_ssrc == ssrc) {
+            if !receiver
+                .track()
+                .ssrcs()
+                .any(|track_ssrc| track_ssrc == ssrc)
+            {
                 continue;
             }
 
-            let Some(parameters) = self.peer_connection.receiver_parameters(receiver_id) else {
-                continue;
-            };
-            if let Some(codec) = Client::codec_for_payload_type(&parameters, payload_type) {
+            if let Some(codec) =
+                Client::codec_for_payload_type(receiver.get_parameters(), payload_type)
+            {
                 return Some(codec);
             }
         }
@@ -595,16 +332,26 @@ impl Client {
         &mut self,
         ssrc: u32,
     ) -> Option<Vec<RTCRtpHeaderExtensionParameters>> {
-        for receiver_id in self.peer_connection.get_receivers() {
-            let Some(track) = self.peer_connection.receiver_track(receiver_id) else {
+        let receiver_ids: Vec<RTCRtpReceiverId> = self.peer_connection.get_receivers().collect();
+        for receiver_id in receiver_ids {
+            let Some(mut receiver) = self.peer_connection.rtp_receiver(receiver_id) else {
                 continue;
             };
-            if !track.ssrcs().any(|track_ssrc| track_ssrc == ssrc) {
+            if !receiver
+                .track()
+                .ssrcs()
+                .any(|track_ssrc| track_ssrc == ssrc)
+            {
                 continue;
             }
 
-            let parameters = self.peer_connection.receiver_parameters(receiver_id)?;
-            return Some(parameters.rtp_parameters.header_extensions);
+            return Some(
+                receiver
+                    .get_parameters()
+                    .rtp_parameters
+                    .header_extensions
+                    .clone(),
+            );
         }
 
         None
@@ -615,8 +362,8 @@ impl Client {
         sender_id: RTCRtpSenderId,
         codec: &RTCRtpCodec,
     ) -> Option<u8> {
-        let parameters = self.peer_connection.sender_parameters(sender_id)?;
-        Client::payload_type_for_codec(&parameters, codec)
+        let mut sender = self.peer_connection.rtp_sender(sender_id)?;
+        Client::payload_type_for_codec(sender.get_parameters(), codec)
     }
 
     /// The tracks this client is sending toward the SFU, keyed by m-line `mid`, ready to
@@ -644,14 +391,19 @@ impl Client {
             .remote_description()
             .and_then(|remote| remote.unmarshal().ok());
 
-        for receiver_id in self.peer_connection.get_receivers() {
-            let Some(mid) = self.peer_connection.transceiver_mid(receiver_id.into()) else {
+        let receiver_ids: Vec<RTCRtpReceiverId> = self.peer_connection.get_receivers().collect();
+        for receiver_id in receiver_ids {
+            let Some(mid) = self.transceiver_mid(receiver_id) else {
                 continue;
             };
-            let Some(track) = self.peer_connection.receiver_track(receiver_id) else {
-                continue;
-            };
-            let Some(parameters) = self.peer_connection.receiver_parameters(receiver_id) else {
+            // Cloned out so the peer connection borrow ends before
+            // `track_with_codings_from_media_description` takes `&self`.
+            let Some((track, parameters)) =
+                self.peer_connection.rtp_receiver(receiver_id).map(|mut r| {
+                    let track = r.track().clone();
+                    (track, r.get_parameters().clone())
+                })
+            else {
                 continue;
             };
 
@@ -768,7 +520,7 @@ impl Client {
         &mut self,
         transceiver_id: impl Into<RTCRtpTransceiverId>,
     ) -> Option<Mid> {
-        self.peer_connection.transceiver_mid(transceiver_id.into())
+        self.rtp_transceiver(transceiver_id.into())?.mid().clone()
     }
 
     /// Add a forwarding sender for another client's publish track. Uses a dedicated
@@ -802,10 +554,11 @@ impl Client {
         media_ssrc: SSRC,
         packets: Vec<Box<dyn rtcp::Packet>>,
     ) -> Result<()> {
-        let receiver_id = self.peer_connection.get_receivers().into_iter().find(|id| {
+        let receiver_ids: Vec<RTCRtpReceiverId> = self.peer_connection.get_receivers().collect();
+        let receiver_id = receiver_ids.into_iter().find(|id| {
             self.peer_connection
-                .receiver_track(*id)
-                .is_some_and(|track| track.ssrcs().any(|ssrc| ssrc == media_ssrc))
+                .rtp_receiver(*id)
+                .is_some_and(|receiver| receiver.track().ssrcs().any(|ssrc| ssrc == media_ssrc))
         });
         match receiver_id {
             Some(receiver_id) => {
@@ -818,7 +571,9 @@ impl Client {
                     media_ssrc
                 );
                 self.peer_connection
-                    .write_receiver_rtcp(receiver_id, packets)?;
+                    .rtp_receiver(receiver_id)
+                    .ok_or(Error::ErrRTPReceiverNotExisted)?
+                    .write_rtcp(packets)?;
             }
             None => {
                 trace!(
@@ -1054,6 +809,7 @@ impl Client {
 mod tests {
     use super::*;
     use rtc::peer_connection::configuration::RTCConfigurationBuilder;
+    use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
     use rtc::rtp_transceiver::rtp_sender::{
         RTCRtpCodec, RTCRtpCodecParameters, RTCRtpParameters, RTCRtpSendParameters,
     };

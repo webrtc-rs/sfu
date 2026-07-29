@@ -350,9 +350,13 @@ impl Room {
             };
             // The subscriber leg's negotiated header extensions and this sender's m-line mid
             // drive the header-extension-id translation.
-            let subscriber_extensions = peer
-                .sender_parameters(*sender_id)
-                .map(|params| params.rtp_parameters.header_extensions);
+            let subscriber_extensions = peer.rtp_sender(*sender_id).map(|mut sender| {
+                sender
+                    .get_parameters()
+                    .rtp_parameters
+                    .header_extensions
+                    .clone()
+            });
             let subscriber_mid = peer.transceiver_mid(*sender_id);
 
             let forwarded_rtp = Room::translate_rtp_for_subscriber(
@@ -374,7 +378,11 @@ impl Room {
                 sender_id,
                 incoming_codec.mime_type.as_str()
             );
-            if let Err(err) = peer.write_rtp(*sender_id, forwarded_rtp) {
+            let write_result = peer
+                .rtp_sender(*sender_id)
+                .ok_or(Error::ErrRTPSenderNotExisted)
+                .and_then(|mut sender| sender.write_rtp(forwarded_rtp));
+            if let Err(err) = write_result {
                 warn!(
                     "{}: {}->{} forward rtp ssrc {} err: {}",
                     self.id, client_id, subscriber, ssrc, err
@@ -415,7 +423,10 @@ impl Room {
             // Only forward once the subscriber's transport is up (see forward_rtp).
             if let Some(peer) = self.clients.get_mut(subscriber)
                 && peer.is_connected()
-                && let Err(err) = peer.write_rtcp(*sender_id, rtcp_packets.to_vec())
+                && let Err(err) = peer
+                    .rtp_sender(*sender_id)
+                    .ok_or(Error::ErrRTPSenderNotExisted)
+                    .and_then(|mut sender| sender.write_rtcp(rtcp_packets.to_vec()))
             {
                 warn!(
                     "{}: {}->{} forward rtcp ssrc {} err: {}",
