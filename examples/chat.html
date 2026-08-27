@@ -527,6 +527,7 @@
     validateRoomInput();
 
     let clientId = Math.floor(Math.random() * 1000000000);
+    const unsubscribed = new Set();
     let streamCam;
     let streamMic;
     let dataChannel;
@@ -658,10 +659,11 @@
     async function handleAnswer(answer) {
         console.log('received answer', answer.sdp.split('\r\n'));
         try {
-            rtc.setRemoteDescription(answer);
+            await rtc.setRemoteDescription(answer);
         } catch (error) {
             console.log('rtc.setRemoteDescription(answer) with error: ', error);
         }
+        pruneStaleMedia();
     }
 
     async function handleOffer(offer) {
@@ -671,6 +673,13 @@
         } catch (error) {
             console.log('rtc.setRemoteDescription(offer) with error: ', error);
         }
+        // If we previously unsubscribed from any publisher, maintain inactive direction on their transceivers
+        rtc.getTransceivers().forEach((tcvr) => {
+            const pub = transceiverPublisher(tcvr);
+            if (pub && unsubscribed.has(pub)) {
+                tcvr.direction = 'inactive';
+            }
+        });
         const answer = await rtc.createAnswer();
         console.log('offer response', answer.sdp.split('\r\n'));
         await rtc.setLocalDescription(answer);
@@ -770,12 +779,97 @@
         return null;
     }
 
+    // Recover the publisher's clientId from a transceiver's receiver track.
+    function transceiverPublisher(tcvr) {
+        const track = tcvr.receiver && tcvr.receiver.track;
+        if (track) {
+            if (track._publisher) {
+                return track._publisher;
+            }
+            const m = /peer-(\d+)/.exec(track.id || '');
+            if (m) return m[1];
+        }
+        return null;
+    }
+
     // Placeholder shown in the reserved video slot when a peer has no (or a muted) video track.
     function makePlaceholder(text) {
         const span = document.createElement('span');
         span.className = 'placeholder';
         span.textContent = text;
         return span;
+    }
+
+    // The peer's Sub switch: checked means "forward me this peer's media" (a=recvonly),
+    // unchecked sets the peer's transceivers to inactive (a=inactive).
+    function makeSubscribeToggle(publisher) {
+        const field = document.createElement('span');
+        field.className = 'toggle-field';
+        const name = document.createElement('span');
+        name.className = 'toggle-name';
+        name.textContent = 'Sub';
+        const box = document.createElement('label');
+        box.className = 'switch switch-sm';
+        box.title = `Subscribe to peer ${publisher}`;
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'switch-input';
+        input.checked = !unsubscribed.has(publisher);
+        const label = document.createElement('span');
+        label.className = 'switch-label';
+        label.dataset.on = 'On';
+        label.dataset.off = 'Off';
+        const handle = document.createElement('span');
+        handle.className = 'switch-handle';
+        box.append(input, label, handle);
+        field.append(name, box);
+
+        input.addEventListener('change', async () => {
+            const subscribed = input.checked;
+            setPeerSubscribed(publisher, subscribed);
+            let changed = false;
+            rtc.getTransceivers().forEach((tcvr) => {
+                if (transceiverPublisher(tcvr) === String(publisher)) {
+                    tcvr.direction = subscribed ? 'recvonly' : 'inactive';
+                    changed = true;
+                }
+            });
+            if (changed) {
+                await negotiate();
+            }
+        });
+        return field;
+    }
+
+    // Reflect a subscription change on the peer's card: an unsubscribed peer drops its media
+    // right away (the SFU's re-offer, which actually stops the flow, follows) and keeps the
+    // card with "Unsubscribed" placeholders so it can be re-checked.
+    function setPeerSubscribed(publisher, subscribed) {
+        const pubStr = String(publisher);
+        if (subscribed) {
+            unsubscribed.delete(pubStr);
+        } else {
+            unsubscribed.add(pubStr);
+        }
+        const box = byId(`peer-box-${publisher}`);
+        if (!box) {
+            return;
+        }
+        box.dataset.subscribed = subscribed ? 'true' : 'false';
+        const toggle = box.querySelector('.switch-input');
+        if (toggle) {
+            toggle.checked = subscribed;
+        }
+        // Empty slots caption what the peer is waiting for: "Unsubscribed" while off, back to the
+        // usual "No video" / "No audio" once re-checked (until the forwarded track arrives).
+        const video = box.querySelector('.peer-video');
+        const audio = box.querySelector('.peer-audio');
+        if (!subscribed || !video.querySelector('video')) {
+            video.replaceChildren(makePlaceholder(subscribed ? 'No video' : 'Unsubscribed'));
+        }
+        if (!subscribed || !audio.querySelector('audio')) {
+            audio.replaceChildren(makePlaceholder(subscribed ? 'No audio' : 'Unsubscribed'));
+        }
     }
 
     // Find (or lazily create) the box that groups one peer's video (top) and audio (bottom),
@@ -791,6 +885,9 @@
         box = document.createElement('div');
         box.className = 'peer card';
         box.id = boxId;
+        if (publisher != null) {
+            box.dataset.publisher = String(publisher);
+        }
 
         // Card header: a status dot plus the peer's client id, mirroring the ICE States card.
         const header = document.createElement('div');
@@ -805,6 +902,10 @@
         title.appendChild(icon);
         title.appendChild(caption);
         header.appendChild(title);
+        if (publisher != null) {
+            header.appendChild(makeSubscribeToggle(publisher));
+        }
+        box.dataset.subscribed = unsubscribed.has(String(publisher)) ? 'false' : 'true';
 
         const video = document.createElement('div');
         video.className = 'peer-video';
@@ -821,19 +922,16 @@
         return box;
     }
 
-    function onTrack(e) {
-        console.log('ontrack', e.track, e.streams);
-        const track = e.track;
+    function attachTrack(track, publisher) {
         const domId = `media-${track.id}`;
         if (byId(domId)) {
-            // we aleady have this track
+            // we already have this track attached
             return;
         }
-        const publisher = publisherClientId(e);
         // Group by the publishing client id so a peer's video and audio (which come from separate
         // getUserMedia streams, hence different stream ids) land in the same box. Fall back to the
         // stream/track id only if the client id couldn't be recovered.
-        const peerKey = publisher ?? ((e.streams && e.streams[0] && e.streams[0].id) || track.id);
+        const peerKey = publisher ?? track.id;
         const box = getOrCreatePeerBox(peerKey, publisher);
         const kind = track.kind === 'audio' ? 'audio' : 'video';
 
@@ -868,15 +966,31 @@
         });
     }
 
-    // After a re-offer is applied, remove the DOM for any received track that is no longer live
-    // (its transceiver is no longer receiving) — dropping a peer's whole box, media and captions,
-    // once it leaves the room.
+    function onTrack(e) {
+        console.log('ontrack', e.track, e.streams);
+        const publisher = publisherClientId(e);
+        if (publisher && e.track) {
+            e.track._publisher = publisher;
+        }
+        attachTrack(e.track, publisher);
+    }
+
+    // After a re-offer/re-answer is applied, remove the DOM for any received track that is no longer live
+    // (its transceiver is no longer receiving) and re-attach any newly re-subscribed tracks.
     function pruneStaleMedia() {
         const live = new Set();
+        const activePublishers = new Set();
         rtc.getTransceivers().forEach((t) => {
             const track = t.receiver && t.receiver.track;
+            const pub = transceiverPublisher(t);
+            if (pub) {
+                activePublishers.add(pub);
+            }
             if (track && (t.currentDirection === 'recvonly' || t.currentDirection === 'sendrecv')) {
                 live.add(track.id);
+                if (pub && !unsubscribed.has(pub)) {
+                    attachTrack(track, pub);
+                }
             }
         });
         byId('media').querySelectorAll('video, audio').forEach((el) => {
@@ -885,13 +999,18 @@
                 el.remove();
             }
         });
-        // Drop boxes with no remaining media; otherwise restore each empty slot's placeholder so
-        // the video and audio rows keep their reserved space.
+        // Manage peer cards: only remove cards of peers whose transceivers no longer exist (left the room).
         byId('media').querySelectorAll('.peer').forEach((box) => {
-            if (!box.querySelector('video, audio')) {
+            const publisher = box.dataset.publisher;
+            if (publisher && !activePublishers.has(publisher)) {
                 box.remove();
+                unsubscribed.delete(publisher);
                 return;
             }
+
+            const off = (publisher && unsubscribed.has(publisher)) || box.dataset.subscribed === 'false';
+            const empty = off ? 'Unsubscribed' : null;
+
             if (!box.querySelector('.peer-video video')) {
                 box.querySelector('.peer-video').replaceChildren(makePlaceholder('No video'));
             }
