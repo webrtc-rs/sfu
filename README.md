@@ -127,8 +127,6 @@ Use a Rust toolchain with Edition 2024 support.
 ### Build & test
 
 ```bash
-# Fetch the submodules first
-git submodule update --init --recursive
 cargo clippy
 cargo fmt
 cargo build
