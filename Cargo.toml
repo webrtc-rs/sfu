@@ -11,7 +11,7 @@ keywords = ["networking", "protocols", "webrtc", "sans-io", "sfu"]
 categories = ["network-programming", "asynchronous", "multimedia"]
 
 [dependencies]
-rtc = { version = "0.20.0", path = "webrtc/rtc" }
+rtc = "0.20"
 
 sansio = "1.0.1"
 bytes = "1.12.0"
@@ -21,7 +21,7 @@ base64 = "0.23.0"
 uuid = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
-webrtc = { version = "0.20.0", path = "webrtc" }
+webrtc = "0.20"
 
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.11"

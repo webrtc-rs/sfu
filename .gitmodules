@@ -1,3 +1,0 @@
-[submodule "webrtc"]
-	path = webrtc
-	url = https://github.com/webrtc-rs/webrtc

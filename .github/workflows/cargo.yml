@@ -22,8 +22,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Rust Cache
@@ -39,8 +37,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Rust Cache
@@ -53,8 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
