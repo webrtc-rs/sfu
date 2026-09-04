@@ -343,6 +343,10 @@ impl Room {
             if !peer.is_connected() {
                 continue;
             }
+            // Skip senders whose transceiver is not active / sendable (e.g. negotiated inactive / unsubscribed).
+            if !peer.is_sender_active(*sender_id) {
+                continue;
+            }
             let Some(outbound_payload_type) =
                 peer.outgoing_payload_type_for_codec(*sender_id, &incoming_codec)
             else {
@@ -434,9 +438,10 @@ impl Room {
             return;
         }
         for (subscriber, sender_id) in subscribers {
-            // Only forward once the subscriber's transport is up (see forward_rtp).
+            // Only forward once the subscriber's transport is up (see forward_rtp) and sender is active.
             if let Some(peer) = self.clients.get_mut(subscriber)
                 && peer.is_connected()
+                && peer.is_sender_active(*sender_id)
                 && let Err(err) = peer
                     .rtp_sender(*sender_id)
                     .ok_or(Error::ErrRTPSenderNotExisted)

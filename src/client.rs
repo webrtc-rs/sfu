@@ -547,6 +547,13 @@ impl Client {
         self.rtp_transceiver(transceiver_id.into())?.mid().clone()
     }
 
+    /// Whether the forwarding sender's transceiver direction is active for sending media
+    /// (e.g. `Sendonly` or `Sendrecv`, not `Inactive` or `Recvonly`).
+    pub(crate) fn is_sender_active(&mut self, sender_id: RTCRtpSenderId) -> bool {
+        self.rtp_transceiver(sender_id.into())
+            .is_some_and(|t| t.current_direction().has_send())
+    }
+
     /// Add a forwarding sender for another client's publish track. Uses a dedicated
     /// `Sendonly` transceiver (a new m-line per forwarded source, mirroring the old SFU)
     /// rather than `add_track`, which would recycle the client's own receive transceiver.
@@ -673,6 +680,34 @@ impl Client {
         Ok(())
     }
 
+    /// Update forwarding transceivers according to directions requested in a remote offer
+    /// (e.g. client subscribing with `recvonly` or unsubscribing with `inactive`).
+    fn update_transceiver_directions_from_remote_offer(&mut self) {
+        if let Some(remote_sdp) = self.peer_connection.remote_description()
+            && let Ok(parsed) = remote_sdp.unmarshal()
+        {
+            for media in &parsed.media_descriptions {
+                if let Some(mid) = media.attribute("mid").flatten() {
+                    let is_recvonly = media.attribute("recvonly").is_some();
+                    let is_inactive = media.attribute("inactive").is_some();
+                    let transceiver_ids: Vec<RTCRtpTransceiverId> =
+                        self.peer_connection.get_transceivers().collect();
+                    for id in transceiver_ids {
+                        if let Some(mut t) = self.peer_connection.rtp_transceiver(id)
+                            && t.mid().as_deref() == Some(mid)
+                        {
+                            if is_recvonly {
+                                t.set_direction(RTCRtpTransceiverDirection::Sendonly);
+                            } else if is_inactive {
+                                t.set_direction(RTCRtpTransceiverDirection::Inactive);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn handle_session_description(
         &mut self,
         now: Instant,
@@ -696,6 +731,8 @@ impl Client {
         self.peer_connection.set_remote_description(now, sdp)?;
 
         if sdp_type == RTCSdpType::Offer {
+            self.update_transceiver_directions_from_remote_offer();
+
             let candidate = CandidateHostConfig {
                 base_config: CandidateConfig {
                     network: "udp".to_owned(),
