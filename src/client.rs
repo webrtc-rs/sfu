@@ -673,13 +673,13 @@ impl Client {
                     let transceiver_ids: Vec<RTCRtpTransceiverId> =
                         self.peer_connection.get_transceivers().collect();
                     for id in transceiver_ids {
-                        if let Some(mut t) = self.peer_connection.rtp_transceiver(id) {
-                            if t.mid().as_deref() == Some(mid.as_ref()) {
-                                if is_recvonly {
-                                    t.set_direction(RTCRtpTransceiverDirection::Sendonly);
-                                } else if is_inactive {
-                                    t.set_direction(RTCRtpTransceiverDirection::Inactive);
-                                }
+                        if let Some(mut t) = self.peer_connection.rtp_transceiver(id)
+                            && t.mid().as_deref() == Some(mid)
+                        {
+                            if is_recvonly {
+                                t.set_direction(RTCRtpTransceiverDirection::Sendonly);
+                            } else if is_inactive {
+                                t.set_direction(RTCRtpTransceiverDirection::Inactive);
                             }
                         }
                     }
