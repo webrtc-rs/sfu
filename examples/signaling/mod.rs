@@ -18,7 +18,7 @@ use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use sansio::Protocol;
-use sfu::{ClientId, RequestId, RoomId, SFUEvent, Sfu};
+use sfu::{ClientId, RequestId, RoomId, SFUEvent, Sfu, TaggedSFUEvent};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
@@ -542,10 +542,13 @@ fn handle_command(
         } => {
             // Replace any stale writer (browser reconnected on a fresh socket).
             subscribers.insert((room_id, client_id), out_tx);
-            if let Err(err) = sfu.handle_event(SFUEvent::Join {
-                request_id: random(),
-                room_id,
-                client_id,
+            if let Err(err) = sfu.handle_event(TaggedSFUEvent {
+                now: Instant::now(),
+                event: SFUEvent::Join {
+                    request_id: random(),
+                    room_id,
+                    client_id,
+                },
             }) {
                 error!("join failed for {}/{}: {}", room_id, client_id, err);
             }
@@ -557,7 +560,10 @@ fn handle_command(
                 } => Some((*room_id, *client_id)),
                 _ => None,
             };
-            if let Err(err) = sfu.handle_event(evt) {
+            if let Err(err) = sfu.handle_event(TaggedSFUEvent {
+                now: Instant::now(),
+                event: evt,
+            }) {
                 error!("handle_event failed: {}", err);
             }
             if let Some(key) = leaving {
@@ -573,7 +579,7 @@ fn drain_sfu_events(
     sfu: &mut Sfu,
     subscribers: &mut HashMap<(RoomId, ClientId), SyncSender<String>>,
 ) {
-    while let Some(evt) = sfu.poll_event() {
+    while let Some(TaggedSFUEvent { event: evt, .. }) = sfu.poll_event() {
         match evt {
             SFUEvent::SessionDescription {
                 request_id,

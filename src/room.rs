@@ -1,19 +1,19 @@
-use crate::client::{Client, ClientBuilder, ClientEvent, ClientId, Mid};
+use crate::client::{Client, ClientBuilder, ClientEvent, ClientId, Mid, TaggedClientEvent};
 use crate::demuxer::Demuxer;
-use crate::event::SFUEvent;
+use crate::event::{SFUEvent, TaggedSFUEvent};
 use crate::forward::{ForwardKey, ForwardTable};
 use crate::rtcp_forwarder::RtcpForwarderBuilder;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use log::{trace, warn};
 use rtc::ice::rand::{generate_pwd, generate_ufrag};
-use rtc::interceptor::Registry;
+use rtc::interceptor::{Registry, Slot};
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
-use rtc::peer_connection::configuration::setting_engine::SettingEngine;
+use rtc::peer_connection::configuration::setting_engine::SettingEngineBuilder;
 use rtc::peer_connection::event::{RTCPeerConnectionEvent, RTCTrackEvent};
-use rtc::peer_connection::message::RTCMessage;
+use rtc::peer_connection::message::{RTCMessage, TaggedRTCMessage};
 use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::rtcp::Packet;
 use rtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
@@ -91,7 +91,7 @@ pub(crate) struct Room {
     forward: ForwardTable,
 
     writes: VecDeque<TaggedBytesMut>,
-    events: VecDeque<SFUEvent>,
+    events: VecDeque<TaggedSFUEvent>,
 }
 
 impl Room {
@@ -118,27 +118,36 @@ impl Room {
 
     /// Build a client with the default media engine (default codecs), the default
     /// interceptor chain, and default setting engine.
-    fn build_client(&self, client_id: ClientId, room_id: RoomId) -> Result<Client, Error> {
-        let mut setting_engine = SettingEngine::default();
-        setting_engine.set_ice_credentials(encode_local_ufrag(&room_id, client_id), generate_pwd());
-        setting_engine.set_lite(true);
+    fn build_client(
+        &self,
+        now: Instant,
+        client_id: ClientId,
+        room_id: RoomId,
+    ) -> Result<Client, Error> {
         // The SFU is ICE-lite (controlled) and DTLS-passive: it answers `a=setup:passive`
         // so the browser is the DTLS client and initiates the handshake (sends the
         // ClientHello) once ICE connects. Without this, the answer defaults to
         // `a=setup:active` (DTLS client) — a mismatch that deadlocks the handshake.
-        setting_engine.set_answering_dtls_role(RTCDtlsRole::Server)?;
+        let setting_engine = SettingEngineBuilder::new()
+            .with_ice_credentials(encode_local_ufrag(&room_id, client_id), generate_pwd())
+            .with_lite(true)
+            .with_answering_dtls_role(RTCDtlsRole::Server)
+            .build();
+
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
+
         let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
         // Outermost layer: surface inbound RTCP (a subscriber's PLI/FIR keyframe requests)
         // to poll_read so the SFU can relay them upstream to the publisher; the default
         // chain would otherwise consume RTCP before the application sees it.
-        let registry = registry.with(RtcpForwarderBuilder::new().build());
+        let registry = registry.with(Slot::Custom(14_000), RtcpForwarderBuilder::new().build());
+
         ClientBuilder::new(client_id, room_id, self.local_addr)
             .with_setting_engine(setting_engine)
             .with_media_engine(media_engine)
             .with_interceptor_registry(registry)
-            .build()
+            .build(now)
     }
 
     /// Reconcile the forwarding graph with the room's current publish state.
@@ -290,7 +299,7 @@ impl Room {
     /// payload type and header extension ids for each subscriber leg (see
     /// [`translate_rtp_for_subscriber`]). Drops the packet if its SSRC is not (yet) bound, or if
     /// it arrives from a client other than the SSRC's bound publisher.
-    fn forward_rtp(&mut self, client_id: ClientId, rtp_packet: &rtc::rtp::Packet) {
+    fn forward_rtp(&mut self, now: Instant, client_id: ClientId, rtp_packet: &rtc::rtp::Packet) {
         let ssrc = rtp_packet.header.ssrc;
         let Some((key, subscribers)) = self.forward.route_by_ssrc(ssrc) else {
             trace!(
@@ -381,7 +390,7 @@ impl Room {
             let write_result = peer
                 .rtp_sender(*sender_id)
                 .ok_or(Error::ErrRTPSenderNotExisted)
-                .and_then(|mut sender| sender.write_rtp(forwarded_rtp));
+                .and_then(|mut sender| sender.write_rtp(now, forwarded_rtp));
             if let Err(err) = write_result {
                 warn!(
                     "{}: {}->{} forward rtp ssrc {} err: {}",
@@ -394,7 +403,12 @@ impl Room {
     /// Route one publisher's compound RTCP to the subscribers of the stream it describes, and
     /// relay a subscriber's keyframe requests (PLI/FIR) upstream to the publisher. Drops RTCP
     /// whose SSRC routes to no forwarding entry.
-    fn forward_rtcp(&mut self, client_id: ClientId, rtcp_packets: &[Box<dyn Packet>]) {
+    fn forward_rtcp(
+        &mut self,
+        now: Instant,
+        client_id: ClientId,
+        rtcp_packets: &[Box<dyn Packet>],
+    ) {
         // Route by the SSRCs the compound packet describes (a publisher's SenderReport carries
         // its media SSRC).
         let route = rtcp_packets
@@ -416,7 +430,7 @@ impl Room {
             // RTCP from a subscriber is feedback about a publisher's stream; relay its keyframe
             // requests upstream.
             let publisher_id = key.publisher;
-            self.relay_keyframe_request(client_id, publisher_id, ssrc, rtcp_packets);
+            self.relay_keyframe_request(now, client_id, publisher_id, ssrc, rtcp_packets);
             return;
         }
         for (subscriber, sender_id) in subscribers {
@@ -426,7 +440,7 @@ impl Room {
                 && let Err(err) = peer
                     .rtp_sender(*sender_id)
                     .ok_or(Error::ErrRTPSenderNotExisted)
-                    .and_then(|mut sender| sender.write_rtcp(rtcp_packets.to_vec()))
+                    .and_then(|mut sender| sender.write_rtcp(now, rtcp_packets.to_vec()))
             {
                 warn!(
                     "{}: {}->{} forward rtcp ssrc {} err: {}",
@@ -443,6 +457,7 @@ impl Room {
     /// dropped.
     fn relay_keyframe_request(
         &mut self,
+        now: Instant,
         subscriber_id: ClientId,
         publisher_id: ClientId,
         ssrc: u32,
@@ -478,7 +493,7 @@ impl Room {
             );
             return;
         };
-        if let Err(err) = publisher.request_keyframe(ssrc, keyframe_requests) {
+        if let Err(err) = publisher.request_keyframe(now, ssrc, keyframe_requests) {
             warn!(
                 "{}: failed to forward keyframe request to publisher {} for ssrc {}: {}",
                 self.id, publisher_id, ssrc, err
@@ -487,10 +502,10 @@ impl Room {
     }
 }
 
-impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
+impl Protocol<TaggedBytesMut, Infallible, TaggedSFUEvent> for Room {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
-    type Eout = SFUEvent;
+    type Eout = TaggedSFUEvent;
     type Error = Error;
     type Time = Instant;
 
@@ -522,10 +537,10 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
     }
 
     fn poll_read(&mut self) -> Option<Self::Rout> {
-        let mut forwardings: HashMap<ClientId, VecDeque<RTCMessage>> = HashMap::new();
+        let mut forwardings: HashMap<ClientId, VecDeque<TaggedRTCMessage>> = HashMap::new();
         for (client_id, client) in &mut self.clients {
             while let Some(msg) = client.poll_read() {
-                if let RTCMessage::DataChannelMessage(data_channel_id, _) = &msg {
+                if let RTCMessage::DataChannelMessage(data_channel_id, _) = &msg.message {
                     warn!(
                         "Drop data channel message for data channel id {}",
                         data_channel_id
@@ -542,10 +557,13 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
         // quietly — the binding lands in this same drive iteration via poll_event.
         for (client_id, mut reads) in forwardings.drain() {
             while let Some(msg) = reads.pop_front() {
-                match &msg {
-                    RTCMessage::RtpPacket(_, rtp_packet) => self.forward_rtp(client_id, rtp_packet),
+                let TaggedRTCMessage { now, message } = &msg;
+                match message {
+                    RTCMessage::RtpPacket(_, rtp_packet) => {
+                        self.forward_rtp(*now, client_id, rtp_packet)
+                    }
                     RTCMessage::RtcpPacket(_, rtcp_packets) => {
-                        self.forward_rtcp(client_id, rtcp_packets)
+                        self.forward_rtcp(*now, client_id, rtcp_packets)
                     }
                     _ => {}
                 }
@@ -569,8 +587,9 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
         self.writes.pop_front()
     }
 
-    fn handle_event(&mut self, evt: SFUEvent) -> Result<(), Self::Error> {
-        let room_id = if let Some(room_id) = evt.room_id() {
+    fn handle_event(&mut self, evt: TaggedSFUEvent) -> Result<(), Self::Error> {
+        let now = evt.now;
+        let room_id = if let Some(room_id) = evt.event.room_id() {
             if room_id != self.id {
                 return Err(Error::Other(format!("invalid room id: {}", room_id)));
             }
@@ -579,22 +598,25 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
             return Err(Error::Other("empty room id".to_string()));
         };
 
-        if let Some(client_id) = evt.client_id() {
+        if let Some(client_id) = evt.event.client_id() {
             // Join, Leave, and applying remote description can all
             // change the room's publish state, so reconcile the forwarding graph after.
             let mut needs_reconcile = false;
             let mut remove_client = false;
             if let Some(client) = self.clients.get_mut(&client_id) {
-                if let SFUEvent::Leave { .. } = &evt {
+                if let SFUEvent::Leave { .. } = &evt.event {
                     client.close()?;
                     remove_client = true;
                     needs_reconcile = true;
                 } else {
-                    needs_reconcile = matches!(evt, SFUEvent::SessionDescription { .. });
-                    client.handle_event(ClientEvent::SFUEvent(evt))?;
+                    needs_reconcile = matches!(evt.event, SFUEvent::SessionDescription { .. });
+                    client.handle_event(TaggedClientEvent {
+                        now: evt.now,
+                        event: ClientEvent::SFUEvent(evt.event),
+                    })?;
                 }
-            } else if let SFUEvent::Join { .. } = &evt {
-                let client = self.build_client(client_id, room_id)?;
+            } else if let SFUEvent::Join { .. } = &evt.event {
+                let client = self.build_client(evt.now, client_id, room_id)?;
                 self.clients.insert(client_id, client);
                 needs_reconcile = false;
             }
@@ -605,13 +627,19 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
 
             if needs_reconcile {
                 self.reconcile();
+                // Reconcile adds and removes forward tracks on *other* clients, whose peer
+                // connections then want to renegotiate. Making that offer needs an instant, and
+                // `poll_event` has none — so it happens here, while the event's is in hand.
+                for client in self.clients.values_mut() {
+                    client.pump(now);
+                }
             }
         } else if let SFUEvent::Err {
             request_id, reason, ..
-        } = evt
+        } = evt.event
         {
             warn!("{}:{} receives err due to {}", request_id, room_id, reason);
-        } else if let SFUEvent::Ok { request_id, .. } = evt {
+        } else if let SFUEvent::Ok { request_id, .. } = evt.event {
             warn!("{}:{} receives ok", request_id, room_id,);
         }
 
@@ -620,10 +648,10 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Room {
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
         for (client_id, client) in &mut self.clients {
-            while let Some(event) = client.poll_event() {
+            while let Some(TaggedClientEvent { now, event }) = client.poll_event() {
                 match event {
                     ClientEvent::SFUEvent(evt) => {
-                        self.events.push_back(evt);
+                        self.events.push_back(TaggedSFUEvent { now, event: evt });
                     }
                     ClientEvent::PeerConnectionEvent(RTCPeerConnectionEvent::OnTrack(
                         RTCTrackEvent::OnOpen(init),

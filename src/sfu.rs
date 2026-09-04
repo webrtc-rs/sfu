@@ -1,5 +1,5 @@
 use crate::demuxer::Demuxer;
-use crate::event::SFUEvent;
+use crate::event::{SFUEvent, TaggedSFUEvent};
 use crate::room::{Room, RoomId};
 use log::{info, warn};
 use rtc::shared::TaggedBytesMut;
@@ -19,7 +19,7 @@ pub struct Sfu {
     rooms: HashMap<RoomId, Room>,
 
     writes: VecDeque<TaggedBytesMut>,
-    events: VecDeque<SFUEvent>,
+    events: VecDeque<TaggedSFUEvent>,
 }
 
 impl Sfu {
@@ -36,10 +36,10 @@ impl Sfu {
     }
 }
 
-impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Sfu {
+impl Protocol<TaggedBytesMut, Infallible, TaggedSFUEvent> for Sfu {
     type Rout = Infallible;
     type Wout = TaggedBytesMut;
-    type Eout = SFUEvent;
+    type Eout = TaggedSFUEvent;
     type Error = Error;
     type Time = Instant;
 
@@ -81,16 +81,16 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Sfu {
         self.writes.pop_front()
     }
 
-    fn handle_event(&mut self, evt: SFUEvent) -> Result<(), Self::Error> {
-        if let Some(room_id) = evt.room_id() {
+    fn handle_event(&mut self, evt: TaggedSFUEvent) -> Result<(), Self::Error> {
+        if let Some(room_id) = evt.event.room_id() {
             let mut remove_room = false;
             if let Some(room) = self.rooms.get_mut(&room_id) {
-                let is_leave_event = matches!(evt, SFUEvent::Leave { .. });
+                let is_leave_event = matches!(evt.event, SFUEvent::Leave { .. });
                 room.handle_event(evt)?;
                 if is_leave_event && room.is_empty() {
                     remove_room = true;
                 }
-            } else if let SFUEvent::Join { .. } = &evt {
+            } else if let SFUEvent::Join { .. } = &evt.event {
                 let mut room = Room::new(room_id, self.local_addr);
                 room.handle_event(evt)?;
                 self.rooms.insert(room_id, room);
@@ -101,10 +101,10 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Sfu {
             }
         } else if let SFUEvent::Err {
             request_id, reason, ..
-        } = evt
+        } = evt.event
         {
             warn!("{} receives err due to {}", request_id, reason);
-        } else if let SFUEvent::Ok { request_id, .. } = evt {
+        } else if let SFUEvent::Ok { request_id, .. } = evt.event {
             warn!("{} receives ok", request_id);
         }
 
@@ -153,7 +153,7 @@ impl Protocol<TaggedBytesMut, Infallible, SFUEvent> for Sfu {
 mod tests {
     use super::*;
     use crate::RequestId;
-    use crate::event::SFUEvent;
+    use crate::event::{SFUEvent, TaggedSFUEvent};
     use rtc::peer_connection::RTCPeerConnectionBuilder;
     use rtc::peer_connection::configuration::media_engine::MediaEngine;
     use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
@@ -179,7 +179,7 @@ mod tests {
 
         let mut offerer = RTCPeerConnectionBuilder::new()
             .with_media_engine(media_engine)
-            .build()
+            .build(Instant::now())
             .expect("offerer peer connection should build");
 
         // Publish sendonly with an explicit SSRC, like the real browser (chat.html), so
@@ -215,12 +215,15 @@ mod tests {
     /// offer, so a subscriber must send this before it can be forwarded to. Drains (and discards)
     /// the resulting answer.
     fn negotiate_client(sfu: &mut Sfu, request_id: RequestId, client_id: crate::ClientId) {
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id,
-            room_id: ROOM,
-            client_id,
-            sdp: build_bootstrap_offer(),
-        })
+        handle_event(
+            sfu,
+            SFUEvent::SessionDescription {
+                request_id,
+                room_id: ROOM,
+                client_id,
+                sdp: build_bootstrap_offer(),
+            },
+        )
         .expect("client bootstrap offer should be handled");
         drain_events(sfu);
     }
@@ -234,7 +237,7 @@ mod tests {
             .expect("default codecs should register");
         let mut offerer = RTCPeerConnectionBuilder::new()
             .with_media_engine(media_engine)
-            .build()
+            .build(Instant::now())
             .expect("offerer peer connection should build");
         offerer
             .create_data_channel("bootstrap", None)
@@ -276,20 +279,31 @@ mod tests {
     }
 
     fn join_client(sfu: &mut Sfu, request_id: RequestId, client_id: crate::ClientId) {
-        sfu.handle_event(SFUEvent::Join {
-            request_id,
-            room_id: ROOM,
-            client_id,
-        })
+        handle_event(
+            sfu,
+            SFUEvent::Join {
+                request_id,
+                room_id: ROOM,
+                client_id,
+            },
+        )
         .expect("join should succeed");
     }
 
     fn drain_events(sfu: &mut Sfu) -> Vec<SFUEvent> {
         let mut events = Vec::new();
         while let Some(event) = sfu.poll_event() {
-            events.push(event);
+            events.push(event.event);
         }
         events
+    }
+
+    /// Feed an event in, tagging it with the instant the test observed it.
+    fn handle_event(sfu: &mut Sfu, event: SFUEvent) -> Result<(), Error> {
+        sfu.handle_event(TaggedSFUEvent {
+            now: Instant::now(),
+            event,
+        })
     }
 
     #[test]
@@ -310,12 +324,15 @@ mod tests {
         join(&mut sfu, 1);
         assert!(sfu.rooms.contains_key(&ROOM));
 
-        sfu.handle_event(SFUEvent::Leave {
-            request_id: 2,
-            room_id: ROOM,
-            client_id: CLIENT,
-            reason: "bye".to_string(),
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::Leave {
+                request_id: 2,
+                room_id: ROOM,
+                client_id: CLIENT,
+                reason: "bye".to_string(),
+            },
+        )
         .expect("leave should succeed");
 
         // The last client left, so the SFU self-reaps the now-empty room.
@@ -331,17 +348,21 @@ mod tests {
         join(&mut sfu, 1);
 
         let request_id: RequestId = 2;
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id,
-            room_id: ROOM,
-            client_id: CLIENT,
-            sdp: build_offer(),
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::SessionDescription {
+                request_id,
+                room_id: ROOM,
+                client_id: CLIENT,
+                sdp: build_offer(),
+            },
+        )
         .expect("handling the offer should succeed");
 
         let event = sfu
             .poll_event()
-            .expect("the SFU should emit an answer for the offer");
+            .expect("the SFU should emit an answer for the offer")
+            .event;
 
         match event {
             SFUEvent::SessionDescription {
@@ -382,12 +403,15 @@ mod tests {
         // The subscriber negotiates first — the SFU never makes the first offer.
         negotiate_client(&mut sfu, 3, SUBSCRIBER);
 
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 4,
-            room_id: ROOM,
-            client_id: CLIENT,
-            sdp: build_offer(),
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::SessionDescription {
+                request_id: 4,
+                room_id: ROOM,
+                client_id: CLIENT,
+                sdp: build_offer(),
+            },
+        )
         .expect("handling the publisher offer should succeed");
 
         let events = drain_events(&mut sfu);
@@ -425,12 +449,15 @@ mod tests {
         negotiate_client(&mut sfu, 3, SUBSCRIBER);
 
         // CLIENT publishes one sendonly video track.
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 4,
-            room_id: ROOM,
-            client_id: CLIENT,
-            sdp: build_offer(),
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::SessionDescription {
+                request_id: 4,
+                room_id: ROOM,
+                client_id: CLIENT,
+                sdp: build_offer(),
+            },
+        )
         .expect("handling the publisher offer should succeed");
 
         let events = drain_events(&mut sfu);
@@ -469,12 +496,15 @@ mod tests {
         // The subscriber negotiates first — the SFU never makes the first offer.
         negotiate_client(&mut sfu, 3, SUBSCRIBER);
 
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 4,
-            room_id: ROOM,
-            client_id: CLIENT,
-            sdp: build_offer_with_extra_video_codec(UNSUPPORTED_PT, "UNSUPPORTED"),
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::SessionDescription {
+                request_id: 4,
+                room_id: ROOM,
+                client_id: CLIENT,
+                sdp: build_offer_with_extra_video_codec(UNSUPPORTED_PT, "UNSUPPORTED"),
+            },
+        )
         .expect("handling the publisher offer should succeed");
 
         let events = drain_events(&mut sfu);
@@ -508,12 +538,15 @@ mod tests {
         negotiate_client(&mut sfu, 3, SUBSCRIBER);
 
         let offer = build_offer();
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 4,
-            room_id: ROOM,
-            client_id: CLIENT,
-            sdp: offer.clone(),
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::SessionDescription {
+                request_id: 4,
+                room_id: ROOM,
+                client_id: CLIENT,
+                sdp: offer.clone(),
+            },
+        )
         .expect("first publish should succeed");
         let first = drain_events(&mut sfu);
         let first_subscribe_offers = first
@@ -530,12 +563,15 @@ mod tests {
 
         // Re-applying the same publish offer must not add a duplicate forwarding sender,
         // so no new subscribe offer is generated (reconcile is idempotent).
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 5,
-            room_id: ROOM,
-            client_id: CLIENT,
-            sdp: offer,
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::SessionDescription {
+                request_id: 5,
+                room_id: ROOM,
+                client_id: CLIENT,
+                sdp: offer,
+            },
+        )
         .expect("re-publish should succeed");
         let second = drain_events(&mut sfu);
         let second_subscribe_offers = second
@@ -562,12 +598,15 @@ mod tests {
         join_client(&mut sfu, 1, CLIENT);
 
         // CLIENT publishes one sendonly video track.
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 2,
-            room_id: ROOM,
-            client_id: CLIENT,
-            sdp: build_offer(),
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::SessionDescription {
+                request_id: 2,
+                room_id: ROOM,
+                client_id: CLIENT,
+                sdp: build_offer(),
+            },
+        )
         .expect("handling the publisher offer should succeed");
 
         // Now SUBSCRIBER joins
@@ -594,19 +633,22 @@ mod tests {
             .expect("default codecs should register");
         let mut subscriber_pc = RTCPeerConnectionBuilder::new()
             .with_media_engine(media_engine)
-            .build()
+            .build(Instant::now())
             .expect("subscriber pc should build");
         subscriber_pc
             .create_data_channel("bootstrap", None)
             .expect("create data channel");
         let subscriber_offer = subscriber_pc.create_offer(None).expect("create offer");
 
-        sfu.handle_event(SFUEvent::SessionDescription {
-            request_id: 4,
-            room_id: ROOM,
-            client_id: SUBSCRIBER,
-            sdp: subscriber_offer,
-        })
+        handle_event(
+            &mut sfu,
+            SFUEvent::SessionDescription {
+                request_id: 4,
+                room_id: ROOM,
+                client_id: SUBSCRIBER,
+                sdp: subscriber_offer,
+            },
+        )
         .expect("handling subscriber bootstrap offer should succeed");
 
         let events_after_bootstrap = drain_events(&mut sfu);

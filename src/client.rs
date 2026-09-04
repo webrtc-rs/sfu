@@ -2,7 +2,7 @@ use crate::room::RoomId;
 use crate::{RequestId, SFUEvent};
 use log::{trace, warn};
 use rtc::ice::candidate::CandidateConfig;
-use rtc::interceptor::{BoxedInterceptor, Interceptor, Registry};
+use rtc::interceptor::Registry;
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::RTCPeerConnection;
 use rtc::peer_connection::RTCPeerConnectionBuilder;
@@ -10,7 +10,7 @@ use rtc::peer_connection::configuration::RTCConfiguration;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
 use rtc::peer_connection::event::RTCPeerConnectionEvent;
-use rtc::peer_connection::message::RTCMessage;
+use rtc::peer_connection::message::TaggedRTCMessage;
 use rtc::peer_connection::sdp::{RTCSdpType, RTCSessionDescription};
 use rtc::peer_connection::state::{RTCPeerConnectionState, RTCSignalingState};
 use rtc::peer_connection::transport::{CandidateHostConfig, RTCIceCandidate};
@@ -32,15 +32,14 @@ use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
 
-/// The interceptor chain is assembled at runtime, so its type is erased to
-/// [`BoxedInterceptor`]: every client's peer connection then has the same concrete type,
-/// [`RTCPeerConnection<BoxedInterceptor>`], and neither this builder nor [`Client`] has to
-/// be generic over the chain.
+/// The interceptor chain is a flat list assembled at runtime, and `Registry::build` returns one
+/// concrete type whatever it was built from — so [`RTCPeerConnection`] has no chain type parameter
+/// and neither this builder nor [`Client`] has to carry one.
 pub(crate) struct ClientBuilder {
     id: ClientId,
     room_id: RoomId,
     local_addr: SocketAddr,
-    peer_connection_builder: RTCPeerConnectionBuilder<BoxedInterceptor>,
+    peer_connection_builder: RTCPeerConnectionBuilder,
 }
 
 impl ClientBuilder {
@@ -49,8 +48,7 @@ impl ClientBuilder {
             id,
             room_id,
             local_addr,
-            peer_connection_builder: RTCPeerConnectionBuilder::new()
-                .with_interceptor_registry(Registry::new().boxed()),
+            peer_connection_builder: RTCPeerConnectionBuilder::new(),
         }
     }
 
@@ -73,22 +71,19 @@ impl ClientBuilder {
         self
     }
 
-    pub(crate) fn with_interceptor_registry<P>(mut self, interceptor_registry: Registry<P>) -> Self
-    where
-        P: Interceptor + 'static,
-    {
+    pub(crate) fn with_interceptor_registry(mut self, interceptor_registry: Registry) -> Self {
         self.peer_connection_builder = self
             .peer_connection_builder
-            .with_interceptor_registry(interceptor_registry.boxed());
+            .with_interceptor_registry(interceptor_registry);
         self
     }
 
-    pub(crate) fn build(self) -> Result<Client> {
+    pub(crate) fn build(self, now: Instant) -> Result<Client> {
         Ok(Client {
             id: self.id,
             room_id: self.room_id,
             local_addr: self.local_addr,
-            peer_connection: self.peer_connection_builder.build()?,
+            peer_connection: self.peer_connection_builder.build(now)?,
 
             next_request_id: 0,
             curr_request_id: None,
@@ -117,7 +112,7 @@ pub(crate) struct Client {
     id: ClientId,
     room_id: RoomId,
     local_addr: SocketAddr,
-    peer_connection: RTCPeerConnection<BoxedInterceptor>,
+    peer_connection: RTCPeerConnection,
 
     next_request_id: RequestId,
     curr_request_id: Option<(RequestId, Instant)>,
@@ -144,13 +139,13 @@ pub(crate) struct Client {
     /// subscriber's transport (ICE + DTLS/SRTP) is ready. See [`Client::is_connected`].
     connection_state: RTCPeerConnectionState,
 
-    reads: VecDeque<RTCMessage>,
+    reads: VecDeque<TaggedRTCMessage>,
     writes: VecDeque<TaggedBytesMut>,
-    events: VecDeque<ClientEvent>,
+    events: VecDeque<TaggedClientEvent>,
 }
 
 impl Deref for Client {
-    type Target = RTCPeerConnection<BoxedInterceptor>;
+    type Target = RTCPeerConnection;
 
     fn deref(&self) -> &Self::Target {
         &self.peer_connection
@@ -169,15 +164,26 @@ pub(crate) enum ClientEvent {
     PeerConnectionEvent(RTCPeerConnectionEvent),
 }
 
-impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
-    type Rout = RTCMessage;
+/// A [`ClientEvent`] together with the instant its condition was observed at.
+pub(crate) struct TaggedClientEvent {
+    /// When the condition this event reports was observed.
+    pub(crate) now: Instant,
+    /// The event itself.
+    pub(crate) event: ClientEvent,
+}
+
+impl Protocol<TaggedBytesMut, TaggedRTCMessage, TaggedClientEvent> for Client {
+    type Rout = TaggedRTCMessage;
     type Wout = TaggedBytesMut;
-    type Eout = ClientEvent;
+    type Eout = TaggedClientEvent;
     type Error = Error;
     type Time = Instant;
 
     fn handle_read(&mut self, msg: TaggedBytesMut) -> std::result::Result<(), Self::Error> {
-        self.peer_connection.handle_read(msg)
+        let now = msg.now;
+        self.peer_connection.handle_read(msg)?;
+        self.pump(now);
+        Ok(())
     }
 
     fn poll_read(&mut self) -> Option<Self::Rout> {
@@ -187,7 +193,7 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
         self.reads.pop_front()
     }
 
-    fn handle_write(&mut self, msg: RTCMessage) -> std::result::Result<(), Self::Error> {
+    fn handle_write(&mut self, msg: TaggedRTCMessage) -> std::result::Result<(), Self::Error> {
         self.peer_connection.handle_write(msg)
     }
 
@@ -199,53 +205,17 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
         self.writes.pop_front()
     }
 
-    fn handle_event(&mut self, evt: ClientEvent) -> std::result::Result<(), Self::Error> {
-        match evt {
-            ClientEvent::SFUEvent(evt) => self.handle_sfu_event(evt),
-            ClientEvent::PeerConnectionEvent(_) => Ok(()),
+    fn handle_event(&mut self, evt: TaggedClientEvent) -> std::result::Result<(), Self::Error> {
+        let TaggedClientEvent { now, event } = evt;
+        match event {
+            ClientEvent::SFUEvent(evt) => self.handle_sfu_event(now, evt)?,
+            ClientEvent::PeerConnectionEvent(_) => {}
         }
+        self.pump(now);
+        Ok(())
     }
 
     fn poll_event(&mut self) -> Option<Self::Eout> {
-        while let Some(evt) = self.peer_connection.poll_event() {
-            match evt {
-                RTCPeerConnectionEvent::OnNegotiationNeededEvent => {
-                    trace!(
-                        "[{}/{}] got negotiation needed event",
-                        self.room_id, self.id
-                    );
-
-                    if let Err(err) = self.on_negotiation_needed() {
-                        warn!(
-                            "{}:{} failed to create renegotiation offer: {}",
-                            self.room_id, self.id, err
-                        );
-                    }
-                }
-                RTCPeerConnectionEvent::OnSignalingStateChangeEvent(state) => {
-                    self.signaling_state = state;
-                    // Returning to stable frees the connection for the SFU's next offer: drive
-                    // any renegotiation deferred while it was answering the subscriber's publish
-                    // or awaiting an answer to a prior offer.
-                    if state == RTCSignalingState::Stable
-                        && let Err(err) = self.drive_pending_renegotiation()
-                    {
-                        warn!(
-                            "{}:{} failed to drive deferred renegotiation: {}",
-                            self.room_id, self.id, err
-                        );
-                    }
-                }
-                other => {
-                    if let RTCPeerConnectionEvent::OnConnectionStateChangeEvent(state) = &other {
-                        self.connection_state = *state;
-                    }
-                    self.events
-                        .push_back(ClientEvent::PeerConnectionEvent(other));
-                }
-            }
-        }
-
         self.events.pop_front()
     }
 
@@ -261,17 +231,19 @@ impl Protocol<TaggedBytesMut, RTCMessage, ClientEvent> for Client {
         {
             if let Some(mut sdp) = self.peer_connection.local_description() {
                 sdp.sdp_type = RTCSdpType::Rollback;
-                if let Err(err) = self.peer_connection.set_local_description(sdp) {
+                if let Err(err) = self.peer_connection.set_local_description(now, sdp) {
                     errs.push(err);
                 }
             }
 
             // mark current negotiation done
             self.curr_request_id = None;
-            if let Err(err) = self.mark_curr_negotiation_complete() {
+            if let Err(err) = self.mark_curr_negotiation_complete(now) {
                 errs.push(err);
             }
         }
+
+        self.pump(now);
 
         flatten_errs(errs)
     }
@@ -293,6 +265,58 @@ impl Client {
     /// Whether this client's transport is fully connected (ICE + DTLS/SRTP established). The
     /// room only forwards media to a subscriber once this is true; forwarding earlier would just
     /// be dropped by the SRTP layer (`local_srtp_context is not set yet`).
+    /// Drain the peer connection's events: act on the ones the SFU owns, queue the rest.
+    ///
+    /// Called from every entry point that carries an instant, rather than from `poll_event`,
+    /// because creating a renegotiation offer needs one and [`Protocol::poll_event`] has none.
+    /// `poll_event` is then a pure queue drain, and nothing here has to remember a clock.
+    ///
+    /// [`Room`](crate::room::Room) also calls this after reconciling the forwarding graph, since
+    /// adding a forward track makes *another* client's connection want to renegotiate.
+    pub(crate) fn pump(&mut self, now: Instant) {
+        while let Some(evt) = self.peer_connection.poll_event() {
+            match evt {
+                RTCPeerConnectionEvent::OnNegotiationNeededEvent => {
+                    trace!(
+                        "[{}/{}] got negotiation needed event",
+                        self.room_id, self.id
+                    );
+
+                    self.renegotiation_pending = true;
+                    if let Err(err) = self.drive_pending_renegotiation(now) {
+                        warn!(
+                            "{}:{} failed to create renegotiation offer: {}",
+                            self.room_id, self.id, err
+                        );
+                    }
+                }
+                RTCPeerConnectionEvent::OnSignalingStateChangeEvent(state) => {
+                    self.signaling_state = state;
+                    // Returning to stable frees the connection for the SFU's next offer: drive
+                    // any renegotiation deferred while it was answering the subscriber's publish
+                    // or awaiting an answer to a prior offer.
+                    if state == RTCSignalingState::Stable
+                        && let Err(err) = self.drive_pending_renegotiation(now)
+                    {
+                        warn!(
+                            "{}:{} failed to drive deferred renegotiation: {}",
+                            self.room_id, self.id, err
+                        );
+                    }
+                }
+                other => {
+                    if let RTCPeerConnectionEvent::OnConnectionStateChangeEvent(state) = &other {
+                        self.connection_state = *state;
+                    }
+                    self.events.push_back(TaggedClientEvent {
+                        now,
+                        event: ClientEvent::PeerConnectionEvent(other),
+                    });
+                }
+            }
+        }
+    }
+
     pub(crate) fn is_connected(&self) -> bool {
         self.connection_state == RTCPeerConnectionState::Connected
     }
@@ -551,6 +575,7 @@ impl Client {
     /// SSRC is preserved end to end, so the request's media SSRC already matches this leg.
     pub(crate) fn request_keyframe(
         &mut self,
+        now: Instant,
         media_ssrc: SSRC,
         packets: Vec<Box<dyn rtcp::Packet>>,
     ) -> Result<()> {
@@ -573,7 +598,7 @@ impl Client {
                 self.peer_connection
                     .rtp_receiver(receiver_id)
                     .ok_or(Error::ErrRTPReceiverNotExisted)?
-                    .write_rtcp(packets)?;
+                    .write_rtcp(now, packets)?;
             }
             None => {
                 trace!(
@@ -588,15 +613,8 @@ impl Client {
     /// A renegotiation transaction (an offer of ours, or an answer we sent to the subscriber's
     /// publish) just finished. Re-drive any renegotiation that was deferred while it was in
     /// flight.
-    fn mark_curr_negotiation_complete(&mut self) -> Result<()> {
-        self.drive_pending_renegotiation()
-    }
-
-    /// The peer connection reported that renegotiation is needed (reconcile added or removed a
-    /// forwarding transceiver). Record it and drive it if the connection is ready.
-    fn on_negotiation_needed(&mut self) -> Result<()> {
-        self.renegotiation_pending = true;
-        self.drive_pending_renegotiation()
+    fn mark_curr_negotiation_complete(&mut self, now: Instant) -> Result<()> {
+        self.drive_pending_renegotiation(now)
     }
 
     /// Create and emit the SFU's subscribe-renegotiation offer — but only when it is safe:
@@ -615,7 +633,7 @@ impl Client {
     /// (see [`Client::poll_event`]), or when the in-flight offer completes
     /// ([`Client::mark_curr_negotiation_complete`]). This mirrors the browser's rule that a
     /// `negotiationneeded` offer is only created from a stable state.
-    fn drive_pending_renegotiation(&mut self) -> Result<()> {
+    fn drive_pending_renegotiation(&mut self, now: Instant) -> Result<()> {
         if !self.client_negotiated
             || !self.renegotiation_pending
             || self.curr_request_id.is_some()
@@ -628,11 +646,11 @@ impl Client {
         self.next_request_id = self.next_request_id.wrapping_add(1);
         self.curr_request_id = Some((
             self.next_request_id,
-            Instant::now() + ONGOING_NEGOTIATION_TIMEOUT_IN_SECOND,
+            now + ONGOING_NEGOTIATION_TIMEOUT_IN_SECOND,
         ));
 
         let offer = self.peer_connection.create_offer(None)?;
-        self.peer_connection.set_local_description(offer)?;
+        self.peer_connection.set_local_description(now, offer)?;
         let sdp = self
             .peer_connection
             .local_description()
@@ -643,18 +661,21 @@ impl Client {
             self.next_request_id, self.room_id, self.id, sdp.sdp_type, sdp.sdp
         );
 
-        self.events
-            .push_back(ClientEvent::SFUEvent(SFUEvent::SessionDescription {
+        self.events.push_back(TaggedClientEvent {
+            now,
+            event: ClientEvent::SFUEvent(SFUEvent::SessionDescription {
                 request_id: self.next_request_id,
                 room_id: self.room_id,
                 client_id: self.id,
                 sdp,
-            }));
+            }),
+        });
         Ok(())
     }
 
     fn handle_session_description(
         &mut self,
+        now: Instant,
         request_id: RequestId,
         sdp: RTCSessionDescription,
     ) -> Result<()> {
@@ -672,7 +693,7 @@ impl Client {
             return Err(Error::ErrTransactionExists);
         }
 
-        self.peer_connection.set_remote_description(sdp)?;
+        self.peer_connection.set_remote_description(now, sdp)?;
 
         if sdp_type == RTCSdpType::Offer {
             let candidate = CandidateHostConfig {
@@ -692,7 +713,7 @@ impl Client {
 
             let answer = self.peer_connection.create_answer(None)?;
 
-            self.peer_connection.set_local_description(answer)?;
+            self.peer_connection.set_local_description(now, answer)?;
 
             let sdp_answer = self
                 .peer_connection
@@ -704,13 +725,15 @@ impl Client {
                 self.room_id, self.id, sdp_answer.sdp_type, sdp_answer.sdp
             );
 
-            self.events
-                .push_back(ClientEvent::SFUEvent(SFUEvent::SessionDescription {
+            self.events.push_back(TaggedClientEvent {
+                now,
+                event: ClientEvent::SFUEvent(SFUEvent::SessionDescription {
                     request_id,
                     room_id: self.room_id,
                     client_id: self.id,
                     sdp: sdp_answer,
-                }));
+                }),
+            });
 
             // The client's first offer is now answered: the initial SDP round is complete and the
             // client's codecs / extension ids are learned. Only now may the SFU start re-offering
@@ -720,13 +743,13 @@ impl Client {
         } else if sdp_type == RTCSdpType::Answer {
             // mark current negotiation done
             self.curr_request_id = None;
-            self.mark_curr_negotiation_complete()?;
+            self.mark_curr_negotiation_complete(now)?;
         }
 
         Ok(())
     }
 
-    fn handle_sfu_event(&mut self, evt: SFUEvent) -> Result<()> {
+    fn handle_sfu_event(&mut self, now: Instant, evt: SFUEvent) -> Result<()> {
         if let Some(room_id) = evt.room_id() {
             if room_id != self.room_id {
                 return Err(Error::Other(format!("invalid room id: {}", room_id)));
@@ -775,7 +798,7 @@ impl Client {
                     "{}:[{}/{}] receives SDP {}:\n{}",
                     request_id, room_id, client_id, sdp.sdp_type, sdp.sdp
                 );
-                self.handle_session_description(request_id, sdp)?;
+                self.handle_session_description(now, request_id, sdp)?;
             }
             SFUEvent::IceCandidate {
                 request_id,
@@ -823,7 +846,7 @@ mod tests {
 
         let client = ClientBuilder::new(10, RoomId::from_u128(20), "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
-            .build()
+            .build(Instant::now())
             .expect("default client should build");
 
         assert_eq!(client.id, 10);
@@ -839,7 +862,7 @@ mod tests {
 
         let _ = ClientBuilder::new(1, RoomId::from_u128(2), "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
-            .build()
+            .build(Instant::now())
             .expect("client should build");
     }
 
@@ -853,7 +876,7 @@ mod tests {
         let _ = ClientBuilder::new(3, RoomId::from_u128(4), "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
             .with_setting_engine(SettingEngine::default())
-            .build()
+            .build(Instant::now())
             .expect("client should build");
     }
 
@@ -870,7 +893,7 @@ mod tests {
             .with_media_engine(media_engine)
             .with_setting_engine(SettingEngine::default())
             .with_interceptor_registry(Registry::new())
-            .build()
+            .build(Instant::now())
             .expect("client should build");
     }
 
@@ -907,7 +930,7 @@ mod tests {
             .expect("default codecs should register");
         let client = ClientBuilder::new(42, RoomId::from_u128(20), "0.0.0.0:0".parse().unwrap())
             .with_media_engine(media_engine)
-            .build()
+            .build(Instant::now())
             .expect("client should build");
 
         let rebuilt = client.track_with_codings_from_media_description(track, &parameters, &media);

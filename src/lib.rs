@@ -10,6 +10,6 @@ pub(crate) mod rtcp_forwarder;
 pub(crate) mod sfu;
 
 pub use client::ClientId;
-pub use event::{RequestId, SFUEvent};
+pub use event::{RequestId, SFUEvent, TaggedSFUEvent};
 pub use room::RoomId;
 pub use sfu::{Sfu, SfuId};

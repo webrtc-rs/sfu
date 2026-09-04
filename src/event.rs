@@ -1,5 +1,6 @@
 use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::transport::RTCIceCandidateInit;
+use std::time::Instant;
 
 use crate::client::ClientId;
 use crate::room::RoomId;
@@ -77,4 +78,13 @@ impl SFUEvent {
             SFUEvent::Leave { client_id, .. } => Some(*client_id),
         }
     }
+}
+
+/// An [`SFUEvent`] together with the instant its condition was observed at.
+#[derive(Debug)]
+pub struct TaggedSFUEvent {
+    /// When the condition this event reports was observed.
+    pub now: Instant,
+    /// The event itself.
+    pub event: SFUEvent,
 }
